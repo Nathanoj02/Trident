@@ -1,0 +1,23 @@
+baldo:
+  scheduler: slurm
+
+  default_conf:
+    account: "TODO"
+    cpus_per_task: 1
+    gpus: 1
+    time: "00:05:00"
+    modules: 
+      - "TODO"
+    env:
+      - "TODO"
+      - "OMP_PROC_BIND=true"
+      - "OMP_NUM_THREADS=1"
+
+  variables:
+    nodes: [1, 2, 4, 8]
+
+  configs:
+    - name: "{nodes}_nodes"
+      partition: "short"
+      nodes: "{nodes}"
+      ntasks: "{nodes}"

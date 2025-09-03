@@ -1,0 +1,58 @@
+path: ./datasets
+
+bad:
+  suite_sparse_matrix_list:
+    - Janna/Long_Coup_dt0
+    - VLSI/vas_stokes_4M
+    - DIMACS10/europe_osm
+    - Schenk/nlpkkt120
+
+# vanHeukelum/cage15
+# DIMACS10/delaunay_n23
+# DIMACS10/hugebubbles-00000
+# Dziekonski/dielFilterV3real
+# DIMACS10/channel-500x100x100-b050
+# Schenk/nlpkkt160 
+# Schenk/nlpkkt240
+# LAW/hollywood-2009
+# LAW/webbase-2001
+# LAW/uk-2002
+# LAW/indochina-2004
+# LAW/it-2004
+# LAW/arabic-2005
+# LAW/sk-2005
+# LAW/uk-2005
+# DIMACS10/delaunay_n24
+# DIMACS10/kron_g500-logn21
+# DIMACS10/rgg_n_2_23_s0
+# DIMACS10/rgg_n_2_24_s0
+# Janna/Flan_1565
+# Janna/Cube_Coup_dt0
+# Janna/Cube_Coup_dt6
+# Janna/ML_Geer
+# Janna/Bump_2911
+# Janna/Queen_4147
+# Mycielski/mycielskian17
+# Mycielski/mycielskian18
+# Mycielski/mycielskian19
+# Mycielski/mycielskian20
+# SNAP/com-Friendster
+# SNAP/com-Orkut
+# SNAP/twitter7
+# MAWI/mawi_201512020030
+# MAWI/mawi_201512020130
+# MAWI/mawi_201512020330
+# GenBank/kmer_A2a
+# GenBank/kmer_P1a
+# GenBank/kmer_U1a
+# GenBank/kmer_V1r
+# GenBank/kmer_V2a
+# VLSI/stokes
+# GAP/GAP-twitter
+# GAP/GAP-web
+# GAP/GAP-kron
+# GAP/GAP-urand
+# FlowIPM22/Spielman_k500
+# FlowIPM22/Spielman_k600
+# Fluorem/HV15R
+# Schenk/nlpkkt200
