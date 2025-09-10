@@ -39,6 +39,64 @@ typedef struct {
     int nodeidx;
 } Recever;
 
+template<typename IT, typename VT>
+int LocalTilePrint(dmmio::DCOO<IT, VT> *M, FILE* fp) {
+    const dmmio::ProcessGrid *grid = M->partitioning->grid;
+
+    int row_size    = grid->row_size;
+    int col_size    = grid->col_size;
+    int node_size   = grid->node_size;
+
+    int my_row  = grid->row_rank;
+    int my_col  = grid->col_rank;
+    int my_node = grid->node_rank;
+
+    // Header row: column labels
+    fprintf(fp, "Rank %d (row=%d, col=%d, node=%d)\n", grid->global_rank, my_row, my_col, my_node);
+    fprintf(fp, "         ");
+    for (int col = 0; col < row_size; ++col) {
+        fprintf(fp, " col %-2d ", col);
+    }
+    fprintf(fp, "\n");
+
+    // Top border
+    fprintf(fp, "       ");
+    for (int col = 0; col < row_size; ++col) {
+        fprintf(fp, " -------");
+    }
+    fprintf(fp, "\n");
+
+    // For each row
+    for (int row = 0; row < col_size; ++row) {
+        for (int node = 0; node < node_size; ++node) {
+            if (node == 0) {
+                fprintf(fp, "row %-2d |", row);
+            } else {
+                fprintf(fp, "       |");
+            }
+
+            for (int col = 0; col < row_size; ++col) {
+                if (row == my_row && col == my_col && node == my_node) {
+                    fprintf(fp, " XXXXX |");
+                } else {
+                    fprintf(fp, "       |");
+                }
+            }
+            fprintf(fp, "\n");
+        }
+
+        // Separator line
+        fprintf(fp, "       ");
+        for (int col = 0; col < row_size; ++col) {
+            fprintf(fp, " -------");
+        }
+        fprintf(fp, "\n");
+    }
+
+    return 0;
+}
+
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
@@ -122,7 +180,8 @@ int main(int argc, char** argv) {
 
     // TODO: check all the grids are the same or compatible (do we support rectangular grids?)
     dmmio::ProcessGrid *Cgrid = dcoo_A->partitioning->grid; // NOTE BUG TODO: we nead to think something for the grid managing.
-    dmmio::utils::ProcessGrid_print(dcoo_A->partitioning->grid);
+    // dmmio::utils::ProcessGrid_print(dcoo_A->partitioning->grid);
+    dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
     MPI_ALL_PRINT(mmio::utils::COO_print_as_dense(dcoo_A->coo, std::string("Rank ") + std::to_string(world_rank), fp))
@@ -186,6 +245,7 @@ int main(int argc, char** argv) {
                   A_recever.rowidx, A_recever.colidx, A_recever.nodeidx,
                   B_recever.rowidx, B_recever.colidx, B_recever.nodeidx
           );
+          LocalTilePrint(dcoo_A, fp);
         )
 
         // NOTE: put kokkos here
