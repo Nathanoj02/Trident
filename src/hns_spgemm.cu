@@ -213,6 +213,15 @@ void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gr
     }
 }
 
+void print_comm_info (MPI_Comm comm, FILE *fp) {
+    int comm_size;
+    MPI_Comm_size(comm, &comm_size);
+    char name[MPI_MAX_OBJECT_NAME];
+    int name_length;
+    MPI_Comm_get_name(comm, name, &name_length);
+    fprintf(fp, "The communicator %s contains %d MPI processes.\n", name, comm_size);
+}
+
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -301,18 +310,69 @@ int main(int argc, char** argv) {
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    MPI_ALL_PRINT(mmio::utils::COO_print_as_dense(dcoo_A->coo, std::string("Rank ") + std::to_string(world_rank), fp))
+    // MPI_ALL_PRINT(mmio::utils::COO_print_as_dense(dcoo_A->coo, std::string("Rank ") + std::to_string(world_rank), fp))
 
     uint32_t local_nnz = dcoo_A->coo->nnz;
 
-    LocalTile  local_C_tile;
     int node_size = Cgrid->node_size; // NOTE: every grid must have the same node size!!
     RemoteTile remote_A_tile, remote_B_tile;
+    LocalTile  local_C_tile, local_A_tile, local_B_tile; // A and be will be exposed with RDMA
+    int common_grd_size = dcoo_A->partitioning->grid->row_size; // == dcoo_B->partitioning->grid->col_size
     local_C_tile.rowidx  = Cgrid->col_rank;  // col_rank is the grid's rowidx
     local_C_tile.colidx  = Cgrid->row_rank;  // row_rank is the grid's colidx
     local_C_tile.nodeidx = Cgrid->node_rank;
-    int common_grd_size = dcoo_A->partitioning->grid->row_size; // == dcoo_B->partitioning->grid->col_size
 
+    local_A_tile.rowidx  = dcoo_A->partitioning->grid->col_rank;  // col_rank is the grid's rowidx
+    local_A_tile.colidx  = dcoo_A->partitioning->grid->row_rank;  // row_rank is the grid's colidx
+    local_A_tile.nodeidx = dcoo_A->partitioning->grid->node_rank;
+
+    local_B_tile.rowidx  = dcoo_B->partitioning->grid->col_rank;  // col_rank is the grid's rowidx
+    local_B_tile.colidx  = dcoo_B->partitioning->grid->row_rank;  // row_rank is the grid's colidx
+    local_B_tile.nodeidx = dcoo_B->partitioning->grid->node_rank;
+
+    int *tmp_row_recv_buff = (int*)malloc(sizeof(int)*dcoo_A->partitioning->grid->row_size);
+    int *tmp_col_recv_buff = (int*)malloc(sizeof(int)*dcoo_B->partitioning->grid->col_size);
+    int *tmp_node_recv_buff = (int*)malloc(sizeof(int)*Cgrid->node_size);
+    MPI_Allgather(&(Cgrid->global_rank), 1, MPI_INT, tmp_row_recv_buff, 1, MPI_INT, dcoo_A->partitioning->grid->row_comm);
+    MPI_Allgather(&(Cgrid->global_rank), 1, MPI_INT, tmp_col_recv_buff, 1, MPI_INT, dcoo_B->partitioning->grid->col_comm);
+    MPI_Allgather(&(Cgrid->global_rank), 1, MPI_INT, tmp_node_recv_buff, 1, MPI_INT, Cgrid->node_comm);
+
+    /*
+    MPI_ALL_PRINT(
+        if (dcoo_B->partitioning->grid->col_rank == 0) {
+            fprintf(fp, "Ranks in col_comm: ");
+            for (int i=0; i<dcoo_B->partitioning->grid->col_size; i++) fprintf(fp, " %d", tmp_col_recv_buff[i]);
+            fprintf(fp, "\n");
+        }
+        if (dcoo_A->partitioning->grid->row_rank == 0) {
+            fprintf(fp, "Ranks in row_comm: ");
+            for (int i=0; i<dcoo_A->partitioning->grid->row_size; i++) fprintf(fp, " %d", tmp_row_recv_buff[i]);
+            fprintf(fp, "\n");
+        }
+        if (Cgrid->node_rank == 0) {
+            fprintf(fp, "Ranks in node_comm: ");
+            for (int i=0; i<Cgrid->node_size; i++) fprintf(fp, " %d", tmp_node_recv_buff[i]);
+            fprintf(fp, "\n");
+        }
+    )*/
+
+    MPI_Win win_A, win_B;
+    MPI_Win_create(&remote_A_tile, sizeof(RemoteTile), sizeof(RemoteTile), MPI_INFO_NULL, dcoo_A->partitioning->grid->row_comm, &win_A);
+    MPI_Win_fence(0, win_A);
+    MPI_Win_create(&remote_B_tile, sizeof(RemoteTile), sizeof(RemoteTile), MPI_INFO_NULL, dcoo_B->partitioning->grid->col_comm, &win_B);
+    MPI_Win_fence(0, win_B);
+
+    int psend_A, psend_B;
+    MPI_Win win_psend_A, win_psend_B;
+    int MPI_result = MPI_Win_create(&psend_A, sizeof(int), sizeof(int), MPI_INFO_NULL, dcoo_A->partitioning->grid->row_comm, &win_psend_A);
+    if (MPI_result != MPI_SUCCESS) MPI_Abort(MPI_COMM_WORLD, __LINE__);
+    MPI_Win_fence(0, win_psend_A);
+    MPI_result = MPI_Win_create(&psend_B, sizeof(int), sizeof(int), MPI_INFO_NULL, dcoo_B->partitioning->grid->col_comm, &win_psend_B);
+    if (MPI_result != MPI_SUCCESS) MPI_Abort(MPI_COMM_WORLD, __LINE__);
+    MPI_Win_fence(0, win_psend_B);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    /*
     // NOTE: this will be fixed during all the computation
     remote_A_tile.rowidx  = local_C_tile.rowidx; // Every process will receve only A tails in himself row_comm
     remote_B_tile.colidx  = local_C_tile.colidx; // Every process will receve only B tails in himself col_comm
@@ -322,6 +382,10 @@ int main(int argc, char** argv) {
     // This is the initialization stragger, these will be increased each round
     remote_A_tile.colidx = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
     remote_B_tile.rowidx = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
+    */
+
+    int colAtoGet = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
+    int rowBtoGet = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
 
     const int n_iters = dcoo_A->partitioning->grid->row_size; // This must be equal to dcoo_B->partitioning->grid->col_size
     for (int iter = 0; iter < n_iters; iter++)
@@ -332,6 +396,27 @@ int main(int argc, char** argv) {
         // myLocalCSR * B_node = internode_communication(B, peer_process_send, peer_process_recv, iter_row_send, log, csh);
         // TIMER_STOP(0);
         // ADD_TO_MY_TIMER(tim, "mpi_internode", 0);
+
+        MPI_Put(&(Cgrid->row_rank), 1, MPI_INT, colAtoGet, 0, 1, MPI_INT, win_psend_A);
+        MPI_Win_fence(0, win_psend_A);
+        MPI_Put(&(Cgrid->col_rank), 1, MPI_INT, rowBtoGet, 0, 1, MPI_INT, win_psend_B);
+        MPI_Win_fence(0, win_psend_B);
+
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        RemoteTile fetchTile;
+        fetchTile.rowidx = local_A_tile.rowidx;
+        fetchTile.colidx = local_A_tile.colidx;
+        fetchTile.nodeidx = local_A_tile.nodeidx;
+        MPI_Put(&fetchTile, sizeof(RemoteTile), MPI_BYTE, psend_A, 0, sizeof(RemoteTile), MPI_BYTE, win_A);
+        MPI_Win_fence(0, win_A);
+
+        fetchTile.rowidx = local_B_tile.rowidx;
+        fetchTile.colidx = local_B_tile.colidx;
+        fetchTile.nodeidx = local_B_tile.nodeidx;
+        MPI_Put(&fetchTile, sizeof(RemoteTile), MPI_BYTE, psend_B, 0, sizeof(RemoteTile), MPI_BYTE, win_B);
+        MPI_Win_fence(0, win_B);
+        MPI_Barrier(MPI_COMM_WORLD);
 
 
         /* ======================== Intranode communication ======================= */
@@ -354,14 +439,15 @@ int main(int argc, char** argv) {
 
         if (world_rank == 0) fprintf(stdout, "====================================================== Round %d ======================================================\n", iter);
 
-        // MPI_ALL_PRINT(
-        FILE *fp = stdout;
+        // FILE *fp = stdout;
         std::vector<LocalTile*>  Ctiles = {&local_C_tile};
         std::vector<RemoteTile*> Atiles = {&remote_A_tile};
         // std::vector<RemoteTile*> Btiles = {&remote_B_tile};
         std::vector<RemoteTile*> Btiles;
-        for (int i=0; i<node_size; i++) Btiles.push_back(&(recv_buff[i]));
-        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0,
+        for (int i=0; i<node_size; i++) Btiles.push_back(&(intranode_recv_buff[i]));
+        // MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0,
+        MPI_ALL_PRINT(
+          fprintf(fp, "[%d] iter %d, psend_A: %d, psend_B: %d\n", Cgrid->global_rank, iter, psend_A, psend_B);
           fprintf(fp, "Process (%d,%d,%d) is performing A(%d,%d,%d) x B(%d,%d,%d)\n",
                   Cgrid->col_rank, Cgrid->row_rank, Cgrid->node_rank,
                   remote_A_tile.rowidx, remote_A_tile.colidx, remote_A_tile.nodeidx,
@@ -397,11 +483,14 @@ int main(int argc, char** argv) {
         free(intranode_recv_buff);
 
         // Round shift
-        remote_A_tile.colidx = (remote_A_tile.colidx + 1) % common_grd_size; // ShiftLeft
-        remote_B_tile.rowidx = (remote_B_tile.rowidx + 1) % common_grd_size; // ShiftDown
+        colAtoGet = (colAtoGet + 1) % common_grd_size; // ShiftLeft
+        rowBtoGet = (rowBtoGet + 1) % common_grd_size; // ShiftDown
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Win_free(&win_A);
+    // MPI_Win_free(&win_B);
 
     delete meta_A;
     delete meta_B;
