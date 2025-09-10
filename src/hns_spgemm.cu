@@ -24,32 +24,25 @@
 typedef struct {
     int rowidx;
     int colidx;
+    int nodeidx;
     int flag;
 } RemoteTile;
 
 typedef struct {
     int rowidx;
     int colidx;
+    int nodeidx;
 } LocalTile;
 
-// TMP for debug
-typedef struct {
-    int rowidx;
-    int colidx;
-    int nodeidx;
-} Recever;
-
-template<typename IT, typename VT>
-int LocalTilePrint(dmmio::DCOO<IT, VT> *M, FILE* fp) {
-    const dmmio::ProcessGrid *grid = M->partitioning->grid;
-
+template<typename TT>
+int LocalTilePrint(TT *tile, dmmio::ProcessGrid *grid, FILE* fp) {
     int row_size    = grid->row_size;
     int col_size    = grid->col_size;
     int node_size   = grid->node_size;
 
-    int my_row  = grid->row_rank;
-    int my_col  = grid->col_rank;
-    int my_node = grid->node_rank;
+    int my_row  = tile->rowidx;
+    int my_col  = tile->colidx;
+    int my_node = tile->nodeidx;
 
     // Header row: column labels
     fprintf(fp, "Rank %d (row=%d, col=%d, node=%d)\n", grid->global_rank, my_row, my_col, my_node);
@@ -90,6 +83,115 @@ int LocalTilePrint(dmmio::DCOO<IT, VT> *M, FILE* fp) {
         for (int col = 0; col < row_size; ++col) {
             fprintf(fp, " -------");
         }
+        fprintf(fp, "\n");
+    }
+
+    return 0;
+}
+
+// template<typename LTT, typename RTT> // BUG with mpi print macro
+int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
+                        RemoteTile *tileA, dmmio::ProcessGrid *gridA,
+                        RemoteTile *tileB, dmmio::ProcessGrid *gridB,
+                        FILE* fp) {
+
+    // Print header
+    fprintf(fp, "C +=  A x B\n\n");
+
+    // Extract grid sizes
+    int row_sizeC  = gridC->row_size;
+    int col_sizeC  = gridC->col_size;
+    int node_sizeC = gridC->node_size;
+
+    int row_sizeA  = gridA->row_size;
+    int col_sizeA  = gridA->col_size;
+    int node_sizeA = gridA->node_size;
+
+    int row_sizeB  = gridB->row_size;
+    int col_sizeB  = gridB->col_size;
+    int node_sizeB = gridB->node_size;
+
+    // For simplicity, assume all have the same dimensions
+    int row_size   = row_sizeC;
+    int col_size   = col_sizeC;
+    int node_size  = node_sizeC;
+
+    // Header row: only for C
+    fprintf(fp, "         ");
+    for (int col = 0; col < row_size; ++col) {
+        fprintf(fp, " col %-2d ", col);
+    }
+    fprintf(fp, "      ");
+    for (int col = 0; col < row_size; ++col) {
+        fprintf(fp, " col %-2d ", col);
+    }
+    fprintf(fp, "      ");
+    for (int col = 0; col < row_size; ++col) {
+        fprintf(fp, " col %-2d ", col);
+    }
+    fprintf(fp, "\n");
+
+    // Top border
+    auto print_border = [&](int count) {
+        fprintf(fp, "       ");
+        for (int col = 0; col < count; ++col) {
+            fprintf(fp, " -------");
+        }
+    };
+
+    print_border(row_size);
+    print_border(row_size);
+    print_border(row_size);
+    fprintf(fp, "\n");
+
+    // For each row
+    for (int row = 0; row < col_size; ++row) {
+        for (int node = 0; node < node_size; ++node) {
+            // ---- C ----
+            if (node == 0) {
+                fprintf(fp, "row %-2d |", row);
+            } else {
+                fprintf(fp, "       |");
+            }
+            for (int col = 0; col < row_size; ++col) {
+                if (row == tileC->rowidx && col == tileC->colidx && node == tileC->nodeidx) {
+                    fprintf(fp, " XXXXX |");
+                } else {
+                    fprintf(fp, "       |");
+                }
+            }
+
+            fprintf(fp, "      ");
+
+            // ---- A ---- (no row labels)
+            fprintf(fp, "|");
+            for (int col = 0; col < row_size; ++col) {
+                if (row == tileA->rowidx && col == tileA->colidx && node == tileA->nodeidx) {
+                    fprintf(fp, " XXXXX |");
+                } else {
+                    fprintf(fp, "       |");
+                }
+            }
+
+            fprintf(fp, "      ");
+
+            // ---- B ---- (no row labels)
+            fprintf(fp, "|");
+            for (int col = 0; col < row_size; ++col) {
+                if (row == tileB->rowidx && col == tileB->colidx && node == tileB->nodeidx) {
+                    fprintf(fp, " XXXXX |");
+                } else {
+                    fprintf(fp, "       |");
+                }
+            }
+
+            fprintf(fp, "\n");
+        }
+
+        // Separator lines
+        print_border(row_size);
+        print_border(row_size);
+        print_border(row_size);
         fprintf(fp, "\n");
     }
 
@@ -190,13 +292,16 @@ int main(int argc, char** argv) {
 
     LocalTile  local_C_tile;
     RemoteTile remote_A_tile, remote_B_tile;
-    local_C_tile.rowidx = Cgrid->col_rank; // col_rank is the grid's rowidx
-    local_C_tile.colidx = Cgrid->row_rank; // row_rank is the grid's colidx
+    local_C_tile.rowidx  = Cgrid->col_rank;  // col_rank is the grid's rowidx
+    local_C_tile.colidx  = Cgrid->row_rank;  // row_rank is the grid's colidx
+    local_C_tile.nodeidx = Cgrid->node_rank;
     int common_grd_size = dcoo_A->partitioning->grid->row_size; // == dcoo_B->partitioning->grid->col_size
 
     // NOTE: this will be fixed during all the computation
-    remote_A_tile.rowidx = local_C_tile.rowidx; // Every process will receve only A tails in himself row_comm
-    remote_B_tile.colidx = local_C_tile.colidx; // Every process will receve only B tails in himself col_comm
+    remote_A_tile.rowidx  = local_C_tile.rowidx; // Every process will receve only A tails in himself row_comm
+    remote_B_tile.colidx  = local_C_tile.colidx; // Every process will receve only B tails in himself col_comm
+    remote_A_tile.nodeidx = Cgrid->node_rank; // Every process will receve only by tiles with same nodeid
+    remote_B_tile.nodeidx = Cgrid->node_rank; // Every process will receve only by tiles with same nodeid
 
     // This is the initialization stragger, these will be increased each round
     remote_A_tile.colidx = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
@@ -205,15 +310,6 @@ int main(int argc, char** argv) {
     const int n_iters = dcoo_A->partitioning->grid->row_size; // This must be equal to dcoo_B->partitioning->grid->col_size
     for (int iter = 0; iter < n_iters; iter++)
     {
-        Recever A_recever, B_recever;
-        A_recever.rowidx  = remote_A_tile.rowidx;
-        A_recever.colidx  = remote_A_tile.colidx;
-        A_recever.nodeidx = Cgrid->node_rank;
-
-        B_recever.rowidx  = remote_B_tile.rowidx;
-        B_recever.colidx  = remote_B_tile.colidx;
-        B_recever.nodeidx = Cgrid->node_rank;
-
         /* ======================== Internode communication ======================= */
 
         // TIMER_START(0);
@@ -239,14 +335,21 @@ int main(int argc, char** argv) {
 
         if (world_rank == 0) fprintf(stdout, "====================================================== Round %d ======================================================\n", iter);
 
-        MPI_ALL_PRINT(
+        // MPI_ALL_PRINT(
+        FILE *fp = stdout;
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0,
           fprintf(fp, "Process (%d,%d,%d) is performing A(%d,%d,%d) x B(%d,%d,%d)\n",
                   Cgrid->col_rank, Cgrid->row_rank, Cgrid->node_rank,
-                  A_recever.rowidx, A_recever.colidx, A_recever.nodeidx,
-                  B_recever.rowidx, B_recever.colidx, B_recever.nodeidx
+                  remote_A_tile.rowidx, remote_A_tile.colidx, remote_A_tile.nodeidx,
+                  remote_B_tile.rowidx, remote_B_tile.colidx, remote_B_tile.nodeidx
           );
-          LocalTilePrint(dcoo_A, fp);
+          // LocalTilePrint<RemoteTile>(&remote_A_tile, Cgrid, fp);
+          LocalTilePrintTriple(&local_C_tile, Cgrid,
+                        &remote_A_tile, dcoo_A->partitioning->grid,
+                        &remote_B_tile, dcoo_B->partitioning->grid,
+                        fp);
         )
+        MPI_Barrier(MPI_COMM_WORLD);
 
         // NOTE: put kokkos here
         // TIMER_START(0);
