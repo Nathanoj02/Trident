@@ -35,17 +35,32 @@ typedef struct {
 } LocalTile;
 
 template<typename TT>
-int LocalTilePrint(TT *tile, dmmio::ProcessGrid *grid, FILE* fp) {
+int checkTileIncluded (std::vector<TT*> tiles, int rowidx, int colidx, int nodeidx) {
+    int flag = 0;
+    for (size_t i=0; i<tiles.size(); i++) {
+        TT* tile = tiles[i];
+        if (tile->rowidx == rowidx && tile->colidx == colidx && tile->nodeidx == nodeidx) {
+            flag = 1;
+            break;
+        }
+    }
+    return(flag);
+}
+
+template<typename TT>
+void LocalTilePrint(std::vector<TT*> tiles, dmmio::ProcessGrid *grid, FILE* fp) {
     int row_size    = grid->row_size;
     int col_size    = grid->col_size;
     int node_size   = grid->node_size;
 
-    int my_row  = tile->rowidx;
-    int my_col  = tile->colidx;
-    int my_node = tile->nodeidx;
-
     // Header row: column labels
-    fprintf(fp, "Rank %d (row=%d, col=%d, node=%d)\n", grid->global_rank, my_row, my_col, my_node);
+    fprintf(fp, "Rank %d ", grid->global_rank);
+    for (size_t i=0; i<tiles.size(); i++) {
+        TT* tile = tiles[i];
+        fprintf(fp, " (row=%d, col=%d, node=%d)", tile->rowidx, tile->colidx, tile->nodeidx);
+    }
+    fprintf(fp, "\n");
+
     fprintf(fp, "         ");
     for (int col = 0; col < row_size; ++col) {
         fprintf(fp, " col %-2d ", col);
@@ -69,7 +84,8 @@ int LocalTilePrint(TT *tile, dmmio::ProcessGrid *grid, FILE* fp) {
             }
 
             for (int col = 0; col < row_size; ++col) {
-                if (row == my_row && col == my_col && node == my_node) {
+                // if (row == my_row && col == my_col && node == my_node) {
+                if (checkTileIncluded(tiles, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
                     fprintf(fp, "       |");
@@ -85,14 +101,12 @@ int LocalTilePrint(TT *tile, dmmio::ProcessGrid *grid, FILE* fp) {
         }
         fprintf(fp, "\n");
     }
-
-    return 0;
 }
 
 // template<typename LTT, typename RTT> // BUG with mpi print macro
-int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
-                        RemoteTile *tileA, dmmio::ProcessGrid *gridA,
-                        RemoteTile *tileB, dmmio::ProcessGrid *gridB,
+void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gridC,
+                        std::vector<RemoteTile*> tilesA, dmmio::ProcessGrid *gridA,
+                        std::vector<RemoteTile*> tilesB, dmmio::ProcessGrid *gridB,
                         FILE* fp) {
 
     // Print header
@@ -154,7 +168,8 @@ int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
                 fprintf(fp, "       |");
             }
             for (int col = 0; col < row_size; ++col) {
-                if (row == tileC->rowidx && col == tileC->colidx && node == tileC->nodeidx) {
+                // if (row == tileC->rowidx && col == tileC->colidx && node == tileC->nodeidx) {
+                if (checkTileIncluded(tilesC, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
                     fprintf(fp, "       |");
@@ -166,7 +181,8 @@ int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
             // ---- A ---- (no row labels)
             fprintf(fp, "|");
             for (int col = 0; col < row_size; ++col) {
-                if (row == tileA->rowidx && col == tileA->colidx && node == tileA->nodeidx) {
+                // if (row == tileA->rowidx && col == tileA->colidx && node == tileA->nodeidx) {
+                if (checkTileIncluded(tilesA, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
                     fprintf(fp, "       |");
@@ -178,7 +194,8 @@ int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
             // ---- B ---- (no row labels)
             fprintf(fp, "|");
             for (int col = 0; col < row_size; ++col) {
-                if (row == tileB->rowidx && col == tileB->colidx && node == tileB->nodeidx) {
+                // if (row == tileB->rowidx && col == tileB->colidx && node == tileB->nodeidx) {
+                if (checkTileIncluded(tilesB, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
                     fprintf(fp, "       |");
@@ -194,8 +211,6 @@ int LocalTilePrintTriple(LocalTile *tileC, dmmio::ProcessGrid *gridC,
         print_border(row_size);
         fprintf(fp, "\n");
     }
-
-    return 0;
 }
 
 
@@ -291,6 +306,7 @@ int main(int argc, char** argv) {
     uint32_t local_nnz = dcoo_A->coo->nnz;
 
     LocalTile  local_C_tile;
+    int node_size = Cgrid->node_size; // NOTE: every grid must have the same node size!!
     RemoteTile remote_A_tile, remote_B_tile;
     local_C_tile.rowidx  = Cgrid->col_rank;  // col_rank is the grid's rowidx
     local_C_tile.colidx  = Cgrid->row_rank;  // row_rank is the grid's colidx
@@ -331,22 +347,30 @@ int main(int argc, char** argv) {
         // TIMER_STOP(0);
         // ADD_TO_MY_TIMER(tim, "mpi_intranode", 0);
 
+        RemoteTile *intranode_recv_buff = (RemoteTile*)malloc(sizeof(RemoteTile)*node_size);
+        MPI_Allgather(&remote_B_tile, sizeof(RemoteTile), MPI_BYTE, intranode_recv_buff, sizeof(RemoteTile), MPI_BYTE, dcoo_B->partitioning->grid->node_comm);
+
         /* ======================== Local SpGEMM ======================= */
 
         if (world_rank == 0) fprintf(stdout, "====================================================== Round %d ======================================================\n", iter);
 
         // MPI_ALL_PRINT(
         FILE *fp = stdout;
+        std::vector<LocalTile*>  Ctiles = {&local_C_tile};
+        std::vector<RemoteTile*> Atiles = {&remote_A_tile};
+        // std::vector<RemoteTile*> Btiles = {&remote_B_tile};
+        std::vector<RemoteTile*> Btiles;
+        for (int i=0; i<node_size; i++) Btiles.push_back(&(recv_buff[i]));
         MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0,
           fprintf(fp, "Process (%d,%d,%d) is performing A(%d,%d,%d) x B(%d,%d,%d)\n",
                   Cgrid->col_rank, Cgrid->row_rank, Cgrid->node_rank,
                   remote_A_tile.rowidx, remote_A_tile.colidx, remote_A_tile.nodeidx,
                   remote_B_tile.rowidx, remote_B_tile.colidx, remote_B_tile.nodeidx
           );
-          // LocalTilePrint<RemoteTile>(&remote_A_tile, Cgrid, fp);
-          LocalTilePrintTriple(&local_C_tile, Cgrid,
-                        &remote_A_tile, dcoo_A->partitioning->grid,
-                        &remote_B_tile, dcoo_B->partitioning->grid,
+          // LocalTilePrint<RemoteTile>(Atiles, Cgrid, fp);
+          LocalTilePrintTriple(Ctiles, Cgrid,
+                        Atiles, dcoo_A->partitioning->grid,
+                        Btiles, dcoo_B->partitioning->grid,
                         fp);
         )
         MPI_Barrier(MPI_COMM_WORLD);
@@ -369,6 +393,8 @@ int main(int argc, char** argv) {
         //
         // if (B_final != NULL)
         //     free_local_csr(B_final);
+
+        free(intranode_recv_buff);
 
         // Round shift
         remote_A_tile.colidx = (remote_A_tile.colidx + 1) % common_grd_size; // ShiftLeft
