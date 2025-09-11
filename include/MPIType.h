@@ -97,7 +97,7 @@ public:
   * assuming it's some sort of struct. Each created data type is committed only once
   **/
 
-extern MPIDataTypeCache mpidtc;	// global variable
+MPIDataTypeCache mpidtc;	// global variable
 // Global variables have program scope, which means they can be accessed everywhere in the program, and they are only destroyed when the program ends.
 
 template <typename T> 
@@ -117,18 +117,20 @@ MPI_Datatype MPIType ( void )
    	return datatype;
 };
 
-template<> MPI_Datatype MPIType< signed char >( void );
-template<> MPI_Datatype MPIType< signed short int >( void );
-template<> MPI_Datatype MPIType< unsigned char >( void );
-template<> MPI_Datatype MPIType< unsigned short int >( void );
-template<> MPI_Datatype MPIType< int32_t >( void );
-template<> MPI_Datatype MPIType< uint32_t >( void );
-template<> MPI_Datatype MPIType< int64_t >( void );
-template<> MPI_Datatype MPIType< uint64_t >( void );
-template<> MPI_Datatype MPIType< float >( void );
-template<> MPI_Datatype MPIType< double >( void );
-template<> MPI_Datatype MPIType< long double >( void );
-template<> MPI_Datatype MPIType< bool >( void );
+//template<> MPI_Datatype MPIType< signed char >( void );
+//template<> MPI_Datatype MPIType< signed short int >( void );
+//template<> MPI_Datatype MPIType< unsigned char >( void );
+//template<> MPI_Datatype MPIType< unsigned short int >( void );
+//template<> MPI_Datatype MPIType< int32_t >( void );
+//template<> MPI_Datatype MPIType< uint32_t >( void );
+//template<> MPI_Datatype MPIType< int64_t >( void );
+//template<> MPI_Datatype MPIType< uint64_t >( void );
+//template<> MPI_Datatype MPIType< float >( void );
+//template<> MPI_Datatype MPIType< double >( void );
+//template<> MPI_Datatype MPIType< long double >( void );
+//template<> MPI_Datatype MPIType< bool >( void );
+//template<> MPI_Datatype MPIType< size_t >( void );
+//template<> MPI_Datatype MPIType< size_t >( void );
 
 
 

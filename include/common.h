@@ -12,6 +12,19 @@
 #include <time.h>
 
 #include <ccutils/colors.h>
+#include <ccutils/mpi/mpi_macros.h>
+#include <ccutils/macros.h>
+#include <ccutils/cuda/cuda_macros.h>
+#include <ccutils/cuda/cuda_utils.hpp>
+
+#include <mmio/io.h>
+#include <mmio/mmio.h>
+#include <mmio/utils.h>
+#include <dmmio/dio.h>
+#include <dmmio/dmmio.h>
+#include <dmmio/dutils.h>
+#include <dmmio/partitioning.h>
+
 #include "MPIType.h"
 
 #include <mpi.h>
@@ -20,26 +33,5 @@
 #include <cusparse_v2.h>
 #include <cusparse.h>
 
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
-#include <thrust/adjacent_difference.h>
-#include <thrust/merge.h>
-#include <thrust/count.h>
-#include <thrust/copy.h>
-#include <thrust/unique.h>
-#include <thrust/distance.h>
-#include <thrust/set_operations.h>
-#include <thrust/sequence.h>
-
-//AcSpGEMM headers
-//#include "CSR.h"
-//#include "COO.h"
-//#include "Vector.h"
-//#include "dCSR.h"
-//#include "dVector.h"
-//#include "Multiply.h"
-//#include "Transpose.h"
-//#include "Compare.h"
 
 #endif
