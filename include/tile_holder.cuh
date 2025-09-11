@@ -17,8 +17,8 @@ struct TileHolder
         CUDA_CHECK(cudaMalloc(&d_colinds_buf, sizeof(IT) * nnz_size));
 
         MPI_Win_create(d_rowptrs_buf, sizeof(IT) * (nrows + 1), sizeof(IT), MPI_INFO_NULL, comm, &d_rowptrs_win);
-        MPI_Win_create(d_colinds_buf, sizeof(IT) * (nnz), sizeof(IT), MPI_INFO_NULL, comm, &d_colinds_win);
-        MPI_Win_create(d_vals_buf, sizeof(VT) * (nnz), sizeof(VT), MPI_INFO_NULL, comm, &d_vals_win);
+        MPI_Win_create(d_colinds_buf, sizeof(IT) * (nnz_size), sizeof(IT), MPI_INFO_NULL, comm, &d_colinds_win);
+        MPI_Win_create(d_vals_buf, sizeof(VT) * (nnz_size), sizeof(VT), MPI_INFO_NULL, comm, &d_vals_win);
 
     }
 

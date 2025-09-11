@@ -1,5 +1,6 @@
 #include "hns_spgemm.h"
 #include "message_queue.cuh"
+#include "tile_holder.cuh"
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -153,7 +154,28 @@ dmmio::DCOO<IT, VT> * hns_spgemm_main(dmmio::DCOO<IT, VT>* dcoo_A, dmmio::DCOO<I
     int colAtoGet = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
     int rowBtoGet = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
 
+
     const int n_iters = dcoo_A->partitioning->grid->row_size; // This must be equal to dcoo_B->partitioning->grid->col_size
+    
+
+    // Message queue setup -- these will contain indices of the processes that request tiles of A and tiles of B
+    MessageQueue<int> A_queue(n_iters, Cgrid->row_comm); 
+    MessageQueue<int> B_queue(n_iters, Cgrid->col_comm); 
+
+
+    // Get max nnz for A and B tiles 
+    IT A_max_nnz = dcoo_A->coo->nnz;
+    MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPIType<IT>(), MPI_MAX, Cgrid->row_comm);
+
+    IT B_max_nnz = dcoo_B->coo->nnz;
+    MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPIType<IT>(), MPI_MAX, Cgrid->col_comm);
+
+
+    // Tile holders for A and B -- these are buffers that remote processes will write tiles to
+    TileHolder<IT, VT> A_holder(dcoo_A->partitioning->local_rows, (IT)A_max_nnz*1.5, Cgrid->row_comm);
+    TileHolder<IT, VT> B_holder(dcoo_B->partitioning->local_rows, (IT)B_max_nnz*1.5, Cgrid->col_comm);
+
+
     for (int iter = 0; iter < n_iters; iter++)
     {
 
