@@ -13,6 +13,9 @@
 
 #include <ccutils/colors.h>
 #include <ccutils/mpi/mpi_macros.h>
+#include <ccutils/macros.h>
+#include <ccutils/cuda/cuda_macros.h>
+#include <ccutils/cuda/cuda_utils.hpp>
 
 #include <mmio/io.h>
 #include <mmio/mmio.h>

@@ -129,6 +129,7 @@ template<> MPI_Datatype MPIType< float >( void );
 template<> MPI_Datatype MPIType< double >( void );
 template<> MPI_Datatype MPIType< long double >( void );
 template<> MPI_Datatype MPIType< bool >( void );
+template<> MPI_Datatype MPIType< size_t >( void );
 
 
 

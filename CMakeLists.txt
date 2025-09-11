@@ -26,6 +26,7 @@ add_subdirectory(distributed_mmio)
 # CCUTILS SETUP
 if(NOT TARGET ccutils)
     set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
+    set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
     add_subdirectory(ccutils)
 endif()
 
@@ -54,4 +55,4 @@ add_executable(hns_spgemm src/hns_spgemm.cu)
 target_link_libraries(hns_spgemm PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi)
 
 
-add_test(test_queue)
+add_test(test_stack)
