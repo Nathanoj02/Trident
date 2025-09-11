@@ -1,3 +1,4 @@
+# CMAKE SETUP
 cmake_minimum_required(VERSION 3.10)
 set(CMAKE_CUDA_ARCHITECTURES "80")
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
@@ -43,16 +44,29 @@ set(CXX_FLAGS
 set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC")
 
 
-# MACRO FOR ADDING TESTS
-macro(add_test name)
-    add_executable(${name} test/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi)
-endmacro()
-
-
-# Keep this here for now since it is in src
-add_executable(hns_spgemm src/hns_spgemm.cu)
+# MAIN HNS_SPGEMM LIBRARY
+add_library(hns_spgemm
+            src/hns_spgemm.cu)
 target_link_libraries(hns_spgemm PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi)
 
 
-add_test(test_stack)
+# MACRO FOR ADDING TESTS
+macro(add_test name)
+    add_executable(${name} test/${name}.cu)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm)
+endmacro()
+
+# TESTS
+add_test(test_queue)
+
+
+# MACRO FOR ADDING OTHER EXECUTABLES
+macro(add_src name)
+    add_executable(${name} src/${name}.cu)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm)
+endmacro()
+
+
+# EXECUTABLES
+add_src(driver)
+add_src(scratch)

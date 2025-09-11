@@ -27,8 +27,7 @@
  */
 
 
-#ifndef _MPI_TYPE_H
-#define _MPI_TYPE_H
+#pragma once
 
 #include <iostream>
 #include <typeinfo>
@@ -97,7 +96,7 @@ public:
   * assuming it's some sort of struct. Each created data type is committed only once
   **/
 
-MPIDataTypeCache mpidtc;	// global variable
+extern MPIDataTypeCache mpidtc;	// global variable
 // Global variables have program scope, which means they can be accessed everywhere in the program, and they are only destroyed when the program ends.
 
 template <typename T> 
@@ -134,4 +133,3 @@ MPI_Datatype MPIType ( void )
 
 
 
-#endif

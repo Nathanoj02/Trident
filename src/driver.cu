@@ -1,0 +1,92 @@
+#include "hns_spgemm.h"
+#include "test_utils.cuh"
+
+
+
+
+int main(int argc, char ** argv)
+{
+    int thread_level;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
+
+    int world_size;
+    int world_rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    Config * config = (Config *)(malloc(sizeof(Config)));
+    parse_args(argc, argv, config);
+
+    int name_len;
+    char processor_name[MPI_MAX_PROCESSOR_NAME];
+    MPI_Get_processor_name(processor_name, &name_len);
+
+    std::cout << "Hello world from processor " << processor_name
+            << ", rank " << world_rank << " out of " << world_size << " processors\n";
+    MPI_Barrier(MPI_COMM_WORLD);
+
+
+    // Set the process grid parameeters
+    int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
+
+    // Compute all the respective partitioning types
+    dmmio::Operation Aop, Bop, Cop;
+    dmmio::PartitioningType Apart, Bpart, Cpart;
+
+    Aop   = dmmio::Operation::None;
+    Apart = (dmmio::PartitioningType)config->part_num;
+
+    if (Apart == dmmio::PartitioningType::Naive) {
+        Bpart = dmmio::PartitioningType::Naive;
+        Cpart = dmmio::PartitioningType::Naive;
+
+        Bop   = dmmio::Operation::None;
+        Cop   = dmmio::Operation::None;
+    } else {
+        // TODO wirite it for other partitionings and check it
+        fprintf(stderr, "Partitioning different by Naive are not supported yet.\n");
+        MPI_Abort(MPI_COMM_WORLD, __LINE__);
+    }
+
+    // Reading the distribuited matrices
+    std::string A_mtx_path = (std::string) config->matpathA;
+    mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
+    dmmio::DCOO<uint32_t, float> *dcoo_A = dmmio::DCOO_read<uint32_t, float>(
+        A_mtx_path.c_str(),
+        world_size, world_rank,
+        nprocrows, nproccols, nprocpergroup,
+        Apart, Aop,
+        false, meta_A
+    );
+
+    std::string B_mtx_path = (std::string) config->matpathA;
+    mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
+    dmmio::DCOO<uint32_t, float> *dcoo_B = dmmio::DCOO_read<uint32_t, float>(
+        A_mtx_path.c_str(),
+        world_size, world_rank,
+        nprocrows, nproccols, nprocpergroup,
+        Apart, Bop,
+        false, meta_B
+    );
+
+    // Some prints
+    if (world_rank == 0) {
+      std::cout << "A matrix file path: " << config->matpathA << std::endl;
+      std::cout << "B matrix file path: " << config->matpathB << std::endl;
+      std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
+      std::cout << "Number of processes per col: "  << nproccols     << std::endl;
+      std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
+    }
+
+    if (world_rank == 0) {
+      fprintf(stdout, "\n================= Hierarchical Partitioning ==================\n");
+      fprintf(stdout, "A partitioning: %s, operand: %s\n", dcoo_A->partitioning->type_str, OPSTR(dcoo_A->partitioning->op));
+      fprintf(stdout, "B partitioning: %s, operand: %s\n", dcoo_B->partitioning->type_str, OPSTR(dcoo_B->partitioning->op));
+      fprintf(stdout, "C partitioning: %s, operand: %s\n", "????", OPSTR(Cop));
+    }
+
+    hns_spgemm_main(dcoo_A, dcoo_B);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Finalize();
+}
