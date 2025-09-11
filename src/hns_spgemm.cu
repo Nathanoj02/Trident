@@ -368,21 +368,18 @@ int main(int argc, char** argv) {
     MPI_Win_fence(0, win_psend_B);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    /*
-    // NOTE: this will be fixed during all the computation
-    remote_A_tile.rowidx  = local_C_tile.rowidx; // Every process will receve only A tails in himself row_comm
-    remote_B_tile.colidx  = local_C_tile.colidx; // Every process will receve only B tails in himself col_comm
-    remote_A_tile.nodeidx = Cgrid->node_rank; // Every process will receve only by tiles with same nodeid
-    remote_B_tile.nodeidx = Cgrid->node_rank; // Every process will receve only by tiles with same nodeid
-
-    // This is the initialization stragger, these will be increased each round
-    remote_A_tile.colidx = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
-    remote_B_tile.rowidx = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
-    */
+    // NOTE: only for debug print
     std::vector<RemoteTile> allAtiles, allBtiles;
     std::vector<LocalTile*> allCtiles_ptr;
     allCtiles_ptr.push_back(&local_C_tile);
+    // --------------------------
 
+    /* remote_A_tile.rowidx and remote_B_tile.colidx are fixed since each process only require A tails and B tails which are respectivelly
+     * on is own same row and column. Moreover, both remote_A_tile.nodeidx and remote_B_tile.nodeidx are fixed and same to Cgrid->node_rank;
+     * the only difference is that with the intranode communication I will also gat remote_B_tile from the other nodeidx.
+     *
+     * The only value that will change iteration by iteration will be the remote_A_tile.colidx and remote_B_tile.rowidx.
+     */
     int colAtoGet = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
     int rowBtoGet = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
 

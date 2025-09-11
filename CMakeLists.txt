@@ -61,5 +61,8 @@ endmacro()
 add_executable(hns_spgemm src/hns_spgemm.cu)
 target_link_libraries(hns_spgemm PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi Kokkos::kokkos)
 
+# Move to test if we want to add kokkos to all the tests
+add_executable(test_kokkos test/test_kokkos.cu)
+target_link_libraries(test_kokkos PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi Kokkos::kokkos)
 
 add_test(test_stack)
