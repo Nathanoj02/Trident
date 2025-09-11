@@ -84,7 +84,6 @@ void LocalTilePrint(std::vector<TT*> tiles, dmmio::ProcessGrid *grid, FILE* fp) 
             }
 
             for (int col = 0; col < row_size; ++col) {
-                // if (row == my_row && col == my_col && node == my_node) {
                 if (checkTileIncluded(tiles, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
@@ -168,7 +167,6 @@ void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gr
                 fprintf(fp, "       |");
             }
             for (int col = 0; col < row_size; ++col) {
-                // if (row == tileC->rowidx && col == tileC->colidx && node == tileC->nodeidx) {
                 if (checkTileIncluded(tilesC, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
@@ -181,7 +179,6 @@ void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gr
             // ---- A ---- (no row labels)
             fprintf(fp, "|");
             for (int col = 0; col < row_size; ++col) {
-                // if (row == tileA->rowidx && col == tileA->colidx && node == tileA->nodeidx) {
                 if (checkTileIncluded(tilesA, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
@@ -194,7 +191,6 @@ void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gr
             // ---- B ---- (no row labels)
             fprintf(fp, "|");
             for (int col = 0; col < row_size; ++col) {
-                // if (row == tileB->rowidx && col == tileB->colidx && node == tileB->nodeidx) {
                 if (checkTileIncluded(tilesB, row, col, node)) {
                     fprintf(fp, " XXXXX |");
                 } else {
@@ -383,6 +379,9 @@ int main(int argc, char** argv) {
     remote_A_tile.colidx = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
     remote_B_tile.rowidx = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
     */
+    std::vector<RemoteTile> allAtiles, allBtiles;
+    std::vector<LocalTile*> allCtiles_ptr;
+    allCtiles_ptr.push_back(&local_C_tile);
 
     int colAtoGet = (local_C_tile.colidx + local_C_tile.rowidx) % common_grd_size; // Stragger left
     int rowBtoGet = (local_C_tile.rowidx + local_C_tile.colidx) % common_grd_size; // Stragger down
@@ -439,14 +438,13 @@ int main(int argc, char** argv) {
 
         if (world_rank == 0) fprintf(stdout, "====================================================== Round %d ======================================================\n", iter);
 
-        // FILE *fp = stdout;
         std::vector<LocalTile*>  Ctiles = {&local_C_tile};
         std::vector<RemoteTile*> Atiles = {&remote_A_tile};
-        // std::vector<RemoteTile*> Btiles = {&remote_B_tile};
         std::vector<RemoteTile*> Btiles;
         for (int i=0; i<node_size; i++) Btiles.push_back(&(intranode_recv_buff[i]));
-        // MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0,
-        MPI_ALL_PRINT(
+        FILE *fp = stdout;
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, Cgrid->global_size - 1,
+        // MPI_ALL_PRINT(
           fprintf(fp, "[%d] iter %d, psend_A: %d, psend_B: %d\n", Cgrid->global_rank, iter, psend_A, psend_B);
           fprintf(fp, "Process (%d,%d,%d) is performing A(%d,%d,%d) x B(%d,%d,%d)\n",
                   Cgrid->col_rank, Cgrid->row_rank, Cgrid->node_rank,
@@ -460,6 +458,9 @@ int main(int argc, char** argv) {
                         fp);
         )
         MPI_Barrier(MPI_COMM_WORLD);
+
+        allAtiles.push_back(remote_A_tile);
+        for (int i=0; i<node_size; i++) allBtiles.push_back(intranode_recv_buff[i]);
 
         // NOTE: put kokkos here
         // TIMER_START(0);
@@ -488,9 +489,23 @@ int main(int argc, char** argv) {
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
+    std::vector<RemoteTile*> allAtiles_ptr, allBtiles_ptr;
+    for (int i=0; i<allAtiles.size(); i++) allAtiles_ptr.push_back(&(allAtiles[i]));
+    for (int i=0; i<allBtiles.size(); i++) allBtiles_ptr.push_back(&(allBtiles[i]));
+    MPI_ALL_PRINT(
+        fprintf(fp, "All computed multiplications by process (%d,%d,%d)\n",
+                Cgrid->col_rank, Cgrid->row_rank, Cgrid->node_rank
+        );
+        LocalTilePrintTriple(allCtiles_ptr, Cgrid,
+                    allAtiles_ptr, dcoo_A->partitioning->grid,
+                    allBtiles_ptr, dcoo_B->partitioning->grid,
+                    fp);
+    )
     MPI_Barrier(MPI_COMM_WORLD);
-    // MPI_Win_free(&win_A);
-    // MPI_Win_free(&win_B);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Win_free(&win_A);
+    MPI_Win_free(&win_B);
 
     delete meta_A;
     delete meta_B;
