@@ -35,7 +35,7 @@ typedef struct {
 } LocalTile;
 
 template<typename TT>
-int checkTileIncluded (std::vector<TT*> tiles, int rowidx, int colidx, int nodeidx) {
+__host__ int checkTileIncluded (std::vector<TT*> tiles, int rowidx, int colidx, int nodeidx) {
     int flag = 0;
     for (size_t i=0; i<tiles.size(); i++) {
         TT* tile = tiles[i];
@@ -48,7 +48,7 @@ int checkTileIncluded (std::vector<TT*> tiles, int rowidx, int colidx, int nodei
 }
 
 template<typename TT>
-void LocalTilePrint(std::vector<TT*> tiles, dmmio::ProcessGrid *grid, FILE* fp) {
+__host__ void LocalTilePrint(std::vector<TT*> tiles, dmmio::ProcessGrid *grid, FILE* fp) {
     int row_size    = grid->row_size;
     int col_size    = grid->col_size;
     int node_size   = grid->node_size;
@@ -103,6 +103,7 @@ void LocalTilePrint(std::vector<TT*> tiles, dmmio::ProcessGrid *grid, FILE* fp) 
 }
 
 // template<typename LTT, typename RTT> // BUG with mpi print macro
+__host__
 void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gridC,
                         std::vector<RemoteTile*> tilesA, dmmio::ProcessGrid *gridA,
                         std::vector<RemoteTile*> tilesB, dmmio::ProcessGrid *gridB,
@@ -209,6 +210,7 @@ void LocalTilePrintTriple(std::vector<LocalTile*> tilesC, dmmio::ProcessGrid *gr
     }
 }
 
+__host__
 void print_comm_info (MPI_Comm comm, FILE *fp) {
     int comm_size;
     MPI_Comm_size(comm, &comm_size);
