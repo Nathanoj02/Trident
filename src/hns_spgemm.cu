@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string.h>
 #include <memory>
+#include <vector>
 // -----------------------
 
 #include "../include/test_utils.cuh"
