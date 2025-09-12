@@ -19,6 +19,9 @@
 
 #include "../include/test_utils.cuh"
 
+#include <Kokkos_Core.hpp>
+#include <KokkosSparse_CooMatrix.hpp>
+
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
 int main(int argc, char** argv) {
@@ -107,6 +110,45 @@ int main(int argc, char** argv) {
     // dmmio::utils::ProcessGrid_print(dcoo_A->partitioning->grid);
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
+
+    Kokkos::initialize(argc, argv);
+    {
+        using Scalar  = double;
+        using Ordinal = int;
+        using Size    = int;
+        using namespace KokkosSparse;
+
+        int nnz = dcoo_A->coo->nnz;
+        Kokkos::View<Ordinal*> row_d("row", nnz);
+        Kokkos::View<Ordinal*> col_d("col", nnz);
+        Kokkos::View<Scalar*>  val_d("val", nnz);
+
+        auto row_h = Kokkos::create_mirror_view(row_d);
+        auto col_h = Kokkos::create_mirror_view(col_d);
+        auto val_h = Kokkos::create_mirror_view(val_d);
+
+        for (int i = 0; i < nnz; i++) {
+            row_h(i) = h_row[i];
+            col_h(i) = h_col[i];
+            val_h(i) = h_val[i];
+        }
+
+        Kokkos::deep_copy(row_d, row_h);
+        Kokkos::deep_copy(col_d, col_h);
+        Kokkos::deep_copy(val_d, val_h);
+
+        // --- Construct a COO matrix ---
+        CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Size>
+            A(nrows, ncols, row_d, col_d, val_d);
+
+        // --- Example kernel: print COO entries ---
+        Kokkos::parallel_for("printCOO", nnz, KOKKOS_LAMBDA(const int i) {
+            printf("entry %d: A(%d,%d) = %lf\n", i, A.graph.row(i), A.graph.entries(i), A.values(i));
+        });
+
+        Kokkos::fence();
+    }
+    Kokkos::finalize();
 
 
     delete meta_A;
