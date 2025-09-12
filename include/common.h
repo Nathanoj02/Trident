@@ -14,6 +14,10 @@
 #include <memory>
 #include <iostream>
 #include <type_traits>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <thread>
 
 #include <ccutils/colors.h>
 #include <ccutils/mpi/mpi_macros.h>
@@ -36,6 +40,10 @@
 #include <cuda_runtime.h>
 #include <cusparse_v2.h>
 #include <cusparse.h>
+
+#include <Kokkos_Core.hpp>
+#include <KokkosSparse_CrsMatrix.hpp>
+#include <KokkosSparse_spgemm.hpp>
 
 
 #endif

@@ -37,12 +37,13 @@ struct MessageQueue
                 }
             }
         }
+        return -1;
     }
 
 
-    void notify(Message * msg, const int rank, const size_t offset)
+    void notify(Message * msg, const int target, const size_t offset)
     {
-        MPI_Accumulate(msg, 1, MPI_MESSAGE, rank, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
+        MPI_Accumulate(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
         MPI_Win_flush(rank, msg_win);
     }
 

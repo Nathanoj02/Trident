@@ -1,6 +1,5 @@
-#include "hns_spgemm.h"
+#include "hns_spgemm.cuh"
 #include "test_utils.cuh"
-
 
 
 
@@ -51,7 +50,7 @@ int main(int argc, char ** argv)
     // Reading the distribuited matrices
     std::string A_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
-    dmmio::DCOO<uint32_t, float> *dcoo_A = dmmio::DCOO_read<uint32_t, float>(
+    dmmio::DCOO<int32_t, float> *dcoo_A = dmmio::DCOO_read<int32_t, float>(
         A_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
@@ -61,7 +60,7 @@ int main(int argc, char ** argv)
 
     std::string B_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
-    dmmio::DCOO<uint32_t, float> *dcoo_B = dmmio::DCOO_read<uint32_t, float>(
+    dmmio::DCOO<int32_t, float> *dcoo_B = dmmio::DCOO_read<int32_t, float>(
         A_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
@@ -69,8 +68,10 @@ int main(int argc, char ** argv)
         false, meta_B
     );
 
+
     // Some prints
-    if (world_rank == 0) {
+    if (world_rank == 0) 
+    {
       std::cout << "A matrix file path: " << config->matpathA << std::endl;
       std::cout << "B matrix file path: " << config->matpathB << std::endl;
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
@@ -78,14 +79,12 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
     }
 
-    if (world_rank == 0) {
-      fprintf(stdout, "\n================= Hierarchical Partitioning ==================\n");
-      fprintf(stdout, "A partitioning: %s, operand: %s\n", dcoo_A->partitioning->type_str, OPSTR(dcoo_A->partitioning->op));
-      fprintf(stdout, "B partitioning: %s, operand: %s\n", dcoo_B->partitioning->type_str, OPSTR(dcoo_B->partitioning->op));
-      fprintf(stdout, "C partitioning: %s, operand: %s\n", "????", OPSTR(Cop));
-    }
 
-    hns_spgemm_main(dcoo_A, dcoo_B);
+    DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
+    DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
+
+    DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+    //TODO: Free stuff
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
