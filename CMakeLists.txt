@@ -1,13 +1,10 @@
+# CMAKE SETUP
 cmake_minimum_required(VERSION 3.10)
 set(CMAKE_CUDA_ARCHITECTURES "80")
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
+set(CMAKE_CXX_STANDARD 20)
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_STANDARD 14)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-add_compile_definitions(CCUTILS_ENABLE_CUDA)
 
 # FIND CUDATOOLKIT
 find_package(CUDAToolkit REQUIRED)
@@ -20,8 +17,14 @@ include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 find_package(MPI REQUIRED COMPONENTS CXX)
 
 
+# FIND KOKKOS
+find_package(Kokkos REQUIRED)
+find_package(KokkosKernels REQUIRED)
+
+
 # ADD INCLUDE DIRECTORY
 include_directories(include)
+
 
 # DMMIO SETUP
 set(DMMIO_ENABLE_MPI ON CACHE BOOL "Enable MPI support in dmmio")
@@ -36,34 +39,42 @@ if(NOT TARGET ccutils)
 endif()
 
 
-find_package(Kokkos REQUIRED)
-
-
 # CXX FLAGS
 set(CXX_FLAGS 
     -O3
     -Wall 
     -march=native 
     -ffast-math
-    -ftree-vectorize)
+    -ftree-vectorize
+    -pthread)
 
 # CUDA FLAGS
 set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC")
 
 
+# MAIN HNS_SPGEMM LIBRARY
+add_library(hns_spgemm
+            src/hns_spgemm.cu)
+target_link_libraries(hns_spgemm PUBLIC MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos)
+
+
 # MACRO FOR ADDING TESTS
 macro(add_test name)
     add_executable(${name} test/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos)
+endmacro()
+
+# TESTS
+add_test(test_queue)
+
+
+# MACRO FOR ADDING OTHER EXECUTABLES
+macro(add_src name)
+    add_executable(${name} src/${name}.cu)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos)
 endmacro()
 
 
-# Keep this here for now since it is in src
-add_executable(hns_spgemm src/hns_spgemm.cu)
-target_link_libraries(hns_spgemm PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi Kokkos::kokkos)
-
-# Move to test if we want to add kokkos to all the tests
-add_executable(test_kokkos test/test_kokkos.cu)
-target_link_libraries(test_kokkos PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos)
-
-add_test(test_stack)
+# EXECUTABLES
+add_src(driver)
+add_src(scratch)
