@@ -116,7 +116,6 @@ int main(int argc, char** argv) {
         using Scalar  = double;
         using Ordinal = int;
         using Size    = int;
-        using namespace KokkosSparse;
 
         int nnz = dcoo_A->coo->nnz;
         Kokkos::View<Ordinal*> row_d("row", nnz);
@@ -138,7 +137,7 @@ int main(int argc, char** argv) {
         Kokkos::deep_copy(val_d, val_h);
 
         // --- Construct a COO matrix ---
-        CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Size>
+        KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Size>
             A(nrows, ncols, row_d, col_d, val_d);
 
         // --- Example kernel: print COO entries ---
