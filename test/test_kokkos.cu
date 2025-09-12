@@ -24,6 +24,33 @@
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
+template<typename Scalar, typename Ordinal>
+KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Ordinal>* dmmio2kokkos (dmmio::DCOO<Ordinal, Scalar>* dcoo) {
+    int nnz = dcoo->coo->nnz;
+    Kokkos::View<Ordinal*> row_d("row", nnz);
+    Kokkos::View<Ordinal*> col_d("col", nnz);
+    Kokkos::View<Scalar*>  val_d("val", nnz);
+
+    auto row_h = Kokkos::create_mirror_view(row_d);
+    auto col_h = Kokkos::create_mirror_view(col_d);
+    auto val_h = Kokkos::create_mirror_view(val_d);
+
+    for (int i = 0; i < nnz; i++) {
+        row_h(i) = dcoo->coo->row[i];
+        col_h(i) = dcoo->coo->col[i];
+        val_h(i) = 1.0; // BUG That's because some graphs has this void
+    }
+
+    Kokkos::deep_copy(row_d, row_h);
+    Kokkos::deep_copy(col_d, col_h);
+    Kokkos::deep_copy(val_d, val_h);
+
+    // --- Construct a COO matrix ---
+    auto *M = new KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Ordinal>(dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
+    Kokkos::fence();
+    return(M);
+}
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
@@ -112,37 +139,12 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     Kokkos::initialize(argc, argv);
-    {
-        using Scalar  = float;
-        using Ordinal = uint32_t;
-        using Size    = uint32_t;
+    auto *kokkos_A = dmmio2kokkos(dcoo_A);
+    auto *kokkos_B = dmmio2kokkos(dcoo_B);
 
-        int nnz = dcoo_A->coo->nnz;
-        Kokkos::View<Ordinal*> row_d("row", nnz);
-        Kokkos::View<Ordinal*> col_d("col", nnz);
-        Kokkos::View<Scalar*>  val_d("val", nnz);
-
-        auto row_h = Kokkos::create_mirror_view(row_d);
-        auto col_h = Kokkos::create_mirror_view(col_d);
-        auto val_h = Kokkos::create_mirror_view(val_d);
-
-        for (int i = 0; i < nnz; i++) {
-            row_h(i) = dcoo_A->coo->row[i];
-            col_h(i) = dcoo_A->coo->col[i];
-            val_h(i) = 1.0; // BUG That's because some graphs has this void
-        }
-
-        Kokkos::deep_copy(row_d, row_h);
-        Kokkos::deep_copy(col_d, col_h);
-        Kokkos::deep_copy(val_d, val_h);
-
-        // --- Construct a COO matrix ---
-        KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Size>
-            A(dcoo_A->coo->nrows, dcoo_A->coo->ncols, row_d, col_d, val_d);
-        Kokkos::fence();
-    }
+    delete kokkos_A;
+    delete kokkos_B;
     Kokkos::finalize();
-
 
     delete meta_A;
     delete meta_B;
