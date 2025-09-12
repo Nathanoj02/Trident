@@ -113,9 +113,9 @@ int main(int argc, char** argv) {
 
     Kokkos::initialize(argc, argv);
     {
-        using Scalar  = double;
-        using Ordinal = int;
-        using Size    = int;
+        using Scalar  = float;
+        using Ordinal = uint32_t;
+        using Size    = uint32_t;
 
         int nnz = dcoo_A->coo->nnz;
         Kokkos::View<Ordinal*> row_d("row", nnz);
@@ -127,9 +127,9 @@ int main(int argc, char** argv) {
         auto val_h = Kokkos::create_mirror_view(val_d);
 
         for (int i = 0; i < nnz; i++) {
-            row_h(i) = h_row[i];
-            col_h(i) = h_col[i];
-            val_h(i) = h_val[i];
+            row_h(i) = dcoo_A->coo->row[i];
+            col_h(i) = dcoo_A->coo->col[i];
+            val_h(i) = 1.0; // BUG That's because some graphs has this void
         }
 
         Kokkos::deep_copy(row_d, row_h);
@@ -138,13 +138,7 @@ int main(int argc, char** argv) {
 
         // --- Construct a COO matrix ---
         KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Size>
-            A(nrows, ncols, row_d, col_d, val_d);
-
-        // --- Example kernel: print COO entries ---
-        Kokkos::parallel_for("printCOO", nnz, KOKKOS_LAMBDA(const int i) {
-            printf("entry %d: A(%d,%d) = %lf\n", i, A.graph.row(i), A.graph.entries(i), A.values(i));
-        });
-
+            A(dcoo_A->coo->nrows, dcoo_A->coo->ncols, row_d, col_d, val_d);
         Kokkos::fence();
     }
     Kokkos::finalize();
