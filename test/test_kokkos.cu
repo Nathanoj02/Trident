@@ -1,5 +1,6 @@
 #include <mpi.h>
 #include <iostream>
+#include <variant>
 
 #include <mmio/io.h>
 #include <mmio/mmio.h>
@@ -20,35 +21,79 @@
 #include "../include/test_utils.cuh"
 
 #include <Kokkos_Core.hpp>
+#include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_CooMatrix.hpp>
+#include <KokkosSparse_CcsMatrix.hpp>
+#include <KokkosSparse_coo2crs.hpp>
+#include <KokkosSparse_crs2ccs.hpp>
+#include <KokkosSparse_ccs2crs.hpp>
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
-template<typename Scalar, typename Ordinal>
-KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Ordinal>* dmmio2kokkos (dmmio::DCOO<Ordinal, Scalar>* dcoo) {
-    int nnz = dcoo->coo->nnz;
-    Kokkos::View<Ordinal*> row_d("row", nnz);
-    Kokkos::View<Ordinal*> col_d("col", nnz);
-    Kokkos::View<Scalar*>  val_d("val", nnz);
+namespace KokkosWrap {
+    enum class MajorDim {
+        ROWS, // i.e. CSR
+        COLS  // i.e. CSC
+    };
 
-    auto row_h = Kokkos::create_mirror_view(row_d);
-    auto col_h = Kokkos::create_mirror_view(col_d);
-    auto val_h = Kokkos::create_mirror_view(val_d);
+    template <typename IT, typename VT>
+    struct Matrix {
+        dmmio::Partitioning* partitioning;  // still raw pointer to external partitioning
 
-    for (int i = 0; i < nnz; i++) {
-        row_h(i) = dcoo->coo->row[i];
-        col_h(i) = dcoo->coo->col[i];
-        val_h(i) = 1.0; // BUG That's because some graphs has this void
-    }
+        // Instead of a raw union, use std::variant for safety
+        std::variant<
+            KokkosSparse::CrsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT>,
+            KokkosSparse::CcsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT>
+        > storage;
 
-    Kokkos::deep_copy(row_d, row_h);
-    Kokkos::deep_copy(col_d, col_h);
-    Kokkos::deep_copy(val_d, val_h);
+        MajorDim layout;  // which one we actually hold
 
-    // --- Construct a COO matrix ---
-    auto *M = new KokkosSparse::CooMatrix<Scalar, Ordinal, Kokkos::DefaultExecutionSpace, void, Ordinal>(dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
-    Kokkos::fence();
-    return(M);
+        // ---- Constructor ----
+        Matrix(dmmio::DCOO<IT, VT>* dcoo, MajorDim T)
+            : partitioning(dcoo->partitioning), layout(T)
+        {
+            int nnz = dcoo->coo->nnz;
+            Kokkos::View<IT*> row_d("row", nnz);
+            Kokkos::View<IT*> col_d("col", nnz);
+            Kokkos::View<VT*> val_d("val", nnz);
+
+            auto row_h = Kokkos::create_mirror_view(row_d);
+            auto col_h = Kokkos::create_mirror_view(col_d);
+            auto val_h = Kokkos::create_mirror_view(val_d);
+
+            for (int i = 0; i < nnz; i++) {
+                row_h(i) = dcoo->coo->row[i];
+                col_h(i) = dcoo->coo->col[i];
+                val_h(i) = static_cast<VT>(1.0); // TODO: use real values if available
+            }
+
+            Kokkos::deep_copy(row_d, row_h);
+            Kokkos::deep_copy(col_d, col_h);
+            Kokkos::deep_copy(val_d, val_h);
+
+            // Build COO
+            KokkosSparse::CooMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> M(
+                dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
+            Kokkos::fence();
+
+            // --- Step 1: COO → CSR (row-major) ---
+            KokkosSparse::CrsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> csr(
+                M.numRows(), M.numCols(), M.entries(), M.rowIndices(), M.values());
+            Kokkos::View<IT*> row_map("row_map", M.numRows()+1);
+            KokkosSparse::coo2crs(&csr.graph.row_map, M.rowIndices(), M.numEntries(), M.numRows());
+
+            // --- Step 2: Decide layout ---
+            if (T == MajorDim::ROWS) {
+                storage = csr; // keep CSR
+            } else {
+                // CSR → CSC (column-major)
+                KokkosSparse::CcsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> csc(
+                    M.numCols(), M.numEntries());
+                KokkosSparse::crs2ccs(&csc, csr);
+                storage = csc; // store CSC
+            }
+        }
+    };
 }
 
 int main(int argc, char** argv) {
@@ -139,11 +184,13 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     Kokkos::initialize(argc, argv);
-    auto *kokkos_A = dmmio2kokkos(dcoo_A);
-    auto *kokkos_B = dmmio2kokkos(dcoo_B);
+    // auto *kokkos_A = dmmio2kokkos(dcoo_A);
+    // auto *kokkos_B = dmmio2kokkos(dcoo_B);
+    KokkosWrap::Matrix<uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
+    KokkosWrap::Matrix<uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
 
-    delete kokkos_A;
-    delete kokkos_B;
+    // delete kokkos_A;
+    // delete kokkos_B;
     Kokkos::finalize();
 
     delete meta_A;
