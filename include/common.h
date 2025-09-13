@@ -41,9 +41,12 @@
 #include <cusparse_v2.h>
 #include <cusparse.h>
 
+#include <cub/cub.cuh>
+
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_spgemm.hpp>
+#include <KokkosSparse_spadd.hpp>
 
 
 #endif

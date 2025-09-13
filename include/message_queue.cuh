@@ -10,10 +10,14 @@ struct MessageQueue
 
 
     MessageQueue(const size_t size, MPI_Comm comm):
-        size(size), comm(comm), serviced(0)
+        size(size), comm(comm),serviced(0)
     {
 
         messages = new Message[size];
+        for (size_t i=0; i<size; i++)
+        {
+            messages[i] = -1;
+        }
         MPI_Comm_rank(comm, &rank);
         MPI_MESSAGE = MPIType<Message>();
 
@@ -26,30 +30,34 @@ struct MessageQueue
     {
         while (serviced < size)
         {
+            MPI_Win_flush_all(msg_win); //TODO: get rid of this?
             MPI_Win_sync(msg_win);
             for (int i=0; i<size; i++)
             {
                 if (messages[i] != -1)
                 {
+                    Message result = messages[i];
                     messages[i] = -1;
-                    serviced++;
-                    return messages[i];
+                    return result;
                 }
             }
         }
-        return -1;
+        return -2;
     }
 
 
     void notify(Message * msg, const int target, const size_t offset)
     {
+        //MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, 0, msg_win);
         MPI_Accumulate(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
-        MPI_Win_flush(rank, msg_win);
+        MPI_Win_flush(target, msg_win);
+        //MPI_Win_unlock(target, msg_win);
     }
 
 
     ~MessageQueue()
     {
+        MPI_Win_unlock_all(msg_win);
         MPI_Win_free(&msg_win);
         delete[] messages;
     }

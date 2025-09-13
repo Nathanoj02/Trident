@@ -8,6 +8,7 @@ cd kokkos
 # git checkout 4.4.00   # example – use the tag you want
 
 # Use kokkos' nvcc_wrapper as the C++ compiler
+export NVCC_WRAPPER_DEFAULT_COMPILER=CC
 export NVCC_WRAPPER=$PWD/bin/nvcc_wrapper
 
 cmake -S . -B build \
@@ -32,7 +33,8 @@ cmake -S . -B build \
   -DKokkosKernels_ENABLE_TESTS=OFF \
   -DKokkosKernels_ENABLE_EXAMPLES=OFF \
   -DKokkosKernels_ENABLE_CUDA=ON \
-  -DKokkosKernels_INST_DOUBLE=ON \
+  -DKokkosKernels_INST_DOUBLE=OFF \
+  -DKokkosKernels_INST_FLOAT=ON \
   -DKokkosKernels_INST_LAYOUTLEFT=ON \
   -DKokkosKernels_INST_EXECSPACE_CUDA=ON \
   -DKokkosKernels_INST_MEMSPACE_CUDAUVMSPACE=OFF \
@@ -41,21 +43,16 @@ cmake -S . -B build \
   -DKokkosKernels_ENABLE_TPL_CUSPARSE=OFF
 \
   # ETI: only build the combos you use
-  -DKokkosKernels_INST_DOUBLE=ON \
-  -DKokkosKernels_INST_FLOAT=ON \
   -DKokkosKernels_INST_COMPLEX_DOUBLE=OFF \
   -DKokkosKernels_INST_COMPLEX_FLOAT=OFF \
   -DKokkosKernels_INST_ORDINAL_INT=ON \
   -DKokkosKernels_INST_ORDINAL_INT64_T=OFF \
   -DKokkosKernels_INST_OFFSET_SIZE_T=OFF \
   -DKokkosKernels_INST_OFFSET_INT=ON \
-  -DKokkosKernels_INST_LAYOUTLEFT=ON \
   -DKokkosKernels_INST_LAYOUTRIGHT=OFF \
-  -DKokkosKernels_INST_EXECSPACE_CUDA=ON \
   -DKokkosKernels_INST_EXECSPACE_OPENMP=OFF \
   -DKokkosKernels_INST_EXECSPACE_THREADS=OFF \
   -DKokkosKernels_INST_MEMSPACE_CUDASPACE=ON \
-  -DKokkosKernels_INST_MEMSPACE_CUDAUVMSPACE=OFF
 
 cmake --build build -j8
 cmake --install build

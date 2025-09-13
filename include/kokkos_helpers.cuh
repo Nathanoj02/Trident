@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "utils.cuh"
 
 template <typename IT, typename VT>
 struct KokkosTypes 
@@ -10,6 +11,7 @@ struct KokkosTypes
     using Scalar = VT;
     using MemorySpace = typename ExecutionSpace::memory_space;
     using CrsMatrix = KokkosSparse::CrsMatrix<Scalar, Ordinal, ExecutionSpace, void, SizeType>;
+    using UM = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
 };
 
 
@@ -20,6 +22,27 @@ struct Triple
     IT col;
     VT val;
 };
+
+
+template <typename IT, typename VT>
+KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz, 
+                                                   VT * d_vals, IT * d_colinds, IT * d_rowptrs)
+{
+    using KokkosCRS = KokkosTypes<IT, VT>::CrsMatrix;
+    KokkosCRS * crs_mat = new KokkosCRS(
+            "A", 
+            nrows, 
+            ncols, 
+            nnz, 
+            Kokkos::View<VT*, typename KokkosTypes<IT, VT>::MemorySpace, typename KokkosTypes<IT, VT>::UM>(d_vals, nnz), 
+            Kokkos::View<IT*, typename KokkosTypes<IT, VT>::MemorySpace, typename KokkosTypes<IT, VT>::UM>(d_rowptrs, nrows+1), 
+            Kokkos::View<IT*, typename KokkosTypes<IT, VT>::MemorySpace, typename KokkosTypes<IT, VT>::UM>(d_colinds, nnz)
+    );
+
+    return crs_mat;
+
+}
+
 
 
 template <typename IT, typename VT>
@@ -79,36 +102,38 @@ KokkosTypes<IT, VT>::CrsMatrix * coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
     VT * d_vals = d2h_copy(vals.data(), coo->nnz);
 
 
-    // Now we can just call the kokkos constructor
-    KokkosCRS * crs_mat = new KokkosCRS(
-            nullptr, 
-            coo->nrows, 
-            coo->ncols, 
-            coo->nnz, 
-            Kokkos::View<VT*>(d_vals), 
-            Kokkos::View<IT*>(d_rowptrs), 
-            Kokkos::View<IT*>(d_colinds)
-    );
-
-    return crs_mat;
+    // Convert to a kokkos crs matrix
+    return csr_to_kokkos_crs(coo->nrows, coo->ncols, coo->nnz, d_vals, d_colinds, d_rowptrs);
 }
+
 
 
 template <typename IT, typename VT>
-KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz, 
-                                                   VT * d_vals, IT * d_colinds, IT * d_rowptrs)
+void kokkos_spgemm(typename KokkosTypes<IT, VT>::CrsMatrix& A, typename KokkosTypes<IT, VT>::CrsMatrix& B, typename KokkosTypes<IT, VT>::CrsMatrix& C)
 {
-    using KokkosCRS = KokkosTypes<IT, VT>::CrsMatrix;
-    KokkosCRS * crs_mat = new KokkosCRS(
-            nullptr, 
-            nrows, 
-            ncols, 
-            nnz, 
-            Kokkos::View<VT*>(d_vals), 
-            Kokkos::View<IT*>(d_rowptrs), 
-            Kokkos::View<IT*>(d_colinds)
-    );
 
-    return crs_mat;
+    using LocalCSR = KokkosTypes<IT, VT>::CrsMatrix ;
 
+    // First, spgemm
+    LocalCSR C_new = KokkosSparse::spgemm<LocalCSR, LocalCSR, LocalCSR>(A, false, B, false);
+
+    // Now, accumulate
+    // TODO: move this outside?
+    using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle
+        <IT, IT, VT, Kokkos::Cuda, Kokkos::CudaSpace, Kokkos::CudaSpace>;
+    KernelHandle spadd_handle;
+    spadd_handle.create_spadd_handle();
+
+    LocalCSR C_accum;
+    KokkosSparse::spadd_symbolic<KernelHandle, LocalCSR, LocalCSR, LocalCSR>(&spadd_handle, C, C_new, C_accum);
+    KokkosSparse::spadd_numeric<KernelHandle, VT, LocalCSR, VT, LocalCSR, LocalCSR>(&spadd_handle, VT(1), C, VT(1), C_new, C_accum);
+
+    spadd_handle.destroy_spadd_handle();
+    Kokkos::fence();
+
+    C = std::move(C_accum);
 }
+
+
+
+

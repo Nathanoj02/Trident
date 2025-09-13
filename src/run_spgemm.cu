@@ -5,8 +5,12 @@
 
 int main(int argc, char ** argv)
 {
+
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
+
+    // This causes a bunch of complaints related to IPC -- not sure
+    Kokkos::initialize(argc, argv);
 
     int world_size;
     int world_rank;
@@ -21,7 +25,8 @@ int main(int argc, char ** argv)
     MPI_Get_processor_name(processor_name, &name_len);
 
     std::cout << "Hello world from processor " << processor_name
-            << ", rank " << world_rank << " out of " << world_size << " processors\n";
+            << ", rank " << world_rank << " out of " << world_size << " processors"
+            << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
 
 
@@ -79,12 +84,25 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
     }
 
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning conversion\n"));
+    fflush(stdout);
+
+    std::cout<<"nnz in local A: "<<dcoo_A->coo->nnz<<std::endl;
 
     DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
     DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
 
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done conversion\n"));
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
     DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
+
     //TODO: Free stuff
+
+    Kokkos::finalize();
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
