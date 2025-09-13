@@ -36,25 +36,25 @@ namespace KokkosWrap {
         COLS  // i.e. CSC
     };
 
-    template <typename IT, typename VT>
+    template <typename KIT, typename DIT, typename VT>
     struct Matrix {
         dmmio::Partitioning* partitioning;  // still raw pointer to external partitioning
 
         // Instead of a raw union, use std::variant for safety
         std::variant<
-            KokkosSparse::CrsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT>,
-            KokkosSparse::CcsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT>
+            KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>,
+            KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>
         > storage;
 
         MajorDim layout;  // which one we actually hold
 
         // ---- Constructor ----
-        Matrix(dmmio::DCOO<IT, VT>* dcoo, MajorDim T)
+        Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
             : partitioning(dcoo->partitioning), layout(T)
         {
             int nnz = dcoo->coo->nnz;
-            Kokkos::View<IT*> row_d("row", nnz);
-            Kokkos::View<IT*> col_d("col", nnz);
+            Kokkos::View<KIT*> row_d("row", nnz);
+            Kokkos::View<KIT*> col_d("col", nnz);
             Kokkos::View<VT*> val_d("val", nnz);
 
             auto row_h = Kokkos::create_mirror_view(row_d);
@@ -62,8 +62,8 @@ namespace KokkosWrap {
             auto val_h = Kokkos::create_mirror_view(val_d);
 
             for (int i = 0; i < nnz; i++) {
-                row_h(i) = dcoo->coo->row[i];
-                col_h(i) = dcoo->coo->col[i];
+                row_h(i) = static_cast<KIT>(dcoo->coo->row[i]);
+                col_h(i) = static_cast<KIT>(dcoo->coo->col[i]);
                 val_h(i) = static_cast<VT>(1.0); // TODO: use real values if available
             }
 
@@ -71,25 +71,15 @@ namespace KokkosWrap {
             Kokkos::deep_copy(col_d, col_h);
             Kokkos::deep_copy(val_d, val_h);
 
-            // Build COO
-            KokkosSparse::CooMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> M(
-                dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
-            Kokkos::fence();
-
             // --- Step 1: COO → CSR (row-major) ---
-            KokkosSparse::CrsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> csr(
-                M.numRows(), M.numCols(), M.entries(), M.rowIndices(), M.values());
-            Kokkos::View<IT*> row_map("row_map", M.numRows()+1);
-            KokkosSparse::coo2crs(&csr.graph.row_map, M.rowIndices(), M.numEntries(), M.numRows());
+            auto csr = KokkosSparse::coo2crs(dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
 
             // --- Step 2: Decide layout ---
             if (T == MajorDim::ROWS) {
                 storage = csr; // keep CSR
             } else {
                 // CSR → CSC (column-major)
-                KokkosSparse::CcsMatrix<VT, IT, Kokkos::DefaultExecutionSpace, void, IT> csc(
-                    M.numCols(), M.numEntries());
-                KokkosSparse::crs2ccs(&csc, csr);
+                auto csc = KokkosSparse::crs2ccs(csr);
                 storage = csc; // store CSC
             }
         }
@@ -179,18 +169,16 @@ int main(int argc, char** argv) {
 
     // TODO: check all the grids are the same or compatible (do we support rectangular grids?)
     dmmio::ProcessGrid *Cgrid = dcoo_A->partitioning->grid; // NOTE BUG TODO: we nead to think something for the grid managing.
-    // dmmio::utils::ProcessGrid_print(dcoo_A->partitioning->grid);
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
     Kokkos::initialize(argc, argv);
-    // auto *kokkos_A = dmmio2kokkos(dcoo_A);
-    // auto *kokkos_B = dmmio2kokkos(dcoo_B);
-    KokkosWrap::Matrix<uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
-    KokkosWrap::Matrix<uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
+    {
+        KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
+        KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
 
-    // delete kokkos_A;
-    // delete kokkos_B;
+        // kokkos_A and kokkos_B are automatically freed since in scope
+    }
     Kokkos::finalize();
 
     delete meta_A;
