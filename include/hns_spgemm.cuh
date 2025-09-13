@@ -4,6 +4,8 @@
 #include "tile_holder.cuh"
 #include "kokkos_helpers.cuh"
 
+#define DEBUG_MAIN 0
+
 
 template <typename IT, typename VT>
 struct DistCSR

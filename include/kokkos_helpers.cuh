@@ -117,6 +117,12 @@ void kokkos_spgemm(typename KokkosTypes<IT, VT>::CrsMatrix& A, typename KokkosTy
     // First, spgemm
     LocalCSR C_new = KokkosSparse::spgemm<LocalCSR, LocalCSR, LocalCSR>(A, false, B, false);
 
+    if (C.numRows() == 0)
+    {
+        C = std::move(C_new);
+        return;
+    }
+
     // Now, accumulate
     // TODO: move this outside?
     using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle

@@ -9,13 +9,17 @@ int main(int argc, char ** argv)
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
-    // This causes a bunch of complaints related to IPC -- not sure
+    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
     Kokkos::initialize(argc, argv);
+
 
     int world_size;
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
+    FILE * logfile = fopen(logname.c_str(), "w");
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
@@ -103,6 +107,7 @@ int main(int argc, char ** argv)
     //TODO: Free stuff
 
     Kokkos::finalize();
+    fclose(logfile);
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

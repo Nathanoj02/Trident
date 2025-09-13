@@ -49,4 +49,7 @@
 #include <KokkosSparse_spadd.hpp>
 
 
+extern FILE * logfile;
+
+
 #endif

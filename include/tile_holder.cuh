@@ -2,6 +2,8 @@
 #include "common.h"
 #include "kokkos_helpers.cuh"
 
+#define DEBUG_HOLDER 0
+
 
 template <typename IT, typename VT>
 struct TileHolder
@@ -26,7 +28,10 @@ struct TileHolder
         MPI_Win_create(d_vals_buf, sizeof(VT) * (nnz_size), sizeof(VT), MPI_INFO_NULL, comm, &d_vals_win);
         MPI_Win_create((void*)flag, sizeof(IT), sizeof(IT), MPI_INFO_NULL, comm, &flag_win);
 
-        MPI_Win_lock_all(0, flag_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_rowptrs_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_colinds_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_vals_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, flag_win);
 
     }
 
@@ -34,43 +39,35 @@ struct TileHolder
 
     void put_tile(VT * d_vals, IT * d_colinds, IT * d_rowptrs, const IT nnz, const IT nrows, const int target)
     {
-        // MPI_MODE_NOCHECK should be okay because only one request is out at any given time 
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, MPI_MODE_NOCHECK, d_rowptrs_win);
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, MPI_MODE_NOCHECK, d_colinds_win);
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, MPI_MODE_NOCHECK, d_vals_win);
 
-
-        MPI_Put(d_vals, nnz, MPIType<VT>(), target, 0, nnz, MPIType<VT>(), d_vals_win);
-        MPI_Put(d_colinds, nnz, MPIType<IT>(), target, 0, nnz, MPIType<IT>(), d_colinds_win);
-        MPI_Put(d_rowptrs, nrows + 1, MPIType<IT>(), target, 0, nrows + 1, MPIType<IT>(), d_rowptrs_win);
+        // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
+        MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
+        MPI_Put(d_colinds, nnz, MPI_INT32_T, target, 0, nnz, MPI_INT32_T, d_colinds_win);
+        MPI_Put(d_rowptrs, nrows + 1, MPI_INT32_T, target, 0, nrows + 1, MPI_INT32_T, d_rowptrs_win);
 
 
         MPI_Win_flush(target, d_rowptrs_win);
         MPI_Win_flush(target, d_colinds_win);
         MPI_Win_flush(target, d_vals_win);
 
-        MPI_Win_unlock(target, d_rowptrs_win);
-        MPI_Win_unlock(target, d_colinds_win);
-        MPI_Win_unlock(target, d_vals_win);
-
-
         // Notify target of completion
-        MPI_Accumulate(&nnz, 1, MPIType<IT>(), target, 0, 1, MPIType<IT>(), MPI_REPLACE, flag_win);
+        MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
         MPI_Win_flush(target, flag_win); //TODO: Do I need this?
-
 
     }
 
 
-    IT wait()
+    IT wait(int src)
     {
         IT nnz;
         do {
-            MPI_Win_flush_all(flag_win); //TODO: Get rid of this?
+            MPI_Win_flush_all(flag_win); //TODO: Get rid of this? I don't understand why it needs to be here, but it seems necessary to update flag
             MPI_Win_sync(flag_win);
             nnz = *flag;
+#if DEBUG_HOLDER
             std::cout<<"Rank: "<<world_rank<<","<<nnz<<std::endl;
             sleep(1);
+#endif
         } while (nnz == -1);
         *flag = -1;
 
@@ -79,18 +76,17 @@ struct TileHolder
     }
 
 
-
-    LocalCSR * form_tile(const IT nrows, const IT ncols, const IT nnz)
+    void sync_buffers()
     {
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, MPI_MODE_NOCHECK, d_rowptrs_win);
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, MPI_MODE_NOCHECK, d_colinds_win);
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, MPI_MODE_NOCHECK, d_vals_win);
         MPI_Win_sync(d_vals_win);
         MPI_Win_sync(d_colinds_win);
         MPI_Win_sync(d_rowptrs_win);
-        MPI_Win_unlock(rank, d_rowptrs_win);
-        MPI_Win_unlock(rank, d_colinds_win);
-        MPI_Win_unlock(rank, d_vals_win);
+    }
+
+
+    LocalCSR * form_tile(const IT nrows, const IT ncols, const IT nnz)
+    {
+        sync_buffers();
         return csr_to_kokkos_crs(nrows, ncols, nnz,
                                  d_vals_buf, d_colinds_buf, d_rowptrs_buf);
     }
@@ -101,6 +97,65 @@ struct TileHolder
     {
         return csr_to_kokkos_crs(nrows, ncols, nnz,
                                  d_vals, d_colinds, d_rowptrs);
+    }
+
+
+    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid)
+    {
+
+        sync_buffers();
+
+        const int node_size = grid->node_size;
+        const int total_nrows = node_size * nrows;
+
+        // Convert rowtprs to nnz per row
+        rowptrs_to_rownnz(d_rowptrs_buf, nrows);
+
+
+        // Get nnz per tile
+        std::vector<int> node_nnz(node_size);
+        MPI_Allgather(&nnz, 1, MPI_INT, node_nnz.data(), 1, MPI_INT, grid->node_comm);
+
+
+        // Recv buffer setup
+        std::vector<int> displs(node_size);
+        int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
+        std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
+
+        VT * d_node_vals;
+        IT * d_node_colinds, * d_node_rowptrs;
+
+        CUDA_CHECK(cudaMalloc(&d_node_vals, sizeof(VT) * total_nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT) * total_nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        
+
+        // Allgatherv each buffer
+
+        // Values
+        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(), 
+                       d_node_vals, node_nnz.data(), displs.data(),
+                       MPIType<VT>(), grid->node_comm);
+         
+        // Colinds
+        MPI_Allgatherv(d_colinds_buf, nnz, MPIType<IT>(), 
+                       d_node_colinds, node_nnz.data(), displs.data(),
+                       MPIType<IT>(), grid->node_comm);
+        
+        // Rowptrs
+        MPI_Allgather(d_rowptrs_buf + 1, nrows, MPIType<IT>(),
+                      d_node_rowptrs + 1, nrows, MPIType<IT>(),
+                      grid->node_comm);
+
+
+        // Convert rownnz to rowptrs
+        rownnz_to_rowptrs(d_node_rowptrs, total_nrows);
+
+
+        // Done
+        return form_tile(total_nrows, ncols, total_nnz,
+                         d_node_vals, d_node_colinds, d_node_rowptrs);
+
     }
 
 
@@ -140,66 +195,12 @@ struct TileHolder
     }
 
 
-    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid)
-    {
-
-        const int node_size = grid->node_size;
-        const int total_nrows = node_size * nrows;
-
-        // Convert rowtprs to nnz per row
-        rowptrs_to_rownnz(d_rowptrs_buf, nrows);
-
-
-        // Get nnz per tile
-        std::vector<int> node_nnz(node_size);
-        MPI_Allgather(&nnz, 1, MPI_INT, node_nnz.data(), 1, MPI_INT, grid->node_comm);
-
-
-        // Recv buffer setup
-        std::vector<int> displs(node_size);
-        int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
-        std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
-
-        VT * d_node_vals;
-        IT * d_node_colinds, * d_node_rowptrs;
-
-        CUDA_CHECK(cudaMalloc(&d_node_vals, sizeof(VT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
-        
-
-        // Allgatherv each buffer
-
-        // Values
-        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(), 
-                       d_node_vals, displs.data(), node_nnz.data(), 
-                       MPIType<VT>(), grid->node_comm);
-         
-        // Colinds
-        MPI_Allgatherv(d_colinds_buf, nnz, MPIType<IT>(), 
-                       d_node_colinds, displs.data(), node_nnz.data(), 
-                       MPIType<IT>(), grid->node_comm);
-        
-        // Rowptrs
-        MPI_Allgather(d_rowptrs_buf + 1, nrows, MPIType<IT>(),
-                      d_node_rowptrs + 1, nrows, MPIType<IT>(),
-                      grid->node_comm);
-
-
-        // Convert rownnz to rowptrs
-        rownnz_to_rowptrs(d_node_rowptrs, total_nrows);
-
-
-        // Done
-        return form_tile(total_nrows, ncols, total_nnz,
-                         d_node_vals, d_node_colinds, d_node_rowptrs);
-
-    }
-
-
 
     ~TileHolder()
     {
+        MPI_Win_unlock_all(d_rowptrs_win);
+        MPI_Win_unlock_all(d_vals_win);
+        MPI_Win_unlock_all(d_colinds_win);
         MPI_Win_unlock_all(flag_win);
         MPI_Win_free(&d_rowptrs_win);
         MPI_Win_free(&d_colinds_win);
