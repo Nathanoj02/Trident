@@ -29,7 +29,7 @@ template <typename IT, typename VT>
 DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * dist_B) 
 {
     // Type aliases
-    using LocalCSR = DistCSR<IT, VT>::LocalCSR;
+    using LocalCSR = typename DistCSR<IT, VT>::LocalCSR;
 
     // Matrix bookeeping
     IT A_local_nnz = dist_A->csr->nnz();

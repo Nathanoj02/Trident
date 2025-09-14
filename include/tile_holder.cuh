@@ -72,7 +72,8 @@ struct TileHolder
     //TODO: create kokkos CRS instance from local pointers
     //make sure to call MPI_Win_sync first
 
-    KokkosTypes<IT, VT>::CrsMatrix* form_tile(const IT nrows, const IT ncols, const IT nnz)
+    using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
+    KokkosCRS* form_tile(const IT nrows, const IT ncols, const IT nnz)
     {
         MPI_Win_sync(d_vals_win);
         MPI_Win_sync(d_colinds_win);

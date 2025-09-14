@@ -8,7 +8,7 @@
 template <typename IT, typename VT>
 struct DistCSR
 {
-    using LocalCSR = KokkosTypes<IT, VT>::CrsMatrix;
+    using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix;
     LocalCSR * csr;
     dmmio::Partitioning * partitioning;
 };
