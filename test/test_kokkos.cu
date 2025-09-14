@@ -21,6 +21,7 @@
 #include "../include/test_utils.cuh"
 
 #include <KokkosWrap_tmpfix.hpp>
+#include "KokkosSparse_spgemm.hpp"
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
@@ -119,6 +120,14 @@ int main(int argc, char** argv) {
         KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
         KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
 
+        // Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied
+        using csr_matrix_type = typename KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
+        using csc_matrix_type = typename KokkosSparse::CcsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
+
+        auto tmp_A = KokkosSparse::ccs2crs(std::get<csc_matrix_type>(kokkos_A.storage));
+        auto tmp_B = std::get<csr_matrix_type>(kokkos_B.storage);
+
+        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
         // kokkos_A and kokkos_B are automatically freed since in scope
     }
     Kokkos::finalize();
