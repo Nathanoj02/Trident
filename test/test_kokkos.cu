@@ -20,7 +20,7 @@
 
 #include "../include/test_utils.cuh"
 
-#include <KokkosWrap.hpp>
+#include <KokkosWrap_tmpfix.hpp>
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 

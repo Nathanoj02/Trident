@@ -1,3 +1,4 @@
+/*
 #ifndef KOKKOS_WRAP_H
 #define KOKKOS_WRAP_H
 
@@ -31,3 +32,4 @@ namespace KokkosWrap {
 }
 
 #endif // KOKKOS_WRAP_H
+*/
