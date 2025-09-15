@@ -19,6 +19,7 @@
 // -----------------------
 
 #include "../include/test_utils.cuh"
+#include "../ccutils/include/ccutils/cuda/cuda_utils.hpp"
 
 #include <KokkosWrap_tmpfix.hpp>
 #include "KokkosSparse_spgemm.hpp"
@@ -128,6 +129,23 @@ int main(int argc, char** argv) {
         auto tmp_B = std::get<csr_matrix_type>(kokkos_B.storage);
 
         csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
+
+        // Keep the C raw pointers
+        auto val_view = C.values;
+        auto rowmap_view = C.graph.row_map;
+        auto entries_view = C.graph.entries;
+
+        float* vals_ptr = val_view.data();
+        int32_t* rowmap_ptr = const_cast<int32_t*>(rowmap_view.data());
+        int32_t* entries_ptr = const_cast<int32_t*>(entries_view.data());
+
+        mmio::CSR<int32_t, float>* out_C  = mmio::CSR_create<int32_t, float>(C.numRows(), C.numCols(), C.nnz(), true);
+        d2h_copy(out_C->row_ptr, C.numRows(), rowmap_ptr);
+        d2h_copy(out_C->col_idx, C.nnz(), entries_ptr);
+        d2h_copy(out_C->val, C.nnz(), vals_ptr);
+
+        mmio::utils::CSR_print_as_dense(out_C, "out_C");
+
         // kokkos_A and kokkos_B are automatically freed since in scope
     }
     Kokkos::finalize();
