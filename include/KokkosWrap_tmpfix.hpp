@@ -1,3 +1,5 @@
+#pragma once
+
 // KokkosWrap.hpp
 #include <dmmio/dmmio.h>
 

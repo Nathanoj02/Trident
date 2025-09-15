@@ -26,6 +26,10 @@
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
+#define D2D_COPY(TY, D, S, N)                                                   \
+    CUDA_CHECK(cudaMalloc(&(D), sizeof(TY)*(N)));                               \
+    CUDA_CHECK(cudaMemcpy(D, D, sizeof(TY)*(N), cudaMemcpyDeviceToDevice));
+
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -124,6 +128,54 @@ int main(int argc, char** argv) {
         // Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied
         using csr_matrix_type = typename KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
         using csc_matrix_type = typename KokkosSparse::CcsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
+
+        // ----- Simulate the communication by simply copy the A and B raw pointers -----
+        mmio::CSC<int32_t, float> *tmp_csc;
+        mmio::CSR<int32_t, float> *tmp_csr;
+
+        float   *recv_A_valuevec;
+        int32_t *recv_A_indexvec, *recv_A_ptrvec;
+        tmp_csc = &(std::get<mmio::CSC<int32_t, float>>(kokkos_A.dev_mmio));
+        int32_t recv_A_nrows = tmp_csc->nrows, recv_A_ncols = tmp_csc->ncols, recv_A_nnz = tmp_csc->nnz;
+        D2D_COPY(int32_t, recv_A_ptrvec,   tmp_csc->col_ptr, recv_A_ncols)
+        D2D_COPY(int32_t, recv_A_indexvec, tmp_csc->row_idx, recv_A_nnz)
+        D2D_COPY(float,   recv_A_valuevec, tmp_csc->val,     recv_A_nnz)
+
+        float   *recv_B_valuevec;
+        int32_t *recv_B_ptrvec, *recv_B_indexvec;
+        tmp_csr = &(std::get<mmio::CSR<int32_t, float>>(kokkos_B.dev_mmio));
+        int32_t recv_B_nrows = tmp_csr->nrows, recv_B_ncols = tmp_csr->ncols, recv_B_nnz = tmp_csr->nnz;
+        D2D_COPY(int32_t, recv_B_ptrvec,   tmp_csr->row_ptr, recv_B_nrows)
+        D2D_COPY(int32_t, recv_B_indexvec, tmp_csr->col_idx, recv_B_nnz)
+        D2D_COPY(float,   recv_B_valuevec, tmp_csr->val,     recv_B_nnz)
+        // ------------------------------------------------------------------------------
+
+        // ----- Parse 'receved' row pointers to kokkos structures -----
+        using ordinal_view_t = Kokkos::View<int32_t*>;
+        using values_view_t  = Kokkos::View<float*>;
+
+        ordinal_view_t colmap(recv_A_ptrvec, recv_A_ncols + 1);
+        ordinal_view_t rowidx(recv_A_indexvec, recv_A_nnz);
+        values_view_t  valuesA(recv_A_valuevec, recv_A_nnz);
+
+        KokkosSparse::CcsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t> recv_A("recv_A",
+                                        recv_A_nrows, recv_A_ncols, recv_A_nnz,
+                                        valuesA,
+                                        colmap,
+                                        rowidx
+        );
+
+        ordinal_view_t rowmap(recv_B_ptrvec, recv_B_nrows + 1);
+        ordinal_view_t colidx(recv_B_indexvec, recv_B_nnz);
+        values_view_t  valuesB(recv_B_valuevec, recv_B_nnz);
+
+        KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t> recv_B("recv_B",
+                                        recv_B_nrows, recv_B_ncols, recv_B_nnz,
+                                        valuesB,
+                                        rowmap,
+                                        colidx
+        );
+        // -------------------------------------------------------------
 
         auto tmp_A = KokkosSparse::ccs2crs(std::get<csc_matrix_type>(kokkos_A.storage));
         auto tmp_B = std::get<csr_matrix_type>(kokkos_B.storage);
