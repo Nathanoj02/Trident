@@ -40,9 +40,9 @@ namespace KokkosWrap {
         KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> storage;
 
         // ---- Constructor ----
-        LocalMatrix(mmio::CSR<DIT, VT> mmio_csr);
-        LocalMatrix(mmio::CSC<DIT, VT> mmio_csc);
-    }
+        LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr);
+        LocalMatrix(mmio::CSC<DIT, VT>* mmio_csc);
+    };
 
     // These two function are exposed temporary for the test_kokkos C matrix
     template<typename KIT, typename VT>
@@ -171,7 +171,7 @@ namespace KokkosWrap {
         ordinal_view_t rowidx(mmio_csc->row_idx, mmio_csc->nnz);
         values_view_t  values(mmio_csc->val,     mmio_csc->nnz);
 
-        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc("kokkos_csc",
+        KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc("kokkos_csc",
                                         mmio_csc->nrows, mmio_csc->ncols, mmio_csc->nnz,
                                         values,
                                         colmap,

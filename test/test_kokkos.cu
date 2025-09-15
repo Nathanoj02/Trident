@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
         // csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
         // -----------------------------------------------------
 
-        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A->storage, false, compute_B->storage, false);
+        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A.storage, false, compute_B.storage, false);
 
         // Keep the C raw pointers
         mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
