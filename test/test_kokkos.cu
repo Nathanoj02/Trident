@@ -27,7 +27,7 @@
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
 template <typename KIT, typename DIT, typename VT>
-mmio::CSR<KIT, VT>* simulate_csr_comm (KokkosWrap::Matrix<KIT, DIT, VT> kokkos_wrap) {
+mmio::CSR<KIT, VT>* simulate_csr_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap) {
     mmio::CSR<KIT, VT> *tmp_csr = &(std::get<mmio::CSR<KIT, VT>>(kokkos_wrap.dev_mmio));
     KIT nrows = tmp_csr->nrows, ncols = tmp_csr->ncols, nnz = tmp_csr->nnz;
 
@@ -40,7 +40,7 @@ mmio::CSR<KIT, VT>* simulate_csr_comm (KokkosWrap::Matrix<KIT, DIT, VT> kokkos_w
 }
 
 template <typename KIT, typename DIT, typename VT>
-mmio::CSC<KIT, VT>* simulate_csc_comm (KokkosWrap::Matrix<KIT, DIT, VT> kokkos_wrap) {
+mmio::CSC<KIT, VT>* simulate_csc_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap) {
     mmio::CSC<KIT, VT> *tmp_csr = &(std::get<mmio::CSC<KIT, VT>>(kokkos_wrap.dev_mmio));
     KIT nrows = tmp_csr->nrows, ncols = tmp_csr->ncols, nnz = tmp_csr->nnz;
 
@@ -144,62 +144,23 @@ int main(int argc, char** argv) {
 
     Kokkos::initialize(argc, argv);
     {
-        KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
-        KokkosWrap::Matrix<int32_t, uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
+        KokkosWrap::DistribuitedMatrix<int32_t, uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
+        KokkosWrap::DistribuitedMatrix<int32_t, uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
 
-        // Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied
-        using csr_matrix_type = typename KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
-        using csc_matrix_type = typename KokkosSparse::CcsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
+        // ----- Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied -----
 
-        // ----- Simulate the communication by simply copy the A and B raw pointers -----
+        // Simulate the communication by simply copy the A and B raw pointers
         mmio::CSC<int32_t, float> *tmp_recv_csc = simulate_csc_comm(kokkos_A);
         mmio::CSR<int32_t, float> *tmp_recv_csr = simulate_csr_comm(kokkos_B);
-        // ------------------------------------------------------------------------------
 
-        // ----- Parse 'receved' row pointers to kokkos structures -----
-        /*
-        using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-        using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-
-        ordinal_view_t colmap(tmp_recv_csc->col_ptr, tmp_recv_csc->ncols + 1);
-        ordinal_view_t rowidx(tmp_recv_csc->row_idx, tmp_recv_csc->nnz);
-        values_view_t  valuesA(tmp_recv_csc->val,    tmp_recv_csc->nnz);
-
-        KokkosSparse::CcsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t> recv_A("recv_A",
-                                        // recv_A_nrows, recv_A_ncols, recv_A_nnz,
-                                        tmp_recv_csc->nrows, tmp_recv_csc->ncols, tmp_recv_csc->nnz,
-                                        valuesA,
-                                        colmap,
-                                        rowidx
-        );
-
-        ordinal_view_t rowmap(tmp_recv_csr->row_ptr, tmp_recv_csr->nrows + 1);
-        ordinal_view_t colidx(tmp_recv_csr->col_idx, tmp_recv_csr->nnz);
-        values_view_t  valuesB(tmp_recv_csr->val,    tmp_recv_csr->nnz);
-
-        KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t> recv_B("recv_B",
-                                        // recv_B_nrows, recv_B_ncols, recv_B_nnz,
-                                        tmp_recv_csr->nrows, tmp_recv_csr->ncols, tmp_recv_csr->nnz,
-                                        valuesB,
-                                        rowmap,
-                                        colidx
-        );
-        */
+        // Parse 'receved' row pointers to kokkos structures
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_A(tmp_recv_csc);
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_B(tmp_recv_csr);
-        // -------------------------------------------------------------
 
-        // -------- This is what I want. It don't works --------
-        // auto compute_B = recv_B;
-        // auto compute_A = KokkosSparse::ccs2crs(recv_A);
-        // csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A, false, compute_B, false);
-        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        // auto tmp_A = KokkosSparse::ccs2crs(std::get<csc_matrix_type>(kokkos_A.storage));
-        // auto tmp_B = std::get<csr_matrix_type>(kokkos_B.storage);
-        // csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
-        // -----------------------------------------------------
-
+        // Performing local spgemm
+        using csr_matrix_type = typename KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
         csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A.storage, false, compute_B.storage, false);
+        // -----------------------------------------------------------------------------------
 
         // Keep the C raw pointers
         mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);

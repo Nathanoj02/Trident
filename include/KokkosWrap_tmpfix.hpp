@@ -14,7 +14,7 @@ namespace KokkosWrap {
     };
 
     template <typename KIT, typename DIT, typename VT>
-    struct Matrix {
+    struct DistribuitedMatrix {
         dmmio::Partitioning* partitioning;  // still raw pointer to external partitioning
 
         // Instead of a raw union, use std::variant for safety
@@ -32,7 +32,7 @@ namespace KokkosWrap {
         > dev_mmio;
 
         // ---- Constructor ----
-        Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
+        DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
     };
 
     template <typename KIT, typename DIT, typename VT>
@@ -105,7 +105,7 @@ namespace KokkosWrap {
     }
 
     template <typename KIT, typename DIT, typename VT>
-    Matrix<KIT,DIT,VT>::Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
+    DistribuitedMatrix<KIT,DIT,VT>::DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
             : partitioning(dcoo->partitioning), layout(T)
     {
         int nnz = dcoo->coo->nnz;
@@ -181,7 +181,7 @@ namespace KokkosWrap {
         storage = KokkosSparse::ccs2crs(kokkos_csc);
     }
 
-    template struct Matrix<int32_t, uint32_t, double>;
-    template struct Matrix<int32_t, uint32_t, float>;
+    template struct DistribuitedMatrix<int32_t, uint32_t, double>;
+    template struct DistribuitedMatrix<int32_t, uint32_t, float>;
 }
 
