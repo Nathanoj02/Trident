@@ -131,20 +131,15 @@ int main(int argc, char** argv) {
         csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
 
         // Keep the C raw pointers
-        auto val_view = C.values;
-        auto rowmap_view = C.graph.row_map;
-        auto entries_view = C.graph.entries;
+        mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
 
-        float* vals_ptr = val_view.data();
-        int32_t* rowmap_ptr = const_cast<int32_t*>(rowmap_view.data());
-        int32_t* entries_ptr = const_cast<int32_t*>(entries_view.data());
+        // Copy C to host (just to dbg)
+        mmio::CSR<int32_t, float>* h_out_C  = mmio::CSR_create<int32_t, float>(C.numRows(), C.numCols(), C.nnz(), true);
+        d2h_copy(h_out_C->row_ptr, C.numRows(), d_out_C.row_ptr);
+        d2h_copy(h_out_C->col_idx, C.nnz(),     d_out_C.col_idx);
+        d2h_copy(h_out_C->val,     C.nnz(),     d_out_C.val);
 
-        mmio::CSR<int32_t, float>* out_C  = mmio::CSR_create<int32_t, float>(C.numRows(), C.numCols(), C.nnz(), true);
-        d2h_copy(out_C->row_ptr, C.numRows(), rowmap_ptr);
-        d2h_copy(out_C->col_idx, C.nnz(), entries_ptr);
-        d2h_copy(out_C->val, C.nnz(), vals_ptr);
-
-        mmio::utils::CSR_print_as_dense(out_C, "out_C");
+        mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C");
 
         // kokkos_A and kokkos_B are automatically freed since in scope
     }

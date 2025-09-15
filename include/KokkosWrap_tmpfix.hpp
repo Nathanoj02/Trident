@@ -23,9 +23,22 @@ namespace KokkosWrap {
 
         MajorDim layout;  // which one we actually hold
 
+        // mmio structure to access the raw pointers
+        std::variant<
+            mmio::CSR<KIT, VT>,
+            mmio::CSC<KIT, VT>
+        > dev_mmio;
+
         // ---- Constructor ----
         Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
     };
+
+    // These two function are exposed temporary for the test_kokkos C matrix
+    template<typename KIT, typename VT>
+    mmio::CSR<KIT, VT> rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr);
+
+    template<typename KIT, typename VT>
+    mmio::CSC<KIT, VT> rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc);
 }
 
 // KokkosWrap.cpp
@@ -45,6 +58,40 @@ namespace KokkosWrap {
 #include <KokkosSparse_ccs2crs.hpp>
 
 namespace KokkosWrap {
+
+    template<typename KIT, typename VT>
+    mmio::CSR<KIT, VT> rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr) {
+        auto val_view     = kokkos_csr.values;
+        auto rowmap_view  = kokkos_csr.graph.row_map;
+        auto entries_view = kokkos_csr.graph.entries;
+
+        mmio::CSR<KIT, VT> csr;
+        csr.nnz     = kokkos_csr.nnz();
+        csr.nrows   = kokkos_csr.numRows();
+        csr.ncols   = kokkos_csr.numCols();
+        csr.val     = val_view.data();
+        csr.row_ptr = const_cast<int32_t*>(rowmap_view.data());
+        csr.col_idx = const_cast<int32_t*>(entries_view.data());
+
+        return(csr);
+    }
+
+    template<typename KIT, typename VT>
+    mmio::CSC<KIT, VT> rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc) {
+        auto val_view     = kokkos_csc.values;
+        auto colmap_view  = kokkos_csc.graph.col_map;
+        auto entries_view = kokkos_csc.graph.entries;
+
+        mmio::CSC<KIT, VT> csc;
+        csc.nnz     = kokkos_csc.nnz();
+        csc.nrows   = kokkos_csc.numRows();
+        csc.ncols   = kokkos_csc.numCols();
+        csc.val     = val_view.data();
+        csc.col_ptr = const_cast<int32_t*>(colmap_view.data());
+        csc.row_idx = const_cast<int32_t*>(entries_view.data());
+
+        return(csc);
+    }
 
     template <typename KIT, typename DIT, typename VT>
     Matrix<KIT,DIT,VT>::Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
@@ -74,11 +121,13 @@ namespace KokkosWrap {
 
         // --- Step 2: Decide layout ---
         if (T == MajorDim::ROWS) {
-            storage = csr; // keep CSR
+            storage   = csr; // keep CSR
+            dev_mmio  = rawptr_get(csr);
         } else {
             // CSR → CSC (column-major)
-            auto csc = KokkosSparse::crs2ccs(csr);
-            storage = csc; // store CSC
+            auto csc  = KokkosSparse::crs2ccs(csr);
+            storage   = csc; // store CSC
+            dev_mmio  = rawptr_get(csc);
         }
     }
 
