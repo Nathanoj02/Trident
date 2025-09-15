@@ -157,6 +157,7 @@ int main(int argc, char** argv) {
         // ------------------------------------------------------------------------------
 
         // ----- Parse 'receved' row pointers to kokkos structures -----
+        /*
         using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
         using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
@@ -183,17 +184,22 @@ int main(int argc, char** argv) {
                                         rowmap,
                                         colidx
         );
+        */
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_A(tmp_recv_csc);
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_B(tmp_recv_csr);
         // -------------------------------------------------------------
 
         // -------- This is what I want. It don't works --------
-        auto compute_B = recv_B;
-        auto compute_A = KokkosSparse::ccs2crs(recv_A);
-        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A, false, compute_B, false);
+        // auto compute_B = recv_B;
+        // auto compute_A = KokkosSparse::ccs2crs(recv_A);
+        // csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A, false, compute_B, false);
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         // auto tmp_A = KokkosSparse::ccs2crs(std::get<csc_matrix_type>(kokkos_A.storage));
         // auto tmp_B = std::get<csr_matrix_type>(kokkos_B.storage);
         // csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(tmp_A, false, tmp_B, false);
         // -----------------------------------------------------
+
+        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A->storage, false, compute_B->storage, false);
 
         // Keep the C raw pointers
         mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);

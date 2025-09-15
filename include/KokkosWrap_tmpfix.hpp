@@ -35,6 +35,15 @@ namespace KokkosWrap {
         Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
     };
 
+    template <typename KIT, typename DIT, typename VT>
+    struct LocalMatrix {
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> storage;
+
+        // ---- Constructor ----
+        LocalMatrix(mmio::CSR<DIT, VT> mmio_csr);
+        LocalMatrix(mmio::CSC<DIT, VT> mmio_csc);
+    }
+
     // These two function are exposed temporary for the test_kokkos C matrix
     template<typename KIT, typename VT>
     mmio::CSR<KIT, VT> rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr);
@@ -131,6 +140,45 @@ namespace KokkosWrap {
             storage   = csc; // store CSC
             dev_mmio  = rawptr_get(csc);
         }
+    }
+
+    using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr)
+    {
+        // TODO check KIT == DIT or find a way to a static cast
+        ordinal_view_t rowmap(mmio_csr->row_ptr, mmio_csr->nrows + 1);
+        ordinal_view_t colidx(mmio_csr->col_idx, mmio_csr->nnz);
+        values_view_t  values(mmio_csr->val,     mmio_csr->nnz);
+
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr("kokkos_csr",
+                                        mmio_csr->nrows, mmio_csr->ncols, mmio_csr->nnz,
+                                        values,
+                                        rowmap,
+                                        colidx
+        );
+
+        storage = kokkos_csr;
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSC<DIT, VT>* mmio_csc)
+    {
+        // TODO check KIT == DIT or find a way to a static cast
+        ordinal_view_t colmap(mmio_csc->col_ptr, mmio_csc->ncols + 1);
+        ordinal_view_t rowidx(mmio_csc->row_idx, mmio_csc->nnz);
+        values_view_t  values(mmio_csc->val,     mmio_csc->nnz);
+
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc("kokkos_csc",
+                                        mmio_csc->nrows, mmio_csc->ncols, mmio_csc->nnz,
+                                        values,
+                                        colmap,
+                                        rowidx
+        );
+
+        storage = KokkosSparse::ccs2crs(kokkos_csc);
     }
 
     template struct Matrix<int32_t, uint32_t, double>;
