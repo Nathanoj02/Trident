@@ -157,19 +157,23 @@ int main(int argc, char** argv) {
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_A(tmp_recv_csc);
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_B(tmp_recv_csr);
 
-        // Performing local spgemm
-        using csr_matrix_type = typename KokkosSparse::CrsMatrix<float, int32_t, Kokkos::DefaultExecutionSpace, void, int32_t>;
-        csr_matrix_type C = KokkosSparse::spgemm<csr_matrix_type>(compute_A.storage, false, compute_B.storage, false);
+        // Compute the local spgemm and spadd
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> C;
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(compute_A, compute_B, C);
+
+        // Performing twice just to test the aggregation
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(compute_A, compute_B, C);
+
         // -----------------------------------------------------------------------------------
 
         // Keep the C raw pointers
         mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
 
         // Copy C to host (just to dbg)
-        mmio::CSR<int32_t, float>* h_out_C  = mmio::CSR_create<int32_t, float>(C.numRows(), C.numCols(), C.nnz(), true);
-        d2h_copy(h_out_C->row_ptr, C.numRows(), d_out_C.row_ptr);
-        d2h_copy(h_out_C->col_idx, C.nnz(),     d_out_C.col_idx);
-        d2h_copy(h_out_C->val,     C.nnz(),     d_out_C.val);
+        mmio::CSR<int32_t, float>* h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C.nrows, d_out_C.ncols, d_out_C.nnz, true);
+        d2h_copy(h_out_C->row_ptr, d_out_C.nrows+1, d_out_C.row_ptr);
+        d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.col_idx);
+        d2h_copy(h_out_C->val,     d_out_C.nnz,     d_out_C.val);
 
         mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C");
 

@@ -37,11 +37,16 @@ namespace KokkosWrap {
 
     template <typename KIT, typename DIT, typename VT>
     struct LocalMatrix {
+        bool initialized;
         KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> storage;
 
         // ---- Constructor ----
+        LocalMatrix();
         LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr);
         LocalMatrix(mmio::CSC<DIT, VT>* mmio_csc);
+
+        // In-place SpGEMM: C = C + A*B
+        static void sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C);
     };
 
     // These two function are exposed temporary for the test_kokkos C matrix
@@ -50,6 +55,9 @@ namespace KokkosWrap {
 
     template<typename KIT, typename VT>
     mmio::CSC<KIT, VT> rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc);
+
+    template<typename KIT, typename VT>
+    mmio::CSR<KIT, VT> rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr);
 }
 
 // KokkosWrap.cpp
@@ -67,6 +75,7 @@ namespace KokkosWrap {
 #include <KokkosSparse_coo2crs.hpp>
 #include <KokkosSparse_crs2ccs.hpp>
 #include <KokkosSparse_ccs2crs.hpp>
+#include <KokkosSparse_spadd.hpp>
 
 namespace KokkosWrap {
 
@@ -102,6 +111,11 @@ namespace KokkosWrap {
         csc.row_idx = const_cast<int32_t*>(entries_view.data());
 
         return(csc);
+    }
+
+    template<typename KIT, typename VT>
+    mmio::CSR<KIT, VT> rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr) {
+        return(rawptr_get(kokkos_csr.storage));
     }
 
     template <typename KIT, typename DIT, typename VT>
@@ -146,7 +160,10 @@ namespace KokkosWrap {
     using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
     template <typename KIT, typename DIT, typename VT>
-    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr)
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix() : storage(), initialized(false) {}
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr) : initialized(true)
     {
         // TODO check KIT == DIT or find a way to a static cast
         ordinal_view_t rowmap(mmio_csr->row_ptr, mmio_csr->nrows + 1);
@@ -164,7 +181,7 @@ namespace KokkosWrap {
     }
 
     template <typename KIT, typename DIT, typename VT>
-    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSC<DIT, VT>* mmio_csc)
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSC<DIT, VT>* mmio_csc) : initialized(true)
     {
         // TODO check KIT == DIT or find a way to a static cast
         ordinal_view_t colmap(mmio_csc->col_ptr, mmio_csc->ncols + 1);
@@ -179,6 +196,36 @@ namespace KokkosWrap {
         );
 
         storage = KokkosSparse::ccs2crs(kokkos_csc);
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
+
+        using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
+        csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+
+        if (C.initialized == false) {
+            C.storage = product;
+        } else {
+            csr_matrix_type accumulator;
+
+            // Create KokkosKernelHandle
+            using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
+                KokkosKernels::default_size_type, KIT, VT,
+                Kokkos::DefaultExecutionSpace,
+                typename Kokkos::DefaultExecutionSpace::memory_space,
+                typename Kokkos::DefaultExecutionSpace::memory_space>;
+
+
+            KernelHandle kh;
+            kh.create_spadd_handle(false);
+
+            KokkosSparse::spadd_symbolic(&kh, product, C.storage, accumulator);
+            KokkosSparse::spadd_numeric(&kh, 1.0, product, 1.0, C.storage, accumulator);
+            kh.destroy_spadd_handle();
+
+            C.storage = accumulator;
+        }
     }
 
     template struct DistribuitedMatrix<int32_t, uint32_t, double>;
