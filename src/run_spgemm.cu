@@ -1,17 +1,31 @@
 #include "hns_spgemm.cuh"
 #include "test_utils.cuh"
+#include <ccutils/timers.h>
 
 
 
 int main(int argc, char ** argv)
 {
+
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
+
+    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
+    Kokkos::initialize(argc, argv);
+
 
     int world_size;
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    if (world_rank==0)
+    {
+        std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
+    }
+
+    std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
+    FILE * logfile = fopen(logname.c_str(), "w");
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
@@ -20,8 +34,6 @@ int main(int argc, char ** argv)
     char processor_name[MPI_MAX_PROCESSOR_NAME];
     MPI_Get_processor_name(processor_name, &name_len);
 
-    std::cout << "Hello world from processor " << processor_name
-            << ", rank " << world_rank << " out of " << world_size << " processors\n";
     MPI_Barrier(MPI_COMM_WORLD);
 
 
@@ -79,12 +91,41 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
     }
 
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning conversion\n"));
+    fflush(stdout);
+
+    std::cout<<"nnz in local A: "<<dcoo_A->coo->nnz<<std::endl;
 
     DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
     DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
 
-    DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
-    //TODO: Free stuff
+    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done conversion\n"));
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    CPU_TIMER_DEF(spgemm);
+
+    for (int i=0; i<50; i++)
+    {
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
+        CPU_TIMER_START(spgemm);
+        DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+        CPU_TIMER_STOP(spgemm);
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
+        if (world_rank==0)
+        {
+            TIMER_PRINT(spgemm);
+        }
+        delete dist_C;
+    }
+
+    delete dist_A;
+    delete dist_B;
+    dmmio::DCOO_destroy(&dcoo_A);
+    dmmio::DCOO_destroy(&dcoo_B);
+
+    Kokkos::finalize();
+    fclose(logfile);
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
