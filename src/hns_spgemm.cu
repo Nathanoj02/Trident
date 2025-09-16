@@ -2,6 +2,56 @@
 
 MPIDataTypeCache mpidtc; //fix linker error
 
+template <typename IT, typename VT>
+void comm_thread_loop2(MessageQueue<int>& A_queue, TileHolder<IT, VT>& A_holder, typename KokkosTypes<IT, VT>::CrsMatrix * A_csr, 
+                       MessageQueue<int>& B_queue, TileHolder<IT, VT>& B_holder, typename KokkosTypes<IT, VT>::CrsMatrix * B_csr)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    while (true)
+    {
+
+        // Notify remote processes of any tile needs
+        A_queue.poll_notify();
+        B_queue.poll_notify();
+
+
+        // See if someone tells me to send them a tile
+        int Atarget = A_queue.poll();
+
+
+        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
+        if (Atarget >= 0)
+        {
+            // Put tile on remote process
+            A_holder.put_tile(A_csr->values.data(), A_csr->graph.entries.data(), (int32_t*)A_csr->graph.row_map.data(), 
+                              A_csr->nnz(), A_csr->numRows(), Atarget);
+        }
+
+
+        // See if someone tells me to send them a tile
+        int Btarget = B_queue.poll();
+
+
+        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
+        if (Btarget >= 0)
+        {
+            // Put tile on remote process
+            B_holder.put_tile(B_csr->values.data(), B_csr->graph.entries.data(), (int32_t*)B_csr->graph.row_map.data(), 
+                              B_csr->nnz(), B_csr->numRows(), Btarget);
+        }
+
+
+        // Return 
+        if (A_queue.done() && B_queue.done())
+        {
+            return;
+        }
+
+    }
+
+}
 
 template <typename IT, typename VT>
 void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, typename KokkosTypes<IT, VT>::CrsMatrix * csr)
@@ -98,8 +148,9 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
     MPI_Barrier(MPI_COMM_WORLD);
 
     // Launch comm threads
-    std::thread A_comm_thread(comm_thread_loop<IT, VT>, std::ref(A_queue), std::ref(A_holder), dist_A->csr); 
-    std::thread B_comm_thread(comm_thread_loop<IT, VT>, std::ref(B_queue), std::ref(B_holder), dist_B->csr); 
+    std::thread comm_thread(comm_thread_loop2<IT, VT>, 
+                            std::ref(A_queue), std::ref(A_holder), dist_A->csr,
+                            std::ref(B_queue), std::ref(B_holder), dist_B->csr); 
 
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
     MPI_Barrier(MPI_COMM_WORLD);
@@ -110,6 +161,7 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
     for (int iter = 0; iter < n_iters; iter++)
     {
 
+
 #if DEBUG_MAIN
         int A_owner_global = colAtoGet*node_size + *col_rank * (node_size * grid->row_size) + grid->node_rank;
         int B_owner_global = rowBtoGet*(node_size*grid->row_size);
@@ -118,9 +170,10 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
                 B_owner_global);
         FLUSH_WAIT(1.0);
 #endif
+
         // Tell target I'm ready for tiles of A and B
-        A_queue.notify(row_rank, colAtoGet, iter);
-        B_queue.notify(col_rank, rowBtoGet, iter);
+        A_queue.local_notify(row_rank, colAtoGet, iter);
+        B_queue.local_notify(col_rank, rowBtoGet, iter);
 
 
         // Wait until I've been sent A and B
@@ -153,7 +206,7 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
         print_d_arr(B_node->graph.entries.data(), B_node->nnz(), "B remote colinds: ");
 #endif
 
-        kokkos_spgemm<IT, VT>(*A_remote, *B_node, *C_local); 
+        //kokkos_spgemm<IT, VT>(*A_remote, *B_node, *C_local); 
 
 
         // Round shift
@@ -170,19 +223,20 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
         CUDA_FREE_SAFE(B_node->graph.entries.data());
         CUDA_FREE_SAFE((void*)B_node->graph.row_map.data());
         delete B_node;
-        //MPI_Barrier(MPI_COMM_WORLD);
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
+
+    A_queue.tell_done_notifying();
+    B_queue.tell_done_notifying();
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
     FLUSH_WAIT(1.0);
 #endif
 
-    A_comm_thread.join();
-    B_comm_thread.join();
+    comm_thread.join();
 
 #if DEBUG_MAIN
     MPI_Barrier(MPI_COMM_WORLD);
