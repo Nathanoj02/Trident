@@ -25,6 +25,9 @@
 #include "KokkosSparse_spgemm.hpp"
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
+#define TEST(B) (B) ? \
+    (fprintf(stdout, "%sPASSED%s\n", GREEN, RESET)) : \
+    (fprintf(stderr, "%sNOT PASSED%s\n", RED, RESET)) ;
 
 template <typename KIT, typename DIT, typename VT>
 mmio::CSR<KIT, VT>* simulate_csr_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap) {
@@ -97,7 +100,7 @@ int main(int argc, char** argv) {
     // Reading the distribuited matrices
     std::string A_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
-    dmmio::DCOO<uint32_t, float> *dcoo_A = dmmio::DCOO_read<uint32_t, float>(
+    dmmio::DCOO<int32_t, float> *dcoo_A = dmmio::DCOO_read<int32_t, float>(
         A_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
@@ -107,7 +110,7 @@ int main(int argc, char** argv) {
 
     std::string B_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
-    dmmio::DCOO<uint32_t, float> *dcoo_B = dmmio::DCOO_read<uint32_t, float>(
+    dmmio::DCOO<int32_t, float> *dcoo_B = dmmio::DCOO_read<int32_t, float>(
         A_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
@@ -142,10 +145,11 @@ int main(int argc, char** argv) {
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
 
+    mmio::CSR<int32_t, float>* h_out_C;
     Kokkos::initialize(argc, argv);
     {
-        KokkosWrap::DistribuitedMatrix<int32_t, uint32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
-        KokkosWrap::DistribuitedMatrix<int32_t, uint32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
 
         // ----- Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied -----
 
@@ -170,7 +174,7 @@ int main(int argc, char** argv) {
         mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
 
         // Copy C to host (just to dbg)
-        mmio::CSR<int32_t, float>* h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C.nrows, d_out_C.ncols, d_out_C.nnz, true);
+        h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C.nrows, d_out_C.ncols, d_out_C.nnz, true);
         d2h_copy(h_out_C->row_ptr, d_out_C.nrows+1, d_out_C.row_ptr);
         d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.col_idx);
         d2h_copy(h_out_C->val,     d_out_C.nnz,     d_out_C.val);
@@ -181,10 +185,24 @@ int main(int argc, char** argv) {
     }
     Kokkos::finalize();
 
-    delete meta_A;
-    delete meta_B;
+    /*  TEST CORRECTNESS BUG (test not works)
+     * It can also be in the mmio::DENSE structure/API since I developed them for this
+
+    mmio::DENSE<int32_t, float>* A = mmio::coo2dense(dcoo_A->coo);
     dmmio::DCOO_destroy(&dcoo_A);
+    delete meta_A;
+
+    mmio::DENSE<int32_t, float>* B = mmio::coo2dense(dcoo_B->coo);
     dmmio::DCOO_destroy(&dcoo_B);
+    delete meta_B;
+
+    mmio::DENSE<int32_t, float>* check_C = matmul(A, B);
+    // delete A;
+    // delete B;
+
+    mmio::DENSE<int32_t, float>* algo_C = mmio::csr2dense(h_out_C);
+    TEST((*algo_C) == (*check_C))
+    */
 
     MPI_Finalize();
     return(0);
