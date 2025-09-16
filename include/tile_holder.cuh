@@ -53,6 +53,7 @@ struct TileHolder
         // Notify target of completion
         MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
         MPI_Win_flush(target, flag_win); //TODO: Do I need this?
+        //MPI_Win_flush_all(flag_win); //TODO: Do I need this?
 
     }
 

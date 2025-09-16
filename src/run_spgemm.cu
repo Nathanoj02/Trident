@@ -1,5 +1,6 @@
 #include "hns_spgemm.cuh"
 #include "test_utils.cuh"
+#include <ccutils/timers.h>
 
 
 
@@ -100,9 +101,17 @@ int main(int argc, char ** argv)
     fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
+    CPU_TIMER_DEF(spgemm);
+
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
+    CPU_TIMER_START(spgemm);
     DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+    CPU_TIMER_STOP(spgemm);
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
+    if (world_rank==0)
+    {
+        TIMER_PRINT(spgemm);
+    }
 
     //TODO: Free stuff
 

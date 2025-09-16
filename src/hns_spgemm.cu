@@ -170,6 +170,7 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
         CUDA_FREE_SAFE(B_node->graph.entries.data());
         CUDA_FREE_SAFE((void*)B_node->graph.row_map.data());
         delete B_node;
+        //MPI_Barrier(MPI_COMM_WORLD);
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
@@ -185,8 +186,8 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
 
 #if DEBUG_MAIN
     MPI_Barrier(MPI_COMM_WORLD);
-    print_d_arr((int*)C_local->graph.entries.data(), C_local->numRows()+1, "C_local rowptrs: ");
-    print_d_arr(C_local->values.data(), C_local->nnz(), "C_local values: ");
+    //print_d_arr((int*)C_local->graph.entries.data(), C_local->numRows()+1, "C_local rowptrs: ");
+    //print_d_arr(C_local->values.data(), C_local->nnz(), "C_local values: ");
     FLUSH_WAIT(1.0);
     MPI_Barrier(MPI_COMM_WORLD);
 #endif

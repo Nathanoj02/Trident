@@ -24,6 +24,20 @@ DistCSR<IT, VT> * DistCSR_convert(dmmio::DCOO<IT, VT> * dcoo)
     DistCSR<IT, VT> * result = new DistCSR<IT, VT>();
     result->partitioning = dcoo->partitioning;
 
+    while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size) != 0)
+    {
+        dcoo->coo->nrows++;
+    }
+
+    while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size) != 0)
+    {
+        dcoo->coo->ncols++;
+    }
+
+    IT max_dim = max(dcoo->coo->ncols, dcoo->coo->nrows);
+    dcoo->coo->ncols = max_dim;
+    dcoo->coo->nrows = max_dim;
+
     //TODO: All this should probably happen in dmmio, right?
     dcoo->coo->nrows /= (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size);
     dcoo->coo->ncols /= dcoo->partitioning->grid->row_size;
