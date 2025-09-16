@@ -209,6 +209,7 @@ namespace KokkosWrap {
 
         if (C.initialized == false) {
             C.storage = product;
+            C.initialized = true;
         } else {
             csr_matrix_type accumulator;
 
