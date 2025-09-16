@@ -145,6 +145,9 @@ int main(int argc, char** argv) {
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
 
+    mmio::utils::COO_print_as_dense(dcoo_A->coo, "dcoo_A");
+    mmio::utils::COO_print_as_dense(dcoo_B->coo, "dcoo_B");
+
     mmio::CSR<int32_t, float>* h_out_C;
     Kokkos::initialize(argc, argv);
     {
