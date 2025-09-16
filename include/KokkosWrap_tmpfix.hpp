@@ -134,7 +134,10 @@ namespace KokkosWrap {
         for (int i = 0; i < nnz; i++) {
             row_h(i) = static_cast<KIT>(dcoo->coo->row[i]);
             col_h(i) = static_cast<KIT>(dcoo->coo->col[i]);
-            val_h(i) = static_cast<VT>(1.0); // TODO: use real values if available
+            if (dcoo->coo->val == nullptr)
+                val_h(i) = static_cast<VT>(1.0); // TODO: use real values if available
+            else
+                val_h(i) = static_cast<VT>(dcoo->coo->val[i]);
         }
 
         Kokkos::deep_copy(row_d, row_h);

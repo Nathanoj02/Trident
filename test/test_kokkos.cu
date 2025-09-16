@@ -108,10 +108,10 @@ int main(int argc, char** argv) {
         false, meta_A
     );
 
-    std::string B_mtx_path = (std::string) config->matpathA;
+    std::string B_mtx_path = (std::string) config->matpathB;
     mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
     dmmio::DCOO<int32_t, float> *dcoo_B = dmmio::DCOO_read<int32_t, float>(
-        A_mtx_path.c_str(),
+        B_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
@@ -145,8 +145,10 @@ int main(int argc, char** argv) {
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
     dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
 
-    mmio::utils::COO_print_as_dense(dcoo_A->coo, "dcoo_A");
-    mmio::utils::COO_print_as_dense(dcoo_B->coo, "dcoo_B");
+    MPI_ALL_PRINT(
+        mmio::utils::COO_print_as_dense(dcoo_A->coo, "dcoo_A", fp);
+        mmio::utils::COO_print_as_dense(dcoo_B->coo, "dcoo_B", fp);
+    )
 
     mmio::CSR<int32_t, float>* h_out_C;
     Kokkos::initialize(argc, argv);
@@ -182,7 +184,7 @@ int main(int argc, char** argv) {
         d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.col_idx);
         d2h_copy(h_out_C->val,     d_out_C.nnz,     d_out_C.val);
 
-        mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C");
+        MPI_ALL_PRINT(mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C", fp);)
 
         // kokkos_A and kokkos_B are automatically freed since in scope
     }
