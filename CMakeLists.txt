@@ -27,6 +27,7 @@ include_directories(include)
 
 
 # DMMIO SETUP
+set(DMMIO_TOOLS ON CACHE BOOL "Enable dmmio tools")
 set(DMMIO_ENABLE_MPI ON CACHE BOOL "Enable MPI support in dmmio")
 add_subdirectory(distributed_mmio)
 
