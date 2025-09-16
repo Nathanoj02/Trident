@@ -19,6 +19,11 @@ int main(int argc, char ** argv)
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    if (world_rank==0)
+    {
+        std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
+    }
+
     std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
     FILE * logfile = fopen(logname.c_str(), "w");
 
@@ -29,9 +34,6 @@ int main(int argc, char ** argv)
     char processor_name[MPI_MAX_PROCESSOR_NAME];
     MPI_Get_processor_name(processor_name, &name_len);
 
-    std::cout << "Hello world from processor " << processor_name
-            << ", rank " << world_rank << " out of " << world_size << " processors"
-            << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
 
 
@@ -103,17 +105,24 @@ int main(int argc, char ** argv)
 
     CPU_TIMER_DEF(spgemm);
 
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
-    CPU_TIMER_START(spgemm);
-    DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
-    CPU_TIMER_STOP(spgemm);
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
-    if (world_rank==0)
+    for (int i=0; i<50; i++)
     {
-        TIMER_PRINT(spgemm);
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
+        CPU_TIMER_START(spgemm);
+        DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+        CPU_TIMER_STOP(spgemm);
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
+        if (world_rank==0)
+        {
+            TIMER_PRINT(spgemm);
+        }
+        delete dist_C;
     }
 
-    //TODO: Free stuff
+    delete dist_A;
+    delete dist_B;
+    dmmio::DCOO_destroy(&dcoo_A);
+    dmmio::DCOO_destroy(&dcoo_B);
 
     Kokkos::finalize();
     fclose(logfile);

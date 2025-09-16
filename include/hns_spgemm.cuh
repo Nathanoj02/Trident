@@ -13,6 +13,11 @@ struct DistCSR
     using LocalCSR = KokkosTypes<IT, VT>::CrsMatrix;
     LocalCSR * csr;
     dmmio::Partitioning * partitioning;
+
+    ~DistCSR()
+    {
+        delete csr;
+    }
 };
 
 

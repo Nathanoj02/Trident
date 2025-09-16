@@ -61,7 +61,8 @@ struct TileHolder
     IT wait(int src)
     {
         IT nnz;
-        do {
+        do 
+        {
             MPI_Win_flush_all(flag_win); //TODO: Get rid of this? I don't understand why it needs to be here, but it seems necessary to update flag
             MPI_Win_sync(flag_win);
             nnz = *flag;

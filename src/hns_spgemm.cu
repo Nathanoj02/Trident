@@ -73,7 +73,6 @@ void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, type
 
         // Put tile on remote process
         holder.put_tile(csr->values.data(), csr->graph.entries.data(), (int32_t*)csr->graph.row_map.data(), csr->nnz(), csr->numRows(), target);
-        queue.serviced++;
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
         FLUSH_WAIT(1.0);
@@ -144,16 +143,21 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
     // Local C
     LocalCSR * C_local = new LocalCSR();
 
+#if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Launching threads\n"));
     MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
     // Launch comm threads
-    std::thread comm_thread(comm_thread_loop2<IT, VT>, 
-                            std::ref(A_queue), std::ref(A_holder), dist_A->csr,
-                            std::ref(B_queue), std::ref(B_holder), dist_B->csr); 
+    std::thread A_comm_thread(comm_thread_loop<IT, VT>, 
+                            std::ref(A_queue), std::ref(A_holder), dist_A->csr);
+    std::thread B_comm_thread(comm_thread_loop<IT, VT>, 
+                            std::ref(B_queue), std::ref(B_holder), dist_B->csr);
 
+#if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
     MPI_Barrier(MPI_COMM_WORLD);
+#endif
 
     int* row_rank = new int(grid->row_rank);
     int* col_rank = new int(grid->col_rank);
@@ -172,8 +176,8 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
 #endif
 
         // Tell target I'm ready for tiles of A and B
-        A_queue.local_notify(row_rank, colAtoGet, iter);
-        B_queue.local_notify(col_rank, rowBtoGet, iter);
+        A_queue.notify(row_rank, colAtoGet, iter);
+        B_queue.notify(col_rank, rowBtoGet, iter);
 
 
         // Wait until I've been sent A and B
@@ -197,16 +201,9 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
         // Local multiply
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
-        FLUSH_WAIT(1.0);
-        print_d_arr((int*)A_remote->graph.row_map.data(), A_remote->numRows()+1, "A remote rowptrs: ");
-        print_d_arr(A_remote->graph.entries.data(), A_remote->nnz(), "A remote colinds: ");
-
-        FLUSH_WAIT(1.0);
-        print_d_arr((int*)B_node->graph.row_map.data(), B_node->numRows()+1, "B remote rowptrs: ");
-        print_d_arr(B_node->graph.entries.data(), B_node->nnz(), "B remote colinds: ");
 #endif
 
-        //kokkos_spgemm<IT, VT>(*A_remote, *B_node, *C_local); 
+        kokkos_spgemm<IT, VT>(*A_remote, *B_node, *C_local); 
 
 
         // Round shift
@@ -215,36 +212,29 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
                                                         
 
         // Cleanup
-        delete A_remote;
+       
         // Do not free underlying storage of A_remote, since it's the same as is used for A_holder
+        delete A_remote;
 
         // B_node underlying storage must be manually freed because its views are unmanaged
         CUDA_FREE_SAFE(B_node->values.data());
         CUDA_FREE_SAFE(B_node->graph.entries.data());
         CUDA_FREE_SAFE((void*)B_node->graph.row_map.data());
         delete B_node;
+        //MPI_Barrier(MPI_COMM_WORLD);
+
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
-
-    A_queue.tell_done_notifying();
-    B_queue.tell_done_notifying();
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
     FLUSH_WAIT(1.0);
 #endif
 
-    comm_thread.join();
-
-#if DEBUG_MAIN
-    MPI_Barrier(MPI_COMM_WORLD);
-    //print_d_arr((int*)C_local->graph.entries.data(), C_local->numRows()+1, "C_local rowptrs: ");
-    //print_d_arr(C_local->values.data(), C_local->nnz(), "C_local values: ");
-    FLUSH_WAIT(1.0);
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
+    A_comm_thread.join();
+    B_comm_thread.join();
 
 
 #if DEBUG_MAIN
