@@ -9,7 +9,7 @@ template <typename IT, typename VT>
 struct TileHolder
 {
 
-    using LocalCSR = KokkosTypes<IT, VT>::CrsMatrix;
+    using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     TileHolder(const IT nrows, const IT nnz_size, MPI_Comm _comm)
     {
