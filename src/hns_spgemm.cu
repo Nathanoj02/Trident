@@ -109,16 +109,16 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
 
     for (int iter = 0; iter < n_iters; iter++)
     {
+
+#if DEBUG_MAIN
         int A_owner_global = colAtoGet*node_size + *col_rank * (node_size * grid->row_size) + grid->node_rank;
         int B_owner_global = rowBtoGet*(node_size*grid->row_size);
-
-        // Tell target I'm ready for tiles of A and B
-#if DEBUG_MAIN
         fprintf(stdout, "Iteration %d -- Rank %d asking for tile of A from %d and tile of B from %d\n", iter, grid->global_rank, 
                 A_owner_global, 
                 B_owner_global);
         FLUSH_WAIT(1.0);
 #endif
+        // Tell target I'm ready for tiles of A and B
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
@@ -198,6 +198,14 @@ DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * di
     FLUSH_WAIT(1.0);
 #endif
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    int64_t nnz_global = (int64_t)C_local->nnz();
+    MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+
+    if (grid->global_rank==0)
+    {
+        std::cout<<"NNZ C: "<<nnz_global<<std::endl;
+    }
     MPI_Barrier(MPI_COMM_WORLD);
 
 
