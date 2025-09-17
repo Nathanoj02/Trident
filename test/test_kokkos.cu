@@ -30,27 +30,15 @@
     (fprintf(stderr, "%sNOT PASSED%s\n", RED, RESET)) ;
 
 template <typename KIT, typename DIT, typename VT>
-mmio::CSR<KIT, VT>* simulate_csr_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap) {
-    mmio::CSR<KIT, VT> *tmp_csr = &(std::get<mmio::CSR<KIT, VT>>(kokkos_wrap.dev_mmio));
-    KIT nrows = tmp_csr->nrows, ncols = tmp_csr->ncols, nnz = tmp_csr->nnz;
+mmio::CSX<KIT, VT>* simulate_csx_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap, mmio::MajorDim layout) {
+    mmio::CSX<KIT, VT> *tmp_csx = &(kokkos_wrap.mmio_csx);
+    KIT nrows = tmp_csx->nrows, ncols = tmp_csx->ncols, nnz = tmp_csx->nnz;
+    KIT ptr_vec_size = (layout==mmio::MajorDim::ROWS) ? (nrows+1) : (ncols+1) ;
 
-    mmio::CSR<KIT, VT> *out = mmio::CSR_create<KIT, VT>(nrows, ncols, nnz, true);
-    CUDA_CHECK(cudaMemcpy(out->col_idx, tmp_csr->col_idx, sizeof(KIT)* nnz,      cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(out->row_ptr, tmp_csr->row_ptr, sizeof(KIT)*(nrows+1), cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(out->val,     tmp_csr->val,     sizeof(VT) * nnz,      cudaMemcpyDeviceToDevice));
-
-    return(out);
-}
-
-template <typename KIT, typename DIT, typename VT>
-mmio::CSC<KIT, VT>* simulate_csc_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap) {
-    mmio::CSC<KIT, VT> *tmp_csr = &(std::get<mmio::CSC<KIT, VT>>(kokkos_wrap.dev_mmio));
-    KIT nrows = tmp_csr->nrows, ncols = tmp_csr->ncols, nnz = tmp_csr->nnz;
-
-    mmio::CSC<KIT, VT> *out = mmio::CSC_create<KIT, VT>(nrows, ncols, nnz, true);
-    CUDA_CHECK(cudaMemcpy(out->col_ptr, tmp_csr->col_ptr, sizeof(KIT)*(ncols+1), cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(out->row_idx, tmp_csr->row_idx, sizeof(KIT)* nnz,      cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(out->val,     tmp_csr->val,     sizeof(VT) * nnz,      cudaMemcpyDeviceToDevice));
+    mmio::CSX<KIT, VT> *out = mmio::CSX_create<KIT, VT>(nrows, ncols, nnz, true, layout);
+    CUDA_CHECK(cudaMemcpy(out->ptr_vec, tmp_csx->ptr_vec, sizeof(KIT)* ptr_vec_size, cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpy(out->idx_vec, tmp_csx->idx_vec, sizeof(KIT)* nnz,          cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpy(out->val,     tmp_csx->val,     sizeof(VT) * nnz,          cudaMemcpyDeviceToDevice));
 
     return(out);
 }
@@ -153,14 +141,14 @@ int main(int argc, char** argv) {
     mmio::CSR<int32_t, float>* h_out_C;
     Kokkos::initialize(argc, argv);
     {
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_A(dcoo_A, KokkosWrap::MajorDim::COLS);
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_B(dcoo_B, KokkosWrap::MajorDim::ROWS);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_A(dcoo_A, mmio::MajorDim::COLS);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> kokkos_B(dcoo_B, mmio::MajorDim::ROWS);
 
         // ----- Simulate a local multiplication only A(i,j)*B(i,j) tiles are multiplied -----
 
         // Simulate the communication by simply copy the A and B raw pointers
-        mmio::CSC<int32_t, float> *tmp_recv_csc = simulate_csc_comm(kokkos_A);
-        mmio::CSR<int32_t, float> *tmp_recv_csr = simulate_csr_comm(kokkos_B);
+        mmio::CSX<int32_t, float> *tmp_recv_csc = simulate_csx_comm(kokkos_A, mmio::MajorDim::COLS);
+        mmio::CSX<int32_t, float> *tmp_recv_csr = simulate_csx_comm(kokkos_B, mmio::MajorDim::ROWS);
 
         // Parse 'receved' row pointers to kokkos structures
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> compute_A(tmp_recv_csc);
@@ -176,12 +164,16 @@ int main(int argc, char** argv) {
         // -----------------------------------------------------------------------------------
 
         // Keep the C raw pointers
-        mmio::CSR<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
+        mmio::CSX<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
+        if (d_out_C.majordim != mmio::MajorDim::ROWS) {
+            fprintf(stderr, "Error: d_out_C must be a CSR\n");
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
 
         // Copy C to host (just to dbg)
         h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C.nrows, d_out_C.ncols, d_out_C.nnz, true);
-        d2h_copy(h_out_C->row_ptr, d_out_C.nrows+1, d_out_C.row_ptr);
-        d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.col_idx);
+        d2h_copy(h_out_C->row_ptr, d_out_C.nrows+1, d_out_C.ptr_vec);
+        d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.idx_vec);
         d2h_copy(h_out_C->val,     d_out_C.nnz,     d_out_C.val);
 
         MPI_ALL_PRINT(mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C", fp);)
