@@ -47,6 +47,10 @@ namespace KokkosWrap {
 
         // In-place SpGEMM: C = C + A*B
         static void sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C);
+
+        // Free memory & decostructor
+        void freeBuffers();
+        ~LocalMatrix();
     };
 
     // These two function are exposed temporary for the test_kokkos C matrix
@@ -215,6 +219,22 @@ namespace KokkosWrap {
 
             storage = KokkosSparse::ccs2crs(kokkos_csc);
         }
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    void LocalMatrix<KIT,DIT,VT>::freeBuffers() {
+        if (initialized) {
+            CUDA_FREE_SAFE(storage.graph.row_map.data());
+            CUDA_FREE_SAFE(storage.graph.entries.data());
+            CUDA_FREE_SAFE(storage.values.data());
+            initialized = false;
+        }
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::~LocalMatrix() {
+        // Nothing — views are unmanaged, so Kokkos won't free them
+        // Assume the caller manages lifetime of ptr_vec, idx_vec, val
     }
 
     template <typename IT, typename VT>
