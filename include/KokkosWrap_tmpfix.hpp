@@ -10,10 +10,6 @@
 using MajorDim = mmio::MajorDim;
 
 namespace KokkosWrap {
-    // enum class MajorDim {
-    //     ROWS, // i.e. CSR
-    //     COLS  // i.e. CSC
-    // };
 
     template <typename KIT, typename DIT, typename VT>
     struct DistribuitedMatrix {
@@ -25,13 +21,8 @@ namespace KokkosWrap {
             KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>
         > storage;
 
-        // MajorDim layout;  // which one we actually hold
+        // MajorDim layout;  // which one we actually hold // Now inside the CSX
 
-        // mmio structure to access the raw pointers
-        // std::variant<
-        //     mmio::CSR<KIT, VT>,
-        //     mmio::CSC<KIT, VT>
-        // > dev_mmio;
         mmio::CSX<KIT, VT> mmio_csx;
 
         // ---- Constructor ----
