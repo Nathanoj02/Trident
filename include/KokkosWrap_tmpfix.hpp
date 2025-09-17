@@ -3,6 +3,7 @@
 // KokkosWrap.hpp
 #include <dmmio/dmmio.h>
 
+#include <variant>
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_CcsMatrix.hpp>
@@ -23,7 +24,7 @@ namespace KokkosWrap {
 
         // MajorDim layout;  // which one we actually hold // Now inside the CSX
 
-        mmio::CSX<KIT, VT> mmio_csx;
+        mmio::CSX<KIT, VT>* mmio_csx;
 
         // ---- Constructor ----
         DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
@@ -55,13 +56,13 @@ namespace KokkosWrap {
 
     // These two function are exposed temporary for the test_kokkos C matrix
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr);
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr);
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc);
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc);
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr);
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr);
 }
 
 // KokkosWrap.cpp
@@ -84,43 +85,43 @@ namespace KokkosWrap {
 namespace KokkosWrap {
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr) {
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr) {
         auto val_view     = kokkos_csr.values;
         auto rowmap_view  = kokkos_csr.graph.row_map;
         auto entries_view = kokkos_csr.graph.entries;
 
-        mmio::CSX<KIT, VT> csx;
-        csx.majordim = MajorDim::ROWS;
-        csx.nnz      = kokkos_csr.nnz();
-        csx.nrows    = kokkos_csr.numRows();
-        csx.ncols    = kokkos_csr.numCols();
-        csx.val      = val_view.data();
-        csx.ptr_vec  = const_cast<int32_t*>(rowmap_view.data());
-        csx.idx_vec  = const_cast<int32_t*>(entries_view.data());
+        mmio::CSX<KIT, VT> *csx = (mmio::CSX<KIT, VT>*)malloc(sizeof(mmio::CSX<KIT, VT>));
+        csx->majordim = MajorDim::ROWS;
+        csx->nnz      = kokkos_csr.nnz();
+        csx->nrows    = kokkos_csr.numRows();
+        csx->ncols    = kokkos_csr.numCols();
+        csx->val      = val_view.data();
+        csx->ptr_vec  = const_cast<int32_t*>(rowmap_view.data());
+        csx->idx_vec  = const_cast<int32_t*>(entries_view.data());
 
         return(csx);
     }
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc) {
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc) {
         auto val_view     = kokkos_csc.values;
         auto colmap_view  = kokkos_csc.graph.col_map;
         auto entries_view = kokkos_csc.graph.entries;
 
-        mmio::CSX<KIT, VT> csx;
-        csx.majordim = MajorDim::COLS;
-        csx.nnz      = kokkos_csc.nnz();
-        csx.nrows    = kokkos_csc.numRows();
-        csx.ncols    = kokkos_csc.numCols();
-        csx.val      = val_view.data();
-        csx.ptr_vec  = const_cast<int32_t*>(colmap_view.data());
-        csx.idx_vec  = const_cast<int32_t*>(entries_view.data());
+        mmio::CSX<KIT, VT> *csx = (mmio::CSX<KIT, VT>*)malloc(sizeof(mmio::CSX<KIT, VT>));
+        csx->majordim = MajorDim::COLS;
+        csx->nnz      = kokkos_csc.nnz();
+        csx->nrows    = kokkos_csc.numRows();
+        csx->ncols    = kokkos_csc.numCols();
+        csx->val      = val_view.data();
+        csx->ptr_vec  = const_cast<int32_t*>(colmap_view.data());
+        csx->idx_vec  = const_cast<int32_t*>(entries_view.data());
 
         return(csx);
     }
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT> rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr) {
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr) {
         return(rawptr_get(kokkos_csr.storage));
     }
 
@@ -166,20 +167,20 @@ namespace KokkosWrap {
     }
 
     template <typename KIT, typename DIT, typename VT>
-    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNnz()   { return(mmio_csx.nnz);   }
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNnz()   { return(mmio_csx->nnz);   }
 
     template <typename KIT, typename DIT, typename VT>
-    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNcols() { return(mmio_csx.ncols); }
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNcols() { return(mmio_csx->ncols); }
 
     template <typename KIT, typename DIT, typename VT>
-    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNrows() { return(mmio_csx.nrows); }
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNrows() { return(mmio_csx->nrows); }
 
     template <typename KIT, typename DIT, typename VT>
     KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalPtrvecsize() {
-        if (mmio_csx.majordim == MajorDim::ROWS)
-            return(mmio_csx.nrows); // Put +1 here?
+        if (mmio_csx->majordim == MajorDim::ROWS)
+            return(mmio_csx->nrows); // Put +1 here?
         else
-            return(mmio_csx.ncols); // Put +1 here?
+            return(mmio_csx->ncols); // Put +1 here?
     }
 
     using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
@@ -224,9 +225,9 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::freeBuffers() {
         if (initialized) {
-            CUDA_FREE_SAFE(storage.graph.row_map.data());
-            CUDA_FREE_SAFE(storage.graph.entries.data());
-            CUDA_FREE_SAFE(storage.values.data());
+            CUDA_FREE_SAFE((void*)storage.graph.row_map.data());
+            CUDA_FREE_SAFE((void*)storage.graph.entries.data());
+            CUDA_FREE_SAFE((void*)storage.values.data());
             initialized = false;
         }
     }

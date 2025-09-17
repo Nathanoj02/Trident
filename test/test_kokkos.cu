@@ -31,7 +31,7 @@
 
 template <typename KIT, typename DIT, typename VT>
 mmio::CSX<KIT, VT>* simulate_csx_comm (KokkosWrap::DistribuitedMatrix<KIT, DIT, VT> kokkos_wrap, mmio::MajorDim layout) {
-    mmio::CSX<KIT, VT> *tmp_csx = &(kokkos_wrap.mmio_csx);
+    mmio::CSX<KIT, VT> *tmp_csx = kokkos_wrap.mmio_csx;
     KIT nrows = tmp_csx->nrows, ncols = tmp_csx->ncols, nnz = tmp_csx->nnz;
     KIT ptr_vec_size = (layout==mmio::MajorDim::ROWS) ? (nrows+1) : (ncols+1) ;
 
@@ -164,17 +164,17 @@ int main(int argc, char** argv) {
         // -----------------------------------------------------------------------------------
 
         // Keep the C raw pointers
-        mmio::CSX<int32_t, float> d_out_C = KokkosWrap::rawptr_get(C);
-        if (d_out_C.majordim != mmio::MajorDim::ROWS) {
+        mmio::CSX<int32_t, float> *d_out_C = KokkosWrap::rawptr_get(C);
+        if (d_out_C->majordim != mmio::MajorDim::ROWS) {
             fprintf(stderr, "Error: d_out_C must be a CSR\n");
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
 
         // Copy C to host (just to dbg)
-        h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C.nrows, d_out_C.ncols, d_out_C.nnz, true);
-        d2h_copy(h_out_C->row_ptr, d_out_C.nrows+1, d_out_C.ptr_vec);
-        d2h_copy(h_out_C->col_idx, d_out_C.nnz,     d_out_C.idx_vec);
-        d2h_copy(h_out_C->val,     d_out_C.nnz,     d_out_C.val);
+        h_out_C  = mmio::CSR_create<int32_t, float>(d_out_C->nrows, d_out_C->ncols, d_out_C->nnz, true);
+        d2h_copy(h_out_C->row_ptr, d_out_C->nrows+1, d_out_C->ptr_vec);
+        d2h_copy(h_out_C->col_idx, d_out_C->nnz,     d_out_C->idx_vec);
+        d2h_copy(h_out_C->val,     d_out_C->nnz,     d_out_C->val);
 
         MPI_ALL_PRINT(mmio::utils::CSR_print_as_dense(h_out_C, "h_out_C", fp);)
 
