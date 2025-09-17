@@ -4,6 +4,8 @@
 #include "tile_holder.cuh"
 #include "kokkos_helpers.cuh"
 
+#include <KokkosWrap_tmpfix.hpp>
+
 #define DEBUG_MAIN 0
 
 
@@ -61,3 +63,12 @@ DistCSR<IT, VT> * DistCSR_convert(dmmio::DCOO<IT, VT> * dcoo)
 
 template <typename IT, typename VT>
 DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * dist_B);
+
+template <typename IT, typename VT>
+using KWrapDMat = typename KokkosWrap::DistribuitedMatrix<IT, IT, VT>;
+
+template <typename IT, typename VT>
+using KWrapLMat = typename KokkosWrap::LocalMatrix<IT, IT, VT>;
+
+template <typename IT, typename VT>
+mmio::CSX<IT, VT> * hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kwd_B);

@@ -70,7 +70,7 @@ int main(int argc, char ** argv)
         false, meta_A
     );
 
-    std::string B_mtx_path = (std::string) config->matpathA;
+    std::string B_mtx_path = (std::string) config->matpathB;
     mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
     dmmio::DCOO<int32_t, float> *dcoo_B = dmmio::DCOO_read<int32_t, float>(
         A_mtx_path.c_str(),
@@ -94,10 +94,18 @@ int main(int argc, char ** argv)
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning conversion\n"));
     fflush(stdout);
 
-    std::cout<<"nnz in local A: "<<dcoo_A->coo->nnz<<std::endl;
+    // std::cout<<"nnz in local A: "<<dcoo_A->coo->nnz<<std::endl;
 
-    DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
-    DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
+    // NOTE: here inside there are global2local conversion? Why not global2group?
+    // -----------------------------------------------------------
+    // DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
+    // DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
+    dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
+    KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, mmio::MajorDim::COLS);
+    KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
+    // -----------------------------------------------------------
 
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done conversion\n"));
     fflush(stdout);
@@ -109,7 +117,8 @@ int main(int argc, char ** argv)
     {
         MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
         CPU_TIMER_START(spgemm);
-        DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+        // DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
+        mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
         CPU_TIMER_STOP(spgemm);
         MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
         if (world_rank==0)
@@ -119,8 +128,9 @@ int main(int argc, char ** argv)
         delete dist_C;
     }
 
-    delete dist_A;
-    delete dist_B;
+    // delete dist_A;
+    // delete dist_B;
+
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
