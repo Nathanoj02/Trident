@@ -10,9 +10,6 @@ int main(int argc, char ** argv)
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
-    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
-    Kokkos::initialize(argc, argv);
-
 
     int world_size;
     int world_rank;
@@ -80,6 +77,10 @@ int main(int argc, char ** argv)
         false, meta_B
     );
 
+    cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
+    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
+    Kokkos::initialize(argc, argv);
+
 
     // Some prints
     if (world_rank == 0) 
@@ -91,22 +92,17 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
     }
 
+    dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
     {
         MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning conversion\n"));
         fflush(stdout);
 
-        // std::cout<<"nnz in local A: "<<dcoo_A->coo->nnz<<std::endl;
-
-        // NOTE: here inside there are global2local conversion? Why not global2group?
-        // -----------------------------------------------------------
-        // DistCSR<int32_t, float> * dist_A = DistCSR_convert(dcoo_A);
-        // DistCSR<int32_t, float> * dist_B = DistCSR_convert(dcoo_B);
-        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
         dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, mmio::MajorDim::COLS);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
-        // -----------------------------------------------------------
 
         MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done conversion\n"));
         fflush(stdout);
@@ -114,20 +110,20 @@ int main(int argc, char ** argv)
 
         CPU_TIMER_DEF(spgemm);
 
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm computations\n"));
         for (int i=0; i<50; i++)
         {
-            MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm\n"));
             CPU_TIMER_START(spgemm);
             // DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
             mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
             CPU_TIMER_STOP(spgemm);
-            MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm\n"));
             if (world_rank==0)
             {
                 TIMER_PRINT(spgemm);
             }
             delete dist_C;
         }
+        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm computations\n"));
 
         // delete dist_A;
         // delete dist_B;
