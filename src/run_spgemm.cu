@@ -10,9 +10,6 @@ int main(int argc, char ** argv)
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
-    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
-    Kokkos::initialize(argc, argv);
-
 
     int world_size;
     int world_rank;
@@ -58,6 +55,10 @@ int main(int argc, char ** argv)
         fprintf(stderr, "Partitioning different by Naive are not supported yet.\n");
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
     }
+
+    cudaSetDevice(Apart->grid->node_rank);
+    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
+    Kokkos::initialize(argc, argv);
 
     // Reading the distribuited matrices
     std::string A_mtx_path = (std::string) config->matpathA;
