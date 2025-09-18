@@ -144,7 +144,6 @@ int main(int argc, char ** argv)
         for (int i=0; i<1; i++) // NOTE: Increas this number to 50, 1 is just to debug
         {
             CPU_TIMER_START(spgemm);
-            // DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
             mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
             CPU_TIMER_STOP(spgemm);
             if (world_rank==0)
@@ -154,9 +153,6 @@ int main(int argc, char ** argv)
             delete dist_C;
         }
         if (world_rank==0) printf("Done spgemm computations\n");
-
-        // delete dist_A;
-        // delete dist_B;
     }
 
     dmmio::DCOO_destroy(&dcoo_A);
