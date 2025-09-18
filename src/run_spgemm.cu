@@ -56,10 +56,6 @@ int main(int argc, char ** argv)
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
     }
 
-    cudaSetDevice(Apart->grid->node_rank);
-    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
-    Kokkos::initialize(argc, argv);
-
     // Reading the distribuited matrices
     std::string A_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
@@ -80,6 +76,10 @@ int main(int argc, char ** argv)
         Apart, Bop,
         false, meta_B
     );
+
+    cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
+    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
+    Kokkos::initialize(argc, argv);
 
 
     // Some prints
