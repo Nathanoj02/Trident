@@ -25,10 +25,10 @@ struct Triple
 
 
 template <typename IT, typename VT>
-KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz, 
+typename KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz,
                                                    VT * d_vals, IT * d_colinds, IT * d_rowptrs)
 {
-    using KokkosCRS = KokkosTypes<IT, VT>::CrsMatrix;
+    using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
     KokkosCRS * crs_mat = new KokkosCRS(
             "A", 
             nrows, 
@@ -46,10 +46,10 @@ KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncol
 
 
 template <typename IT, typename VT>
-KokkosTypes<IT, VT>::CrsMatrix * coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
+typename KokkosTypes<IT, VT>::CrsMatrix * coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
 {
     using Tr = Triple<IT, VT>;
-    using KokkosCRS = KokkosTypes<IT, VT>::CrsMatrix;
+    using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     // Sort by row
     std::vector<Tr> triples(coo->nnz);
@@ -124,7 +124,7 @@ template <typename IT, typename VT>
 void kokkos_spgemm(typename KokkosTypes<IT, VT>::CrsMatrix& A, typename KokkosTypes<IT, VT>::CrsMatrix& B, typename KokkosTypes<IT, VT>::CrsMatrix& C)
 {
 
-    using LocalCSR = KokkosTypes<IT, VT>::CrsMatrix ;
+    using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix ;
 
     // First, spgemm
     LocalCSR C_new = KokkosSparse::spgemm<LocalCSR, LocalCSR, LocalCSR>(A, false, B, false);
