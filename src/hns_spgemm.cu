@@ -293,8 +293,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
     // TODO: check both grids are the same
-    dmmio::utils::ProcessGrid_graph(grid, stdout);
-    MPI_Barrier(MPI_COMM_WORLD);
 
     int node_size        = grid->node_size;                     // NOTE: every grid must have the same node size!!
     int common_grid_size = kwd_A.partitioning->grid->row_size; // This must be equal to kwd_B->...->col_size
