@@ -29,13 +29,15 @@ int main(int argc, char ** argv)
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
+    int dev;
+    err = cudaGetDevice(&dev);
 
     int world_size;
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-    fprintf(stdout, "slurm_local_id %d become world_rank %d\n", slurm_local_id, world_rank);
-    PRINT_MYDEV
+    fprintf(stdout, "slurm_local_id %d become world_rank %d assigned device %d\n", slurm_local_id, world_rank, dev);
+    // PRINT_MYDEV
     MPI_Barrier(MPI_COMM_WORLD);
 
     // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
@@ -46,7 +48,7 @@ int main(int argc, char ** argv)
                         // .set_num_threads(1);
 
     Kokkos::initialize();
-    PRINT_MYDEV
+    // PRINT_MYDEV
     MPI_Barrier(MPI_COMM_WORLD);
 
     if (world_rank==0)

@@ -2,6 +2,8 @@
 
 MPIDataTypeCache mpidtc; //fix linker error
 
+#define DETAILED_TIMERS
+
 template <typename IT, typename VT>
 void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, typename KokkosTypes<IT, VT>::CrsMatrix * csr)
 {
@@ -120,7 +122,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
 
     int* row_rank = new int(grid->row_rank);
     int* col_rank = new int(grid->col_rank);
-
+#ifdef DETAILED_TIMERS
+    CUDA_TIMER_DEF(comm_wait)
+    CUDA_TIMER_DEF(data_proc)
+    CUDA_TIMER_DEF(comp_time)
+#endif
     for (int iter = 0; iter < n_iters; iter++)
     {
 
@@ -138,31 +144,55 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
-
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(comm_wait)
+#endif
         // Wait until I've been sent A and B
         IT A_tile_nnz = A_holder.wait(colAtoGet);
         IT B_tile_nnz = B_holder.wait(rowBtoGet);
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(comm_wait)
+#endif
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d received tiles for iteration %d\n", grid->global_rank, iter);
         FLUSH_WAIT(1.0);
 #endif
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(data_proc)
+#endif
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.getLocalNrows(), kwd_A.getLocalNcols(), A_tile_nnz, mmio::MajorDim::COLS));
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.getLocalNrows(), kwd_B.getLocalNcols(), B_tile_nnz, grid));
-
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(data_proc)
+#endif
 
         // Local multiply
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
 #endif
 
+
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(comp_time)
+#endif
         // This perform C_local += A_remote * B_node
         KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
-
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(comp_time)
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", grid->global_rank);
+        // TIMER_PRINT_WPREFIX(comm_wait, tmpstr)
+        // TIMER_PRINT_WPREFIX(data_proc, tmpstr)
+        // TIMER_PRINT_WPREFIX(comp_time, tmpstr)
+        ccutils_timers::print_stats(__timer_vals_comm_wait, "comm_wait", tmpstr);  // TMP FIX
+        ccutils_timers::print_stats(__timer_vals_data_proc, "data_proc", tmpstr);  // TMP FIX
+        ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
+#endif
 
         // Round shift
         colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
