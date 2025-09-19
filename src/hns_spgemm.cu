@@ -4,6 +4,62 @@ MPIDataTypeCache mpidtc; //fix linker error
 
 #define DETAILED_TIMERS
 
+//#ifdef PTR_CHECK
+int here_iteration = 0;
+//#endif
+
+template <typename IT, typename VT>
+void comm_thread_loop2(MessageQueue<int>& A_queue, TileHolder<IT, VT>& A_holder, typename KokkosTypes<IT, VT>::CrsMatrix * A_csr, 
+                       MessageQueue<int>& B_queue, TileHolder<IT, VT>& B_holder, typename KokkosTypes<IT, VT>::CrsMatrix * B_csr)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    while (true)
+    {
+
+        // Notify remote processes of any tile needs
+        A_queue.poll_notify();
+        B_queue.poll_notify();
+
+
+        // See if someone tells me to send them a tile
+        int Atarget = A_queue.poll();
+
+
+        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
+        if (Atarget >= 0)
+        {
+            // Put tile on remote process
+            A_holder.put_tile(A_csr->values.data(), A_csr->graph.entries.data(), (int32_t*)A_csr->graph.row_map.data(), 
+                              A_csr->nnz(), A_csr->numRows(), Atarget);
+        }
+
+
+        // See if someone tells me to send them a tile
+        int Btarget = B_queue.poll();
+
+
+        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
+        if (Btarget >= 0)
+        {
+            // Put tile on remote process
+            B_holder.put_tile(B_csr->values.data(), B_csr->graph.entries.data(), (int32_t*)B_csr->graph.row_map.data(), 
+                              B_csr->nnz(), B_csr->numRows(), Btarget);
+        }
+
+
+        // Return 
+        if (A_queue.done() && B_queue.done())
+        {
+            return;
+        }
+
+    }
+
+}
+
+
 template <typename IT, typename VT>
 void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, typename KokkosTypes<IT, VT>::CrsMatrix * csr)
 {
