@@ -162,11 +162,30 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(data_proc)
 #endif
+
+#define VERBOSE
+#ifdef VERBOSE
+        fflush(stdout);
+        fprintf(stdout, "rank %d: expected A (%dx%d) * expected B (%dx%d)\n", grid->global_rank,
+                                                            kwd_A.getLocalNrows(), kwd_A.getLocalNcols(),
+                                                            kwd_B.partitioning->group_rows, kwd_B.partitioning->group_cols);
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.getLocalNrows(), kwd_A.getLocalNcols(), A_tile_nnz, mmio::MajorDim::COLS));
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.getLocalNrows(), kwd_B.getLocalNcols(), B_tile_nnz, grid));
+
+#ifdef VERBOSE
+        fprintf(stdout, "rank %d: A_remote (%dx%d) * B_node (%dx%d)\n", grid->global_rank,
+                                                            A_remote.storage.numRows(), A_remote.storage.numCols(),
+                                                            B_node.storage.numRows(),   B_node.storage.numCols());
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(data_proc)
 #endif
