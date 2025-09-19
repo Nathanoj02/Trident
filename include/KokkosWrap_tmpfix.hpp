@@ -183,15 +183,15 @@ namespace KokkosWrap {
             return(mmio_csx->ncols); // Put +1 here?
     }
 
-    using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-    using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-
     template <typename KIT, typename DIT, typename VT>
     LocalMatrix<KIT,DIT,VT>::LocalMatrix() : storage(), initialized(false) {}
 
     template <typename KIT, typename DIT, typename VT>
     LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSX<DIT, VT>* mmio_csx) : initialized(true)
     {
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
         // TODO check KIT == DIT or find a way to a static cast
         if (mmio_csx->majordim == MajorDim::ROWS) {
             ordinal_view_t rowmap(mmio_csx->ptr_vec, mmio_csx->nrows + 1);

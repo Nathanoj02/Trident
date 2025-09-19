@@ -121,6 +121,7 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
       std::cout << "Number of processes per col: "  << nproccols     << std::endl;
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
+      std::cout << "Spcomm enabled: " << config->spcomm << " (when enabled, A becomes a CSC)" << std::endl;
     }
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
@@ -131,9 +132,10 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
+        mmio::MajorDim A_maj = (config->spcomm) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
         dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_A);
         dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_B);
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, mmio::MajorDim::COLS);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, A_maj);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
 
         if (world_rank==0)  printf("Done conversion\n");

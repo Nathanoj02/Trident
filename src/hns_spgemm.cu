@@ -175,7 +175,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.partitioning->local_rows, kwd_A.partitioning->local_cols, A_tile_nnz, mmio::MajorDim::COLS));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.partitioning->local_rows, kwd_A.partitioning->local_cols, A_tile_nnz, kwd_A.mmio_csx->majordim));
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.partitioning->local_rows, kwd_B.partitioning->local_cols, B_tile_nnz, grid));
 
 #ifdef VERBOSE

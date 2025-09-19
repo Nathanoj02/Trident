@@ -116,6 +116,7 @@ struct config
     ExperimentType type;
     const char * type_str;
     bool do_check;
+    bool spcomm;
     bool transpose_B;
     int part_num;
 
@@ -184,6 +185,7 @@ void parse_args(int argc, char ** argv, Config * config)
 {
     config->do_check = false;
     config->part_num = 0;
+    config->spcomm = false;
     config->transpose_B = false;
     config->file_suffix = "none";
     config->type_str = "none";
@@ -213,6 +215,10 @@ void parse_args(int argc, char ** argv, Config * config)
             config->matpathC= argv[i+1];
             config->do_check = true;
             config->matnameC = extract_matrix_name(config->matpathC);
+        }
+        else if (!strcmp(argname, "--spcomm"))
+        {
+            config->spcomm = true;
         }
         else if (!strcmp(argname, "--type"))
         {
