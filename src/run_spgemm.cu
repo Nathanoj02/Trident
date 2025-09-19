@@ -131,8 +131,8 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
-        dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
+        dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_A);
+        dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_B);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, mmio::MajorDim::COLS);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
 
