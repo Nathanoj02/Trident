@@ -206,16 +206,14 @@ namespace KokkosWrap {
         //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done copy\n"));
         //FLUSH_WAIT(1.0);
 
-        // --- Step 1: COO → CSR (row-major) ---
-        auto csr = coo_to_kokkos_crs(coo);
 
         // --- Step 2: Decide layout ---
         if (T == MajorDim::ROWS) {
+            auto csr  = coo_to_kokkos_crs(coo);
             storage   = csr; // keep CSR
             mmio_csx  = rawptr_get(csr);
         } else {
-            // CSR → CSC (column-major)
-            auto csc  = KokkosSparse::crs2ccs(csr);
+            auto csc  = coo_to_kokkos_ccs(coo);
             storage   = csc; // store CSC
             mmio_csx  = rawptr_get(csc);
         }
