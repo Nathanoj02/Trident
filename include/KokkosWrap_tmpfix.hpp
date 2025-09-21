@@ -7,6 +7,7 @@
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_CcsMatrix.hpp>
+#include "kokkos_helpers.cuh"
 
 using MajorDim = mmio::MajorDim;
 
@@ -56,13 +57,13 @@ namespace KokkosWrap {
 
     // These two function are exposed temporary for the test_kokkos C matrix
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr);
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr);
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc);
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csc);
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr);
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr);
 }
 
 // KokkosWrap.cpp
@@ -84,9 +85,17 @@ namespace KokkosWrap {
 
 namespace KokkosWrap {
 
+    template <typename IT, typename VT>
+    struct Triple
+    {
+        IT row;
+        IT col;
+        VT val;
+    };
+
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr) {
-        auto val_view     = kokkos_csr.values;
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr) {
+        //auto val_view     = kokkos_csr.values;
         auto rowmap_view  = kokkos_csr.graph.row_map;
         auto entries_view = kokkos_csr.graph.entries;
 
@@ -95,7 +104,7 @@ namespace KokkosWrap {
         csx->nnz      = kokkos_csr.nnz();
         csx->nrows    = kokkos_csr.numRows();
         csx->ncols    = kokkos_csr.numCols();
-        csx->val      = val_view.data();
+        csx->val      = kokkos_csr.values.data();
         csx->ptr_vec  = const_cast<int32_t*>(rowmap_view.data());
         csx->idx_vec  = const_cast<int32_t*>(entries_view.data());
 
@@ -103,7 +112,7 @@ namespace KokkosWrap {
     }
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc) {
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csc) {
         auto val_view     = kokkos_csc.values;
         auto colmap_view  = kokkos_csc.graph.col_map;
         auto entries_view = kokkos_csc.graph.entries;
@@ -121,7 +130,7 @@ namespace KokkosWrap {
     }
 
     template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT> kokkos_csr) {
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr) {
         return(rawptr_get(kokkos_csr.storage));
     }
 
@@ -129,30 +138,76 @@ namespace KokkosWrap {
     DistribuitedMatrix<KIT,DIT,VT>::DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
             : partitioning(dcoo->partitioning)
     {
-        int nnz = dcoo->coo->nnz;
-        Kokkos::View<KIT*> row_d("row", nnz);
-        Kokkos::View<KIT*> col_d("col", nnz);
-        Kokkos::View<VT*> val_d("val", nnz);
-
-        auto row_h = Kokkos::create_mirror_view(row_d);
-        auto col_h = Kokkos::create_mirror_view(col_d);
-        auto val_h = Kokkos::create_mirror_view(val_d);
-
-        for (int i = 0; i < nnz; i++) {
-            row_h(i) = static_cast<KIT>(dcoo->coo->row[i]);
-            col_h(i) = static_cast<KIT>(dcoo->coo->col[i]);
-            if (dcoo->coo->val == nullptr)
-                val_h(i) = static_cast<VT>(1.0); // TODO: use real values if available
-            else
-                val_h(i) = static_cast<VT>(dcoo->coo->val[i]);
+        using namespace dmmio::partitioning::indextransform;
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size) != 0)
+        {
+            dcoo->coo->nrows++;
         }
 
-        Kokkos::deep_copy(row_d, row_h);
-        Kokkos::deep_copy(col_d, col_h);
-        Kokkos::deep_copy(val_d, val_h);
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size) != 0)
+        {
+            dcoo->coo->ncols++;
+        }
+        KIT max_dim = max(dcoo->coo->ncols, dcoo->coo->nrows);
+        dcoo->coo->ncols = max_dim;
+        dcoo->coo->nrows = max_dim;
+        dcoo->coo->nrows /= (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size);
+        dcoo->coo->ncols /= dcoo->partitioning->grid->row_size;
+
+        for (KIT i=0; i<dcoo->coo->nnz; i++)
+        {
+            dcoo->coo->row[i] = global2local::row(dcoo->partitioning, dcoo->coo->row[i]);
+            dcoo->coo->col[i] = global2local::col(dcoo->partitioning, dcoo->coo->col[i]);
+        }
+
+        auto coo = dcoo->coo;
+        //int nnz = dcoo->coo->nnz;
+        //Kokkos::View<KIT*> row_d("row", nnz);
+        //Kokkos::View<KIT*> col_d("col", nnz);
+        //Kokkos::View<VT*> val_d("val", nnz);
+
+        //auto row_h = Kokkos::create_mirror_view(row_d);
+        //auto col_h = Kokkos::create_mirror_view(col_d);
+        //auto val_h = Kokkos::create_mirror_view(val_d);
+
+        //using Tr = Triple<KIT, VT>;
+        //std::vector<Tr> triples(coo->nnz);
+        //for (KIT i=0; i<coo->nnz; i++)
+        //{
+        //    triples[i].row = coo->row[i];
+        //    triples[i].col = coo->col[i];
+        //    triples[i].val = coo->val[i];
+        //}
+
+
+        //std::sort(triples.begin(), triples.end(), 
+        //    [](auto& t1, auto& t2)
+        //    {
+        //        return t1.row < t2.row;
+        //    }
+        //);
+
+        //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done mirror\n"));
+        //FLUSH_WAIT(1.0);
+
+        //for (int i = 0; i < nnz; i++) {
+        //    row_h(i) = static_cast<KIT>(triples[i].row);
+        //    col_h(i) = static_cast<KIT>(triples[i].col);
+        //    val_h(i) = static_cast<VT>(triples[i].val);
+        //}
+
+        //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done loop\n"));
+        //FLUSH_WAIT(1.0);
+
+        //Kokkos::deep_copy(row_d, row_h);
+        //Kokkos::deep_copy(col_d, col_h);
+        //Kokkos::deep_copy(val_d, val_h);
+
+        //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done copy\n"));
+        //FLUSH_WAIT(1.0);
 
         // --- Step 1: COO → CSR (row-major) ---
-        auto csr = KokkosSparse::coo2crs(dcoo->coo->nrows, dcoo->coo->ncols, row_d, col_d, val_d);
+        auto csr = coo_to_kokkos_crs(coo);
 
         // --- Step 2: Decide layout ---
         if (T == MajorDim::ROWS) {
@@ -183,15 +238,15 @@ namespace KokkosWrap {
             return(mmio_csx->ncols); // Put +1 here?
     }
 
-    using ordinal_view_t = Kokkos::View<int32_t*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-    using values_view_t  = Kokkos::View<float*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-
     template <typename KIT, typename DIT, typename VT>
     LocalMatrix<KIT,DIT,VT>::LocalMatrix() : storage(), initialized(false) {}
 
     template <typename KIT, typename DIT, typename VT>
     LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSX<DIT, VT>* mmio_csx) : initialized(true)
     {
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
         // TODO check KIT == DIT or find a way to a static cast
         if (mmio_csx->majordim == MajorDim::ROWS) {
             ordinal_view_t rowmap(mmio_csx->ptr_vec, mmio_csx->nrows + 1);
@@ -289,7 +344,5 @@ namespace KokkosWrap {
         }
     }
 
-    template struct DistribuitedMatrix<int32_t, uint32_t, double>;
-    template struct DistribuitedMatrix<int32_t, uint32_t, float>;
 }
 

@@ -25,11 +25,11 @@ struct Triple
 
 
 template <typename IT, typename VT>
-typename KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz,
+typename KokkosTypes<IT, VT>::CrsMatrix csr_to_kokkos_crs(const IT nrows, const IT ncols, const IT nnz,
                                                    VT * d_vals, IT * d_colinds, IT * d_rowptrs)
 {
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
-    KokkosCRS * crs_mat = new KokkosCRS(
+    KokkosCRS crs_mat (
             "A", 
             nrows, 
             ncols, 
@@ -46,7 +46,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix * csr_to_kokkos_crs(const IT nrows, cons
 
 
 template <typename IT, typename VT>
-typename KokkosTypes<IT, VT>::CrsMatrix * coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
+typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
 {
     using Tr = Triple<IT, VT>;
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;

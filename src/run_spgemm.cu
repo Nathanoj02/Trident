@@ -1,20 +1,45 @@
 #include "hns_spgemm.cuh"
 #include "test_utils.cuh"
 #include <ccutils/timers.h>
+#include <Kokkos_Core.hpp>
 
-
+#define PRINT_MYDEV { \
+    int dev; \
+    cudaError_t err = cudaGetDevice(&dev); \
+    if (err == cudaSuccess) { \
+        printf("[%d] Rank %d is currently on CUDA device %d\n", __LINE__, world_rank, dev); \
+    } else { \
+        printf("cudaGetDevice failed: %s\n", cudaGetErrorString(err)); \
+    } \
+}
 
 int main(int argc, char ** argv)
 {
+    Kokkos::initialize(argc, argv);
+    {
+
+    const char* env = std::getenv("SLURM_LOCALID");
+    int slurm_local_id = (env != nullptr) ? std::atoi(env) : 0;
+
+    int numDevices;
+    cudaError_t err = cudaGetDeviceCount(&numDevices);
+    int mydev = slurm_local_id % numDevices;
+                err = cudaSetDevice(mydev);
 
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
+    int dev;
+    err = cudaGetDevice(&dev);
 
     int world_size;
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    fprintf(stdout, "slurm_local_id %d become world_rank %d assigned device %d\n", slurm_local_id, world_rank, dev);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    MPI_Barrier(MPI_COMM_WORLD);
 
     if (world_rank==0)
     {
@@ -79,7 +104,6 @@ int main(int argc, char ** argv)
 
     cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
     // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
-    Kokkos::initialize(argc, argv);
 
 
     // Some prints
@@ -90,31 +114,32 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
       std::cout << "Number of processes per col: "  << nproccols     << std::endl;
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
+      std::cout << "Spcomm enabled: " << config->spcomm << " (when enabled, A becomes a CSC)" << std::endl;
     }
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
     {
-        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning conversion\n"));
+        if (world_rank==0) printf("Beginning conversion\n");
         fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
 
-        dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_A);
-        dmmio::partitioning::indextransform::transformCoo::global2group(dcoo_B);
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, mmio::MajorDim::COLS);
+        mmio::MajorDim A_maj = (config->spcomm) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
+        //dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_A);
+        //dmmio::partitioning::indextransform::transformCoo::global2local(dcoo_B);
+        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, A_maj);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
 
-        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done conversion\n"));
+        if (world_rank==0)  printf("Done conversion\n");
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
         CPU_TIMER_DEF(spgemm);
-
-        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning spgemm computations\n"));
-        for (int i=0; i<50; i++)
+        if (world_rank==0) printf("Beginning spgemm\n");
+        for (int i=0; i<50; i++) 
         {
             CPU_TIMER_START(spgemm);
-            // DistCSR<int32_t, float> * dist_C = hns_spgemm_main(dist_A, dist_B);
             mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
             CPU_TIMER_STOP(spgemm);
             if (world_rank==0)
@@ -123,18 +148,16 @@ int main(int argc, char ** argv)
             }
             delete dist_C;
         }
-        MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Done spgemm computations\n"));
-
-        // delete dist_A;
-        // delete dist_B;
+        if (world_rank==0) printf("Done spgemm\n");
     }
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
-    Kokkos::finalize();
     fclose(logfile);
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
+    }
+    Kokkos::finalize();
 }

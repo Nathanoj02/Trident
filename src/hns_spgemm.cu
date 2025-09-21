@@ -2,6 +2,10 @@
 
 MPIDataTypeCache mpidtc; //fix linker error
 
+//#ifdef PTR_CHECK
+int here_iteration = 0;
+//#endif
+
 template <typename IT, typename VT>
 void comm_thread_loop2(MessageQueue<int>& A_queue, TileHolder<IT, VT>& A_holder, typename KokkosTypes<IT, VT>::CrsMatrix * A_csr, 
                        MessageQueue<int>& B_queue, TileHolder<IT, VT>& B_holder, typename KokkosTypes<IT, VT>::CrsMatrix * B_csr)
@@ -53,11 +57,13 @@ void comm_thread_loop2(MessageQueue<int>& A_queue, TileHolder<IT, VT>& A_holder,
 
 }
 
+
 template <typename IT, typename VT>
 void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, typename KokkosTypes<IT, VT>::CrsMatrix * csr)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
 
     while (true)
     {
@@ -87,6 +93,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+
+    IT ptrsize = (csx->majordim == mmio::ROWS) ? (csx->nrows) : (csx->ncols) ;
     while (true)
     {
         // Wait until someone tells me to send them a tile
@@ -98,9 +106,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
             return;
         }
 
-
         // Put tile on remote process
-        IT ptrsize = (csx->majordim == mmio::ROWS) ? (csx->nrows) : (csx->ncols) ;
         holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -108,187 +114,11 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
     }
 
+
 }
 
-
 template <typename IT, typename VT>
-DistCSR<IT, VT> * hns_spgemm_main(DistCSR<IT, VT> * dist_A, DistCSR<IT, VT> * dist_B)
-{
-    // Type aliases
-    using LocalCSR = typename DistCSR<IT, VT>::LocalCSR;
-
-
-    // Matrix bookeeping
-    IT A_local_nnz = dist_A->csr->nnz();
-    IT A_local_nrows = dist_A->csr->numRows();
-    IT A_local_ncols = dist_A->csr->numCols();
-
-    IT B_local_nnz = dist_B->csr->nnz();
-    IT B_local_nrows = dist_B->csr->numRows();
-    IT B_local_ncols = dist_B->csr->numCols();
-
-
-    // Process grid info
-    dmmio::ProcessGrid * grid = dist_A->partitioning->grid;
-    // TODO: check both grids are the same 
-    dmmio::utils::ProcessGrid_graph(grid, stdout);
-    MPI_Barrier(MPI_COMM_WORLD);
-    int node_size = grid->node_size; // NOTE: every grid must have the same node size!!
-    int common_grid_size = dist_A->partitioning->grid->row_size; // == dcoo_B->partitioning->grid->col_size
-                                                
-
-    // Indices of tiles to fetch from each communicator
-    int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stragger left
-    int rowBtoGet = (grid->col_rank + grid->row_rank) % common_grid_size; // Stragger down
-
-
-    // Number of iterations 
-    const int n_iters = dist_A->partitioning->grid->row_size; // This must be equal to dcoo_B->partitioning->grid->col_size
-
-
-    // Message queue setup -- these will contain indices of the processes that request tiles of A and tiles of B
-    MessageQueue<int> A_queue(n_iters, grid->row_comm); 
-    MessageQueue<int> B_queue(n_iters, grid->col_comm); 
-
-
-    // Get max nnz for A and B tiles 
-    uint64_t A_max_nnz = (uint64_t)dist_A->csr->nnz(); // have to cast, since MPI_MAX won't work on MPIType<IT>()
-    MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->row_comm);
-
-    uint64_t B_max_nnz = (uint64_t)dist_B->csr->nnz();
-    MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
-
-
-    // Tile holders for A and B -- these are buffers that remote processes will write tiles to
-    TileHolder<IT, VT> A_holder(dist_A->partitioning->local_rows, (IT)A_max_nnz*1.5, grid->row_comm);
-    TileHolder<IT, VT> B_holder(dist_B->partitioning->local_rows, (IT)B_max_nnz*1.5, grid->col_comm);
-
-
-#ifdef SPCOMM
-    //TODO: Transpose my local tile of A if spcomm
-#endif
-
-
-    // Local C
-    LocalCSR * C_local = new LocalCSR();
-
-#if DEBUG_MAIN
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Launching threads\n"));
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
-
-    // Launch comm threads
-    std::thread A_comm_thread(comm_thread_loop<IT, VT>, 
-                            std::ref(A_queue), std::ref(A_holder), dist_A->csr);
-    std::thread B_comm_thread(comm_thread_loop<IT, VT>, 
-                            std::ref(B_queue), std::ref(B_holder), dist_B->csr);
-
-#if DEBUG_MAIN
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
-
-    int* row_rank = new int(grid->row_rank);
-    int* col_rank = new int(grid->col_rank);
-
-    for (int iter = 0; iter < n_iters; iter++)
-    {
-
-
-#if DEBUG_MAIN
-        int A_owner_global = colAtoGet*node_size + *col_rank * (node_size * grid->row_size) + grid->node_rank;
-        int B_owner_global = rowBtoGet*(node_size*grid->row_size);
-        fprintf(stdout, "Iteration %d -- Rank %d asking for tile of A from %d and tile of B from %d\n", iter, grid->global_rank, 
-                A_owner_global, 
-                B_owner_global);
-        FLUSH_WAIT(1.0);
-#endif
-
-        // Tell target I'm ready for tiles of A and B
-        A_queue.notify(row_rank, colAtoGet, iter);
-        B_queue.notify(col_rank, rowBtoGet, iter);
-
-
-        // Wait until I've been sent A and B
-        IT A_tile_nnz = A_holder.wait(colAtoGet);
-        IT B_tile_nnz = B_holder.wait(rowBtoGet);
-
-#if DEBUG_MAIN
-        fprintf(stdout, "Rank %d received tiles for iteration %d\n", grid->global_rank, iter);
-        FLUSH_WAIT(1.0);
-#endif
-
-
-        // Create Kokkos CRS instances for local multiplication
-        LocalCSR * A_remote = A_holder.form_tile(A_local_nrows, A_local_ncols, A_tile_nnz);
-
-
-        // Allgatherv of B
-        LocalCSR * B_node = B_holder.node_allgather_tiles(B_local_nrows, B_local_ncols, B_tile_nnz, grid);
-
-
-        // Local multiply
-#if DEBUG_MAIN
-        fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
-#endif
-
-        kokkos_spgemm<IT, VT>(*A_remote, *B_node, *C_local); 
-
-
-        // Round shift
-        colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
-        rowBtoGet = (rowBtoGet + 1) % common_grid_size; // ShiftDown
-                                                        
-
-        // Cleanup
-       
-        // Do not free underlying storage of A_remote, since it's the same as is used for A_holder
-        delete A_remote;
-
-        // B_node underlying storage must be manually freed because its views are unmanaged
-        CUDA_FREE_SAFE(B_node->values.data());
-        CUDA_FREE_SAFE(B_node->graph.entries.data());
-        CUDA_FREE_SAFE((void*)B_node->graph.row_map.data());
-        delete B_node;
-        //MPI_Barrier(MPI_COMM_WORLD);
-
-#ifdef BULK_SYNC
-        MPI_Barrier(MPI_COMM_WORLD);
-#endif
-    }
-
-#if DEBUG_MAIN
-    fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
-    FLUSH_WAIT(1.0);
-#endif
-
-    A_comm_thread.join();
-    B_comm_thread.join();
-
-
-#if DEBUG_MAIN
-    fprintf(stdout, "Main loop complete for rank %d\n", grid->global_rank);
-    FLUSH_WAIT(1.0);
-#endif
-
-    MPI_Barrier(MPI_COMM_WORLD);
-    int64_t nnz_global = (int64_t)C_local->nnz();
-    MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
-
-    if (grid->global_rank==0)
-    {
-        std::cout<<"NNZ C: "<<nnz_global<<std::endl;
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-
-
-    return new DistCSR<IT, VT>{C_local, dist_A->partitioning};
-}
-
-template DistCSR<int32_t, float> * hns_spgemm_main(DistCSR<int32_t, float> * dist_A, DistCSR<int32_t, float> * dist_B) ;
-
-template <typename IT, typename VT>
-mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kwd_B)
+mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B)
 {
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
@@ -348,7 +178,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
 
     int* row_rank = new int(grid->row_rank);
     int* col_rank = new int(grid->col_rank);
-
+#ifdef DETAILED_TIMERS
+    CUDA_TIMER_DEF(comm_wait)
+    CUDA_TIMER_DEF(data_proc)
+    CUDA_TIMER_DEF(comp_time)
+#endif
     for (int iter = 0; iter < n_iters; iter++)
     {
 
@@ -366,31 +200,76 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
-
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(comm_wait)
+#endif
         // Wait until I've been sent A and B
         IT A_tile_nnz = A_holder.wait(colAtoGet);
         IT B_tile_nnz = B_holder.wait(rowBtoGet);
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(comm_wait)
+#endif
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d received tiles for iteration %d\n", grid->global_rank, iter);
         FLUSH_WAIT(1.0);
 #endif
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(data_proc)
+#endif
+
+#ifdef VERBOSE
+        fflush(stdout);
+        fprintf(stdout, "rank %d: expected A (%dx%d) * expected B (%dx%d)\n", grid->global_rank,
+                                                            kwd_A.getLocalNrows(), kwd_A.getLocalNcols(),
+                                                            kwd_B.partitioning->group_rows, kwd_B.partitioning->group_cols);
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.getLocalNrows(), kwd_A.getLocalNcols(), A_tile_nnz, mmio::MajorDim::COLS));
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.getLocalNrows(), kwd_B.getLocalNcols(), B_tile_nnz, grid));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
 
+#ifdef VERBOSE
+        fprintf(stdout, "rank %d: A_remote (%dx%d) * B_node (%dx%d)\n", grid->global_rank,
+                                                            A_remote.storage.numRows(), A_remote.storage.numCols(),
+                                                            B_node.storage.numRows(),   B_node.storage.numCols());
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(data_proc)
+#endif
 
         // Local multiply
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
 #endif
 
+
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(comp_time)
+#endif
+
         // This perform C_local += A_remote * B_node
         KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(comp_time)
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", grid->global_rank);
+        // TIMER_PRINT_WPREFIX(comm_wait, tmpstr)
+        // TIMER_PRINT_WPREFIX(data_proc, tmpstr)
+        // TIMER_PRINT_WPREFIX(comp_time, tmpstr)
+        ccutils_timers::print_stats(__timer_vals_comm_wait, "comm_wait", tmpstr);  // TMP FIX
+        ccutils_timers::print_stats(__timer_vals_data_proc, "data_proc", tmpstr);  // TMP FIX
+        ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
+#endif
 
         // Round shift
         colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
@@ -398,14 +277,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
 
 
         // Cleanup
-
-        // Do not free underlying storage of A_remote, since it's the same as is used for A_holder
-        // delete A_remote; // NOTE: this is menaged by the ~LocalMatrix() decostructor
-
         // B_node underlying storage must be manually freed because its views are unmanaged
         B_node.freeBuffers();
-        // delete B_node; // NOTE: this is menaged by the ~LocalMatrix() decostructor
-        //MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
@@ -440,4 +314,4 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT> kwd_A, KWrapDMat<IT, VT> kw
     return(out);
 }
 
-template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float> kwd_A, KWrapDMat<int32_t, float> kwd_B);
+template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B);

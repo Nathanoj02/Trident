@@ -4,6 +4,38 @@
 
 #define DEBUG_HOLDER 0
 
+//#define PTR_CHECK
+
+#define CHECK_PTR(PT, IT) {  \
+    if (PT == nullptr) {  \
+        std::cerr << "Process " << world_rank << ", " << __func__ << ":" << __LINE__ << "nullptr\n";  \
+    } else {  \
+        CUmemorytype memType;  \
+        CUresult res = cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(PT));  \
+        if (res != CUDA_SUCCESS) {  \
+            int world_rank;  \
+            const char* errName = nullptr;  \
+            cuGetErrorName(res, &errName);  \
+            MPI_Comm_rank(MPI_COMM_WORLD, &world_rank); \
+            std::cerr << "Process " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ <<  \
+                    " --- Error code: " << res << ", name: " << (errName ? errName : "Unknown") << "\n";  \
+        } else { \
+            std::string memStr; \
+            switch (memType) { \
+                case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break; \
+                case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break; \
+                case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break; \
+                default:                   memStr = "UNKNOWN"; break; \
+            } \
+            if (memType != CU_MEMORYTYPE_DEVICE) std::cerr << "Pointer is not from device, memory type: " << memStr << "\n"; \
+            else std::cout << "Pointer of proc " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ << " is fine\n"; \
+        } \
+    }  \
+}
+
+#ifdef PTR_CHECK
+extern int here_iteration;
+#endif
 
 template <typename IT, typename VT>
 struct TileHolder
@@ -39,6 +71,13 @@ struct TileHolder
 
     void put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target)
     {
+
+#ifdef PTR_CHECK
+        CHECK_PTR(d_vals, here_iteration)
+        CHECK_PTR(d_inds, here_iteration)
+        CHECK_PTR(d_ptrs, here_iteration)
+        here_iteration++;
+#endif
 
         // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
         MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
@@ -182,6 +221,12 @@ struct TileHolder
         IT * d_node_colinds, * d_node_rowptrs;
         int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
 
+#ifdef PTR_CHECK
+        CHECK_PTR(d_node_vals, here_iteration)
+        CHECK_PTR(d_node_colinds, here_iteration)
+        CHECK_PTR(d_node_rowptrs, here_iteration)
+	here_iteration++;
+#endif
         // Done
         return form_tile(total_nrows, ncols, total_nnz,
                          d_node_vals, d_node_colinds, d_node_rowptrs);
@@ -194,6 +239,12 @@ struct TileHolder
         IT * d_node_colinds, * d_node_rowptrs;
         int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
 
+#ifdef PTR_CHECK
+        CHECK_PTR(d_node_vals, here_iteration)
+        CHECK_PTR(d_node_colinds, here_iteration)
+        CHECK_PTR(d_node_rowptrs, here_iteration)
+        here_iteration++;
+#endif
         // Done
         return form_mmiocsx(total_nrows, ncols, total_nnz, mmio::MajorDim::ROWS,
                             d_node_vals, d_node_colinds, d_node_rowptrs);
