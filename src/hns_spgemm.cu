@@ -108,8 +108,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #ifdef DETAILED_TIMERS
     CUDA_TIMER_DEF(comm_wait)
-    CUDA_TIMER_DEF(data_proc)
     CUDA_TIMER_DEF(comp_time)
+    CUDA_TIMER_DEF(data_proc_A)
+    CUDA_TIMER_DEF(data_proc_B)
 #endif
 
 
@@ -150,10 +151,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         FLUSH_WAIT(1.0);
 #endif
 
-#ifdef DETAILED_TIMERS
-        CUDA_TIMER_START_DEFAULT(data_proc)
-#endif
-
 #ifdef VERBOSE
         fflush(stdout);
         fprintf(stdout, "rank %d: expected A (%dx%d) * expected B (%dx%d)\n", grid->global_rank,
@@ -166,9 +163,21 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(data_proc_A)
+#endif
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(handle, A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(data_proc_A)
+#endif
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(data_proc_B)
+#endif
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(data_proc_B)
+#endif
 
 #ifdef VERBOSE
         fprintf(stdout, "rank %d: A_remote (%dx%d) * B_node (%dx%d)\n", grid->global_rank,
@@ -176,10 +185,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
                                                             B_node.storage.numRows(),   B_node.storage.numCols());
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
-#endif
-
-#ifdef DETAILED_TIMERS
-        CUDA_TIMER_STOP(data_proc)
 #endif
 
         // Local multiply
@@ -197,11 +202,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comp_time)
-        char tmpstr[100];
-        sprintf(tmpstr, "[process %d]", grid->global_rank);
-        ccutils_timers::print_stats(__timer_vals_comm_wait, "comm_wait", tmpstr);  // TMP FIX
-        ccutils_timers::print_stats(__timer_vals_data_proc, "data_proc", tmpstr);  // TMP FIX
-        ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
 #endif
 
         // Round shift
@@ -222,6 +222,15 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
+
+#ifdef DETAILED_TIMERS
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", grid->global_rank);
+    ccutils_timers::print_stats(__timer_vals_comm_wait, "comm_wait", tmpstr);  // TMP FIX
+    ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
+    ccutils_timers::print_stats(__timer_vals_data_proc_A, "data_proc_A", tmpstr);  // TMP FIX
+    ccutils_timers::print_stats(__timer_vals_data_proc_B, "data_proc_B", tmpstr);  // TMP FIX
+#endif
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
