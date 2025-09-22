@@ -74,7 +74,7 @@ endmacro()
 # TESTS
 add_test(test_queue)
 add_test(test_kokkos)
-
+add_test(test_compression)
 
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
