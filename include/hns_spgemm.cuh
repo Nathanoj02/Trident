@@ -4,7 +4,7 @@
 #include "tile_holder.cuh"
 #include "kokkos_helpers.cuh"
 
-#include <KokkosWrap_tmpfix.hpp>
+#include "KokkosWrap.hpp"
 #include <ccutils/cuda/cuda_timers.h>
 
 #define DEBUG_MAIN 0

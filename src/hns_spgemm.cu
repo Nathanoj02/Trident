@@ -7,87 +7,6 @@ int here_iteration = 0;
 //#endif
 
 template <typename IT, typename VT>
-void comm_thread_loop2(MessageQueue<int>& A_queue, TileHolder<IT, VT>& A_holder, typename KokkosTypes<IT, VT>::CrsMatrix * A_csr, 
-                       MessageQueue<int>& B_queue, TileHolder<IT, VT>& B_holder, typename KokkosTypes<IT, VT>::CrsMatrix * B_csr)
-{
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-    while (true)
-    {
-
-        // Notify remote processes of any tile needs
-        A_queue.poll_notify();
-        B_queue.poll_notify();
-
-
-        // See if someone tells me to send them a tile
-        int Atarget = A_queue.poll();
-
-
-        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
-        if (Atarget >= 0)
-        {
-            // Put tile on remote process
-            A_holder.put_tile(A_csr->values.data(), A_csr->graph.entries.data(), (int32_t*)A_csr->graph.row_map.data(), 
-                              A_csr->nnz(), A_csr->numRows(), Atarget);
-        }
-
-
-        // See if someone tells me to send them a tile
-        int Btarget = B_queue.poll();
-
-
-        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
-        if (Btarget >= 0)
-        {
-            // Put tile on remote process
-            B_holder.put_tile(B_csr->values.data(), B_csr->graph.entries.data(), (int32_t*)B_csr->graph.row_map.data(), 
-                              B_csr->nnz(), B_csr->numRows(), Btarget);
-        }
-
-
-        // Return 
-        if (A_queue.done() && B_queue.done())
-        {
-            return;
-        }
-
-    }
-
-}
-
-
-template <typename IT, typename VT>
-void comm_thread_loop(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, typename KokkosTypes<IT, VT>::CrsMatrix * csr)
-{
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-
-    while (true)
-    {
-        // Wait until someone tells me to send them a tile
-        int target = queue.wait();
-
-        // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
-        if (target == -2)
-        {
-            return;
-        }
-
-
-        // Put tile on remote process
-        holder.put_tile(csr->values.data(), csr->graph.entries.data(), (int32_t*)csr->graph.row_map.data(), csr->nnz(), csr->numRows(), target);
-#if DEBUG_MAIN
-        fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
-        FLUSH_WAIT(1.0);
-#endif
-    }
-
-}
-
-template <typename IT, typename VT>
 void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx)
 {
     int rank;
@@ -122,13 +41,17 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 {
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
-    // TODO: check both grids are the same
-
     int node_size        = grid->node_size;                     // NOTE: every grid must have the same node size!!
     int common_grid_size = kwd_A.partitioning->grid->row_size; // This must be equal to kwd_B->...->col_size
 
+
     // Number of iterations (i.e. number of tile to fetch to complete the global SpGEMM)
     const int n_iters = common_grid_size;
+
+
+    // Are we using spcomm?
+    bool spcomm = (kwd_A.mmio_csx->majordim == mmio::MajorDim::COLS);
+
 
     // Indices of tiles to fetch in the first iteration from each communicator
     int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stragger left
@@ -153,9 +76,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
 
 
-#ifdef SPCOMM
-    //TODO: Transpose my local tile of A if spcomm
-#endif
+    // cusparse handle
+    cusparseHandle_t handle;
+    CUSPARSE_CHECK(cusparseCreate(&handle));
+
 
     // Local C tile to accumulate the result (during each iter: C += A*B)
     KokkosWrap::LocalMatrix<int32_t, int32_t, float> C_local;
@@ -176,13 +100,20 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
 
+
+    // Row and column rank 
     int* row_rank = new int(grid->row_rank);
     int* col_rank = new int(grid->col_rank);
+
+
 #ifdef DETAILED_TIMERS
     CUDA_TIMER_DEF(comm_wait)
     CUDA_TIMER_DEF(data_proc)
     CUDA_TIMER_DEF(comp_time)
 #endif
+
+
+    // Main loop
     for (int iter = 0; iter < n_iters; iter++)
     {
 
@@ -200,12 +131,16 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(comm_wait)
 #endif
+
         // Wait until I've been sent A and B
         IT A_tile_nnz = A_holder.wait(colAtoGet);
         IT B_tile_nnz = B_holder.wait(rowBtoGet);
+
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comm_wait)
 #endif
@@ -231,8 +166,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(handle, A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+
 
 #ifdef VERBOSE
         fprintf(stdout, "rank %d: A_remote (%dx%d) * B_node (%dx%d)\n", grid->global_rank,
@@ -263,9 +199,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         CUDA_TIMER_STOP(comp_time)
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", grid->global_rank);
-        // TIMER_PRINT_WPREFIX(comm_wait, tmpstr)
-        // TIMER_PRINT_WPREFIX(data_proc, tmpstr)
-        // TIMER_PRINT_WPREFIX(comp_time, tmpstr)
         ccutils_timers::print_stats(__timer_vals_comm_wait, "comm_wait", tmpstr);  // TMP FIX
         ccutils_timers::print_stats(__timer_vals_data_proc, "data_proc", tmpstr);  // TMP FIX
         ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
@@ -279,6 +212,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // Cleanup
         // B_node underlying storage must be manually freed because its views are unmanaged
         B_node.freeBuffers();
+        if (spcomm)
+        {
+            A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
+        }
         MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef BULK_SYNC
@@ -303,12 +240,15 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MPI_Barrier(MPI_COMM_WORLD);
     int64_t nnz_global = (int64_t)C_local.storage.nnz();
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
-
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_global<<std::endl;
     }
     MPI_Barrier(MPI_COMM_WORLD);
+
+
+    CUSPARSE_CHECK(cusparseDestroy(handle));
+
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
     return(out);

@@ -22,6 +22,7 @@ find_package(Kokkos REQUIRED)
 find_package(KokkosKernels REQUIRED)
 
 
+
 # ADD INCLUDE DIRECTORY
 include_directories(include)
 
@@ -52,6 +53,7 @@ endif()
 # THREADS
 find_package(Threads REQUIRED)
 
+
 # CUDA FLAGS
 set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC -O3")
 
@@ -59,23 +61,25 @@ set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC -O3")
 # MAIN HNS_SPGEMM LIBRARY
 add_library(hns_spgemm
             src/hns_spgemm.cu)
-target_link_libraries(hns_spgemm PUBLIC MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads)
+target_link_libraries(hns_spgemm PUBLIC MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
 
 
 # MACRO FOR ADDING TESTS
 macro(add_test name)
     add_executable(${name} test/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
 endmacro()
+
 
 # TESTS
 add_test(test_queue)
 add_test(test_kokkos)
 
+
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
     add_executable(${name} src/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads)
+    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
     #target_compile_options(${name} PRIVATE -O3 -Wall)
 endmacro()
 

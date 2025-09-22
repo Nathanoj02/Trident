@@ -199,7 +199,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     //FLUSH_WAIT(1.0);
 
     // Now, copy buffers to the device
-    IT * d_colptrs = d2h_copy(colptrs.data(), coo->nrows + 1);
+    IT * d_colptrs = d2h_copy(colptrs.data(), coo->ncols + 1);
     IT * d_rowinds = d2h_copy(rowinds.data(), coo->nnz);
     VT * d_vals = d2h_copy(vals.data(), coo->nnz);
 
@@ -211,37 +211,6 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     return csc_to_kokkos_ccs(coo->nrows, coo->ncols, coo->nnz, d_vals, d_rowinds, d_colptrs);
 }
 
-template <typename IT, typename VT>
-void kokkos_spgemm(typename KokkosTypes<IT, VT>::CrsMatrix& A, typename KokkosTypes<IT, VT>::CrsMatrix& B, typename KokkosTypes<IT, VT>::CrsMatrix& C)
-{
-
-    using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix ;
-
-    // First, spgemm
-    LocalCSR C_new = KokkosSparse::spgemm<LocalCSR, LocalCSR, LocalCSR>(A, false, B, false);
-
-    if (C.numRows() == 0)
-    {
-        C = std::move(C_new);
-        return;
-    }
-
-    // Now, accumulate
-    // TODO: move this outside?
-    using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle
-        <IT, IT, VT, Kokkos::Cuda, Kokkos::CudaSpace, Kokkos::CudaSpace>;
-    KernelHandle spadd_handle;
-    spadd_handle.create_spadd_handle();
-
-    LocalCSR C_accum;
-    KokkosSparse::spadd_symbolic<KernelHandle, LocalCSR, LocalCSR, LocalCSR>(&spadd_handle, C, C_new, C_accum);
-    KokkosSparse::spadd_numeric<KernelHandle, VT, LocalCSR, VT, LocalCSR, LocalCSR>(&spadd_handle, VT(1), C, VT(1), C_new, C_accum);
-
-    spadd_handle.destroy_spadd_handle();
-    Kokkos::fence();
-
-    C = std::move(C_accum);
-}
 
 
 

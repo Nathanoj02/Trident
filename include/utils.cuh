@@ -1,5 +1,13 @@
 #pragma once
 #include "common.h"
+#define CUSPARSE_CHECK(call) do {                                    \
+    cusparseStatus_t err = call;                                     \
+    if (err != CUSPARSE_STATUS_SUCCESS) {                            \
+        fprintf(stderr, "cuSPARSE error in file '%s' in line %i : %s.\n", \
+                __FILE__, __LINE__, cusparseGetErrorString(err));    \
+        exit(EXIT_FAILURE);                                          \
+    }                                                                \
+} while(0)
 
 
 #define FLUSH_WAIT(s) \

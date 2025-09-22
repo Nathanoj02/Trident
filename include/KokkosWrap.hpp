@@ -1,35 +1,390 @@
-/*
-#ifndef KOKKOS_WRAP_H
-#define KOKKOS_WRAP_H
+#pragma once
 
+// KokkosWrap.hpp
 #include <dmmio/dmmio.h>
+#include <dmmio/partitioning.h>
+
+#include <variant>
+#include <cstdint>
+#include <memory>
 
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_CcsMatrix.hpp>
+#include <KokkosSparse_CooMatrix.hpp>
+#include <KokkosSparse_coo2crs.hpp>
+#include <KokkosSparse_crs2ccs.hpp>
+#include <KokkosSparse_ccs2crs.hpp>
+#include <KokkosSparse_spadd.hpp>
+
+#include <cusparse_v2.h>
+
+#include "kokkos_helpers.cuh"
+
+
+using MajorDim = mmio::MajorDim;
 
 namespace KokkosWrap {
-    enum class MajorDim {
-        ROWS, // i.e. CSR
-        COLS  // i.e. CSC
-    };
 
     template <typename KIT, typename DIT, typename VT>
-    struct Matrix {
+    struct DistribuitedMatrix {
         dmmio::Partitioning* partitioning;  // still raw pointer to external partitioning
-
         // Instead of a raw union, use std::variant for safety
         std::variant<
             KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>,
             KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>
         > storage;
 
-        MajorDim layout;  // which one we actually hold
+        mmio::CSX<KIT, VT>* mmio_csx;
 
         // ---- Constructor ----
-        Matrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
+        DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T);
+
+        // ------ Methods ------
+        KIT getLocalNnz();
+        KIT getLocalNcols();
+        KIT getLocalNrows();
+        KIT getLocalPtrvecsize();
     };
+
+    template <typename KIT, typename DIT, typename VT>
+    struct LocalMatrix {
+
+        using KokkosCrs = KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
+        using KokkosCcs = KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
+
+        bool initialized;
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> storage;
+
+        // ---- Constructor ----
+        LocalMatrix();
+        LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx);
+        LocalMatrix(DIT nrows, DIT ncols, DIT nnz, DIT* ptrvec, DIT* idxvec, VT* values, MajorDim layout);
+
+        // In-place SpGEMM: C = C + A*B
+        static void sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C);
+
+        // Conversion
+        KokkosCrs csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * mmio_csx);
+
+        // Free memory & decostructor
+        void freeBuffers();
+        ~LocalMatrix();
+    };
+
+    // These two function are exposed temporary for the test_kokkos C matrix
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr);
+
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csc);
+
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr);
+
+    template <typename IT, typename VT>
+    struct Triple
+    {
+        IT row;
+        IT col;
+        VT val;
+    };
+
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr) {
+        //auto val_view     = kokkos_csr.values;
+        auto rowmap_view  = kokkos_csr.graph.row_map;
+        auto entries_view = kokkos_csr.graph.entries;
+
+        mmio::CSX<KIT, VT> *csx = (mmio::CSX<KIT, VT>*)malloc(sizeof(mmio::CSX<KIT, VT>));
+        csx->majordim = MajorDim::ROWS;
+        csx->nnz      = kokkos_csr.nnz();
+        csx->nrows    = kokkos_csr.numRows();
+        csx->ncols    = kokkos_csr.numCols();
+        csx->val      = kokkos_csr.values.data();
+        csx->ptr_vec  = const_cast<int32_t*>(rowmap_view.data());
+        csx->idx_vec  = const_cast<int32_t*>(entries_view.data());
+
+        return(csx);
+    }
+
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csc) {
+        auto val_view     = kokkos_csc.values;
+        auto colmap_view  = kokkos_csc.graph.col_map;
+        auto entries_view = kokkos_csc.graph.entries;
+
+        mmio::CSX<KIT, VT> *csx = (mmio::CSX<KIT, VT>*)malloc(sizeof(mmio::CSX<KIT, VT>));
+        csx->majordim = MajorDim::COLS;
+        csx->nnz      = kokkos_csc.nnz();
+        csx->nrows    = kokkos_csc.numRows();
+        csx->ncols    = kokkos_csc.numCols();
+        csx->val      = val_view.data();
+        csx->ptr_vec  = const_cast<int32_t*>(colmap_view.data());
+        csx->idx_vec  = const_cast<int32_t*>(entries_view.data());
+
+        return(csx);
+    }
+
+    template<typename KIT, typename VT>
+    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr) {
+        return(rawptr_get(kokkos_csr.storage));
+    }
+
+
+    template <typename IT, typename VT>
+    mmio::CSX<IT, VT> * csx_gen(IT nrows, IT ncols, IT nnz, IT* ptrvec, IT* idxvec, VT* values, MajorDim layout) {
+        using dmmiocsx = typename mmio::CSX<IT, VT>;
+        dmmiocsx *csx  = (dmmiocsx*)malloc(sizeof(dmmiocsx));
+
+        csx->majordim  = layout;
+        csx->nnz       = nnz;
+        csx->nrows     = nrows;
+        csx->ncols     = ncols;
+        csx->val       = values;
+        csx->ptr_vec   = ptrvec;
+        csx->idx_vec   = idxvec;
+
+        return(csx);
+    }
+
+
+    template <typename KIT, typename DIT, typename VT>
+    DistribuitedMatrix<KIT,DIT,VT>::DistribuitedMatrix(dmmio::DCOO<DIT, VT>* dcoo, MajorDim T)
+            : partitioning(dcoo->partitioning)
+    {
+        static_assert(std::is_same<KIT, DIT>::value);
+        using namespace dmmio::partitioning::indextransform;
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size) != 0)
+        {
+            dcoo->coo->nrows++;
+        }
+
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size) != 0)
+        {
+            dcoo->coo->ncols++;
+        }
+        KIT max_dim = max(dcoo->coo->ncols, dcoo->coo->nrows);
+        dcoo->coo->ncols = max_dim;
+        dcoo->coo->nrows = max_dim;
+        dcoo->coo->nrows /= (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size);
+        dcoo->coo->ncols /= dcoo->partitioning->grid->row_size;
+
+        for (KIT i=0; i<dcoo->coo->nnz; i++)
+        {
+            dcoo->coo->row[i] = global2local::row(dcoo->partitioning, dcoo->coo->row[i]);
+            dcoo->coo->col[i] = global2local::col(dcoo->partitioning, dcoo->coo->col[i]);
+        }
+
+        auto coo = dcoo->coo;
+
+        // --- Step 2: Decide layout ---
+        if (T == MajorDim::ROWS) {
+            auto csr  = coo_to_kokkos_crs(coo);
+            storage   = csr; // keep CSR
+            mmio_csx  = rawptr_get(csr);
+        } else {
+            auto csc  = coo_to_kokkos_ccs(coo);
+            storage   = csc; // store CSC
+            mmio_csx  = rawptr_get(csc);
+        }
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNnz()   { return(mmio_csx->nnz);   }
+
+    template <typename KIT, typename DIT, typename VT>
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNcols() { return(mmio_csx->ncols); }
+
+    template <typename KIT, typename DIT, typename VT>
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalNrows() { return(mmio_csx->nrows); }
+
+    template <typename KIT, typename DIT, typename VT>
+    KIT DistribuitedMatrix<KIT,DIT,VT>::getLocalPtrvecsize() {
+        if (mmio_csx->majordim == MajorDim::ROWS)
+            return(mmio_csx->nrows); // Put +1 here?
+        else
+            return(mmio_csx->ncols); // Put +1 here?
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix() : storage(), initialized(false) {}
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx) 
+        :initialized(true)
+    {
+        static_assert(std::is_same<KIT, DIT>::value);
+
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
+        // TODO check KIT == DIT or find a way to a static cast
+        if (mmio_csx->majordim == MajorDim::ROWS) {
+            ordinal_view_t rowmap(mmio_csx->ptr_vec, mmio_csx->nrows + 1);
+            ordinal_view_t colidx(mmio_csx->idx_vec, mmio_csx->nnz);
+            values_view_t  values(mmio_csx->val,     mmio_csx->nnz);
+
+            KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr("kokkos_csr",
+                                            mmio_csx->nrows, mmio_csx->ncols, mmio_csx->nnz,
+                                            values,
+                                            rowmap,
+                                            colidx
+            );
+
+            storage = kokkos_csr;
+        } else {
+            //ordinal_view_t colmap(mmio_csx->ptr_vec, mmio_csx->ncols + 1);
+            //ordinal_view_t rowidx(mmio_csx->idx_vec, mmio_csx->nnz);
+            //values_view_t  values(mmio_csx->val,     mmio_csx->nnz);
+
+            //KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc("kokkos_csc",
+            //                                mmio_csx->nrows, mmio_csx->ncols, mmio_csx->nnz,
+            //                                values,
+            //                                colmap,
+            //                                rowidx
+            //);
+
+
+            //storage = KokkosSparse::ccs2crs(kokkos_csc);
+            storage = csc_to_csr(handle, mmio_csx);
+
+        }
+    }
+
+
+    template <typename KIT, typename DIT, typename VT>
+    void LocalMatrix<KIT,DIT,VT>::freeBuffers() {
+        if (initialized) {
+            CUDA_FREE_SAFE((void*)storage.graph.row_map.data());
+            CUDA_FREE_SAFE((void*)storage.graph.entries.data());
+            CUDA_FREE_SAFE((void*)storage.values.data());
+            initialized = false;
+        }
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::~LocalMatrix() {
+        // Nothing — views are unmanaged, so Kokkos won't free them
+        // Assume the caller manages lifetime of ptr_vec, idx_vec, val
+    }
+
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(DIT nrows, DIT ncols, DIT nnz, DIT* ptrvec, DIT* idxvec, VT* values, MajorDim layout)
+    : LocalMatrix(csx_gen<DIT, VT>((nrows, ncols, nnz, ptrvec, idxvec, values, layout))) { }
+
+    template <typename KIT, typename DIT, typename VT>
+    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
+
+        using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
+        csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+
+        if (C.initialized == false) {
+            C.storage = product;
+            C.initialized = true;
+        } else {
+            csr_matrix_type accumulator;
+
+            // Create KokkosKernelHandle
+            using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
+                KokkosKernels::default_size_type, KIT, VT,
+                Kokkos::DefaultExecutionSpace,
+                typename Kokkos::DefaultExecutionSpace::memory_space,
+                typename Kokkos::DefaultExecutionSpace::memory_space>;
+
+
+            KernelHandle kh;
+            kh.create_spadd_handle(false);
+
+            KokkosSparse::spadd_symbolic(&kh, product, C.storage, accumulator);
+            KokkosSparse::spadd_numeric(&kh, 1.0, product, 1.0, C.storage, accumulator);
+            kh.destroy_spadd_handle();
+
+            C.storage = accumulator;
+        }
+    }
+
+
+    // Convert Kokkos CSC matrix to CRS matrix
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT, DIT, VT>::KokkosCrs LocalMatrix<KIT, DIT, VT>::csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * csc)
+    {
+        // Type aliases
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
+
+        // Variables
+        VT * d_vals = csc->val;
+        KIT * d_rowinds = csc->idx_vec;
+        KIT * d_colptrs = csc->ptr_vec;
+
+        auto nnz = csc->nnz;
+        auto nrows = csc->nrows;
+        auto ncols = csc->ncols;
+
+
+        // CSR pointers
+        VT * d_csr_vals;
+        KIT * d_colinds, * d_rowptrs;
+        CUDA_CHECK(cudaMalloc(&d_csr_vals, sizeof(VT) * nnz));
+        CUDA_CHECK(cudaMalloc(&d_colinds, sizeof(KIT) * nnz));
+        CUDA_CHECK(cudaMalloc(&d_rowptrs, sizeof(KIT) * (nrows + 1)));
+
+
+        // First, use cusparse to convert the csc pointers into raw CSR pointers
+        // cusparse does not have a csc->csr, it only has csr->csc
+        // we can trick it into doing csc->csr by pretending our csc
+        // is a transposed csr matrix
+        size_t buff_size = 0;
+        void * d_buff = nullptr;
+        CUSPARSE_CHECK(cusparseCsr2cscEx2_bufferSize(handle,
+                                                    ncols, nrows,
+                                                    nnz,
+                                                    d_vals,
+                                                    d_colptrs,
+                                                    d_rowinds,
+                                                    d_csr_vals,
+                                                    d_rowptrs,
+                                                    d_colinds,
+                                                    CUDA_R_32F,
+                                                    CUSPARSE_ACTION_NUMERIC,
+                                                    CUSPARSE_INDEX_BASE_ZERO,
+                                                    CUSPARSE_CSR2CSC_ALG_DEFAULT,
+                                                    &buff_size));
+        CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
+        CUSPARSE_CHECK(cusparseCsr2cscEx2(handle,
+                                        ncols, nrows,
+                                        nnz,
+                                        d_vals,
+                                        d_colptrs,
+                                        d_rowinds,
+                                        d_csr_vals,
+                                        d_rowptrs,
+                                        d_colinds,
+                                        CUDA_R_32F,
+                                        CUSPARSE_ACTION_NUMERIC,
+                                        CUSPARSE_INDEX_BASE_ZERO,
+                                        CUSPARSE_CSR2CSC_ALG_DEFAULT,
+                                        d_buff));
+
+        CUDA_FREE_SAFE(d_buff);
+
+
+        // Make the KokkosCRS matrix 
+        ordinal_view_t rowmap(d_rowptrs, nrows + 1);
+        ordinal_view_t colidx(d_colinds, nnz);
+        values_view_t  values(d_csr_vals, nnz);
+        typename LocalMatrix<KIT, DIT, VT>::KokkosCrs kokkos_csr("kokkos_csr",
+                                                        nrows, ncols, nnz,
+                                                        values,
+                                                        rowmap,
+                                                        colidx);
+
+        return kokkos_csr;
+    }
+
+
 }
 
-#endif // KOKKOS_WRAP_H
-*/
