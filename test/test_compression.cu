@@ -5,7 +5,12 @@
 #include <cub/device/device_segmented_reduce.cuh>
 #include <iostream>
 
-#define MASK_SIZE 4
+#include <cub/cub.cuh>
+
+#include <vector>
+#include <iomanip>
+
+#define MASK_SIZE 4   // set to 32 in production
 
 // A general function to compute result vector given a row/col pointer array
 thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>& ptr, int mask_size) {
@@ -92,54 +97,159 @@ thrust::device_vector<int> bitwise_and_transform(
     return d_out;
 }
 
+// -------------------
+// For the compression
+// -------------------
 
-// Functor that maps value -> index in segments
-struct SegmentLocator {
-    const int* s;   // pointer to search vector
-    int len;        // length of search vector
+void printCSRMatrix(const std::vector<int>& colIdx, const std::vector<int>& rowPtr) {
+    int nrows = rowPtr.size() - 1;
+    int ncols = 0;
 
-    SegmentLocator(const int* s_, int len_) : s(s_), len(len_) {}
+    // Find maximum column index to determine number of columns
+    for (int c : colIdx) {
+        if (c > ncols) ncols = c;
+    }
+    ncols += 1; // since indices start at 0
 
-    __device__ int operator()(int x) const {
-        // binary search for largest j with s[j] <= x
-        int lo = 0, hi = len;
-        while (lo < hi) {
-            int mid = (lo + hi) / 2;
-            if (s[mid] <= x) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+    for (int r = 0; r < nrows; r++) {
+        std::vector<char> row(ncols, '-');
+        for (int j = rowPtr[r]; j < rowPtr[r + 1]; j++) {
+            row[colIdx[j]] = '1';
         }
-        return lo -1 ; // index of segment
+        // Print row
+        for (int c = 0; c < ncols; c++) {
+            std::cout << row[c] << " ";
+        }
+        std::cout << "\n";
+    }
+}
+
+void printEntriesByRow(const thrust::host_vector<int>& colIdx,
+                       const thrust::host_vector<int>& rowPtr) {
+    int nrows = rowPtr.size() - 1;
+    for (int r = 0; r < nrows; r++) {
+        for (int j = rowPtr[r]; j < rowPtr[r + 1]; j++) {
+            std::cout << colIdx[j] << " ";
+        }
+        if (r < nrows - 1) std::cout << "| ";
+    }
+    std::cout << "\n";
+}
+
+struct KeepFlagByIndex
+{
+    const int* s;
+    int m;
+    const int* c;
+
+    __host__ __device__
+    KeepFlagByIndex(const int* s_, int m_, const int* c_)
+        : s(s_), m(m_), c(c_) {}
+
+    __device__ __forceinline__
+    int locate_segment_by_pos(int pos) const {
+        int low = 0, high = m;
+        while (low < high) {
+            int mid = (low + high) >> 1;
+            if (s[mid] <= pos) low = mid + 1;
+            else high = mid;
+        }
+        return low - 1;
+    }
+
+    __device__ __forceinline__
+    int operator()(int pos) const {
+        int seg = locate_segment_by_pos(pos);
+        if (seg < 0) return 0; // skip if out of range
+        int word = seg / MASK_SIZE;
+        int bit  = seg % MASK_SIZE;
+        return ((c[word] >> bit) & 1) ? 1 : 0;
     }
 };
 
-int tmp_test() {
-    // Search vector (segment boundaries)
-    thrust::device_vector<int> s{0, 0, 1, 4, 4, 10, 15};
-    // Input vector
-    thrust::device_vector<int> v{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    thrust::device_vector<int> r(v.size());
+int tmp_test1 () {
+    // Example input
+    thrust::host_vector<int> h_v{0,
+                                 1, 3, 7,
+                                 0, 1, 4, 7, 8, 10,
+                                 0, 2, 4, 6, 8,
+                                 1, 3, 5, 7, 9,
+                                 2, 8,
+                                 1, 5, 7,
+                                 0, 10
+    };
+    thrust::host_vector<int> h_s{0, 1, 4, 10, 15, 20, 22, 25, 27}; // 8 segments
+    thrust::host_vector<int> h_c(2); // 8 bits total (2 words * MASK_SIZE=4)
 
-    thrust::host_vector<int> h_s = s;
-    thrust::host_vector<int> h_v = v;
-    std::cout << "Search vector: ";
-    for (auto x : h_s) std::cout << x << " ";
-    std::cout << "\nInput vector: ";
-    for (auto x : h_v) std::cout << x << " ";
+    printCSRMatrix(std::vector<int>(h_v.begin(), h_v.end()),
+               std::vector<int>(h_s.begin(), h_s.end()));
+    printEntriesByRow(h_v, h_s);
+
+
+    // condition mask:
+    // let's enable segments {0,1,4,7} for fun
+    // word0 covers segments [0..3], word1 covers [4..7]
+    h_c[0] = (1 << 0) | (1 << 1);       // bits 0 and 1 set
+    h_c[1] = (1 << 0) | (1 << 3);       // bits 4 and 7 set
+
+    int n = h_v.size();
+    int m = h_s.size();
+
+    std::cout << "Input vector v: ";
+    for (int x : h_v) std::cout << x << " ";
+    std::cout << "\nSearch vector s: ";
+    for (int x : h_s) std::cout << x << " ";
+    std::cout << "\nBitmask vector c: ";
+    for (int x : h_c) std::cout << x << " ";
     std::cout << "\n";
 
-    // Apply transform
-    auto s_ptr = thrust::raw_pointer_cast(s.data());
-    thrust::transform(v.begin(), v.end(), r.begin(), SegmentLocator(s_ptr, s.size()));
+    // Copy to device
+    thrust::device_vector<int> d_v = h_v;
+    thrust::device_vector<int> d_s = h_s;
+    thrust::device_vector<int> d_c = h_c;
+    thrust::device_vector<int> d_out(n);
+    thrust::device_vector<int> d_num_selected(1);
 
-    // Copy back to host
-    thrust::host_vector<int> h_r = r;
-    std::cout << "Result: ";
-    for (auto x : h_r) std::cout << x << " ";
+    auto counting = thrust::make_counting_iterator<int>(0);
+    auto flags_it = thrust::make_transform_iterator(
+        counting,
+        KeepFlagByIndex(thrust::raw_pointer_cast(d_s.data()), m,
+                        thrust::raw_pointer_cast(d_c.data()))
+    );
+
+    // Temp storage
+    void* d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+
+    cub::DeviceSelect::Flagged(
+        d_temp_storage, temp_storage_bytes,
+        thrust::raw_pointer_cast(d_v.data()), // values
+        flags_it,                             // lazy flags
+        thrust::raw_pointer_cast(d_out.data()),
+        thrust::raw_pointer_cast(d_num_selected.data()),
+        n
+    );
+
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+    cub::DeviceSelect::Flagged(
+        d_temp_storage, temp_storage_bytes,
+        thrust::raw_pointer_cast(d_v.data()), // values
+        flags_it,                             // lazy flags
+        thrust::raw_pointer_cast(d_out.data()),
+        thrust::raw_pointer_cast(d_num_selected.data()),
+        n
+    );
+
+    // Copy results back
+    int num_selected = d_num_selected[0];
+    thrust::host_vector<int> h_out(d_out.begin(), d_out.begin() + num_selected);
+
+    std::cout << "Selected " << num_selected << " values:\n";
+    for (int x : h_out) std::cout << x << " ";
     std::cout << "\n";
 
+    cudaFree(d_temp_storage);
     return 0;
 }
 
@@ -175,7 +285,7 @@ int main() {
     std::cout << std::endl;
 
     std::cout << "----- Test for compression -----" << std::endl;
-    tmp_test();
+    tmp_test1();
 
     return 0;
 }
