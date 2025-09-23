@@ -194,6 +194,7 @@ struct TileHolder
         CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
         CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
         CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
         
 
         // Allgatherv each buffer
