@@ -100,7 +100,10 @@ int main(int argc, char ** argv)
         false, meta_B
     );
 
-    //cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
+    if (dcoo_A->partitioning->grid->node_size > 1)
+    {
+        cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
+    }
     // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
 
 
