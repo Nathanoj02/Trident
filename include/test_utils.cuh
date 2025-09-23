@@ -12,113 +12,11 @@ COUNTER_DEF(0);
 #define NUM_TRIALS 50
 
 
-enum ExperimentType
-{
-    BASELINE,
-    SPCOMM,
-    OVERLAP,
-    PETSC,
-    TRILINOS,
-    COMBBLAS,
-};
-
-ExperimentType strtoextype(const char * s)
-{
-    if (!strcmp(s, "baseline"))
-    {
-        return BASELINE;
-    }
-    if (!strcmp(s, "spcomm"))
-    {
-        return SPCOMM;
-    }
-    if (!strcmp(s, "overlap"))
-    {
-        return OVERLAP;
-    }
-    if (!strcmp(s, "petsc"))
-    {
-        return PETSC;
-    }
-    if (!strcmp(s, "trilinos"))
-    {
-        return TRILINOS;
-    }
-    if (!strcmp(s, "combblas"))
-    {
-        return COMBBLAS;
-    }
-    fprintf(stderr, "Error: %s is not a valid value for --type\n", s);
-    exit(EXIT_FAILURE);
-}
-
-enum spcomm_impl
-{
-    ALLGATHERV_ROWPTRS,
-    ALLGATHERV_NOROWPTRS,
-    ALLGATHERV_HYBRID,
-    ALLTOALLV_ROWPTRS,
-    ALLTOALLV_NOROWPTRS
-} typedef SpcommImpl;
-
-
-SpcommImpl strtoimpl(const char * str)
-{
-    if (!strcmp(str, "allgatherv_rowptrs"))
-    {
-        return ALLGATHERV_ROWPTRS;
-    }
-    if (!strcmp(str, "allgatherv_norowptrs"))
-    {
-        return ALLGATHERV_NOROWPTRS;
-    }
-    if (!strcmp(str, "allgatherv_hybrid"))
-    {
-        return ALLGATHERV_HYBRID;
-    }
-    if (!strcmp(str, "alltoallv_rowptrs"))
-    {
-        return ALLTOALLV_ROWPTRS;
-    }
-    if (!strcmp(str, "alltoallv_norowptrs"))
-    {
-        return ALLTOALLV_NOROWPTRS;
-    }
-    fprintf(stderr, "Error: %s is not a valid value for --impl\n", str);
-    exit(EXIT_FAILURE);
-}
-
-
-enum bfs_impl
-{
-    BFS_OURS,
-    BFS_TRILINOS
-} typedef BfsImpl;
-
-
-BfsImpl strtobfsimpl(const char * str)
-{
-    if (!strcmp(str, "ours"))
-    {
-        return BFS_OURS;
-    }
-    if (!strcmp(str, "trilinos"))
-    {
-        return BFS_TRILINOS;
-    }
-    fprintf(stderr, "Error: %s is not a valid value for --bfs_impl\n", str);
-    exit(EXIT_FAILURE);
-}
-
 
 struct config
 {
-    ExperimentType type;
-    const char * type_str;
-    bool do_check;
+    const char * impl;
     bool spcomm;
-    bool transpose_B;
-    int part_num;
 
     int nprocrows;
     int nproccols;
@@ -131,19 +29,6 @@ struct config
     const char * matpathB;
     const char * matpathC;
 
-    const char * file_suffix;
-
-    bool scramble;
-    SpcommImpl impl;
-
-    uint64_t d;
-    uint64_t seed;
-    BfsImpl bfs_impl;
-    const char * bfs_implstr;
-
-    float tol;
-    BfsImpl mcl_impl;
-    const char * mcl_implstr;
 
 } typedef Config;
 
@@ -183,14 +68,8 @@ char* extract_matrix_name(const char* filepath)
 
 void parse_args(int argc, char ** argv, Config * config)
 {
-    config->do_check = false;
-    config->part_num = 0;
     config->spcomm = false;
-    config->transpose_B = false;
-    config->file_suffix = "none";
-    config->type_str = "none";
-    config->scramble = false;
-
+    config->impl = "none";
     config->nprocrows = 1;
     config->nproccols = 1;
 
@@ -213,63 +92,16 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--matC"))
         {
             config->matpathC= argv[i+1];
-            config->do_check = true;
             config->matnameC = extract_matrix_name(config->matpathC);
         }
         else if (!strcmp(argname, "--spcomm"))
         {
             config->spcomm = true;
         }
-        else if (!strcmp(argname, "--type"))
-        {
-            config->type_str = argv[i+1];
-            config->type = strtoextype(argv[i+1]);
-        }
-        else if (!strcmp(argname, "--fsuffix"))
-        {
-            config->file_suffix = argv[i+1];
-        }
-        else if (!strcmp(argname, "--part"))
-        {
-            config->part_num = atoi(argv[i+1]);
-        }
         else if (!strcmp(argname, "--impl"))
         {
-            config->impl = strtoimpl(argv[i+1]);
+            config->impl = argv[i+1];
         }
-        else if (!strcmp(argname, "--transB"))
-        {
-            config->transpose_B = true;
-            inc = 1;
-        }
-        else if (!strcmp(argname, "--scramble"))
-        {
-            config->scramble = true;
-            inc = 1;
-        }
-        else if (!strcmp(argname, "--bfs_impl"))
-        {
-            config->bfs_implstr = argv[i+1];
-            config->bfs_impl = strtobfsimpl(argv[i+1]);
-        }
-        else if (!strcmp(argname, "--d"))
-        {
-            config->d = atoll(argv[i+1]);
-        }
-        else if (!strcmp(argname, "--seed"))
-        {
-            config->seed = atoll(argv[i+1]);
-        }
-        else if (!strcmp(argname, "--mcl_impl"))
-        {
-            config->mcl_implstr = argv[i+1];
-            config->mcl_impl = strtobfsimpl(argv[i+1]);
-        }
-        else if (!strcmp(argname, "--tol"))
-        {
-            config->tol = (float)atof(argv[i+1]);
-        }
-
         else if (!strcmp(argname, "--2D-pgrid"))
         {
             const char * grid_str = argv[i+1];

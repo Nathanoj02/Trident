@@ -59,6 +59,8 @@ namespace KokkosWrap {
         // ---- Constructor ----
         LocalMatrix();
         LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx);
+        LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr);
+        LocalMatrix(mmio::CSX<DIT, VT>* mmio_csx);
         LocalMatrix(DIT nrows, DIT ncols, DIT nnz, DIT* ptrvec, DIT* idxvec, VT* values, MajorDim layout);
 
         // In-place SpGEMM: C = C + A*B
@@ -236,22 +238,58 @@ namespace KokkosWrap {
 
             storage = kokkos_csr;
         } else {
-            //ordinal_view_t colmap(mmio_csx->ptr_vec, mmio_csx->ncols + 1);
-            //ordinal_view_t rowidx(mmio_csx->idx_vec, mmio_csx->nnz);
-            //values_view_t  values(mmio_csx->val,     mmio_csx->nnz);
-
-            //KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csc("kokkos_csc",
-            //                                mmio_csx->nrows, mmio_csx->ncols, mmio_csx->nnz,
-            //                                values,
-            //                                colmap,
-            //                                rowidx
-            //);
-
-
-            //storage = KokkosSparse::ccs2crs(kokkos_csc);
             storage = csc_to_csr(handle, mmio_csx);
-
         }
+    }
+
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr) 
+        :initialized(true)
+    {
+        static_assert(std::is_same<KIT, DIT>::value);
+
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
+        // TODO check KIT == DIT or find a way to a static cast
+        ordinal_view_t rowmap(mmio_csr->row_ptr, mmio_csr->nrows + 1);
+        ordinal_view_t colidx(mmio_csr->col_idx, mmio_csr->nnz);
+        values_view_t  values(mmio_csr->val,     mmio_csr->nnz);
+
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr("kokkos_csr",
+                                        mmio_csr->nrows, mmio_csr->ncols, mmio_csr->nnz,
+                                        values,
+                                        rowmap,
+                                        colidx
+        );
+
+        storage = kokkos_csr;
+    }
+
+
+    template <typename KIT, typename DIT, typename VT>
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(mmio::CSX<DIT, VT>* mmio_csx) 
+        :initialized(true)
+    {
+        static_assert(std::is_same<KIT, DIT>::value);
+
+        using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using values_view_t  = Kokkos::View<VT*,   Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
+        // TODO check KIT == DIT or find a way to a static cast
+        ordinal_view_t rowmap(mmio_csx->ptr_vec, mmio_csx->nrows + 1);
+        ordinal_view_t colidx(mmio_csx->idx_vec, mmio_csx->nnz);
+        values_view_t  values(mmio_csx->val,     mmio_csx->nnz);
+
+        KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT> kokkos_csr("kokkos_csr",
+                                        mmio_csx->nrows, mmio_csx->ncols, mmio_csx->nnz,
+                                        values,
+                                        rowmap,
+                                        colidx
+        );
+
+        storage = kokkos_csr;
     }
 
 

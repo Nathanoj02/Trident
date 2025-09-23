@@ -266,7 +266,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
-    return(out);
+    return out;
 }
 
 template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B);

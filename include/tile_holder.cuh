@@ -43,19 +43,20 @@ struct TileHolder
 
     using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix;
 
-    TileHolder(const IT ptr_size, const IT nnz_size, MPI_Comm _comm)
+    TileHolder(const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
     {
         comm = _comm;
         flag = new IT(-1);
+        ptr_size = _ptr_size;
 
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-        CUDA_CHECK(cudaMalloc(&d_ptrs_buf, sizeof(IT) * (ptr_size + 1)));
+        CUDA_CHECK(cudaMalloc(&d_ptrs_buf, sizeof(IT) * (_ptr_size + 1)));
         CUDA_CHECK(cudaMalloc(&d_vals_buf, sizeof(VT) * nnz_size));
         CUDA_CHECK(cudaMalloc(&d_inds_buf, sizeof(IT) * nnz_size));
 
-        MPI_Win_create(d_ptrs_buf, sizeof(IT) * (ptr_size + 1), sizeof(IT), MPI_INFO_NULL, comm, &d_ptrs_win);
+        MPI_Win_create(d_ptrs_buf, sizeof(IT) * (_ptr_size + 1), sizeof(IT), MPI_INFO_NULL, comm, &d_ptrs_win);
         MPI_Win_create(d_inds_buf, sizeof(IT) * (nnz_size), sizeof(IT), MPI_INFO_NULL, comm, &d_inds_win);
         MPI_Win_create(d_vals_buf, sizeof(VT) * (nnz_size), sizeof(VT), MPI_INFO_NULL, comm, &d_vals_win);
         MPI_Win_create((void*)flag, sizeof(IT), sizeof(IT), MPI_INFO_NULL, comm, &flag_win);
@@ -66,6 +67,9 @@ struct TileHolder
         MPI_Win_lock_all(MPI_MODE_NOCHECK, flag_win);
 
     }
+
+
+    TileHolder(){}
 
 
 
@@ -115,6 +119,8 @@ struct TileHolder
         MPI_Win_sync(flag_win);
         return nnz;
     }
+
+
 
 
     void sync_buffers()
@@ -203,8 +209,8 @@ struct TileHolder
                        MPIType<IT>(), grid->node_comm);
         
         // Rowptrs
-        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),         // NOTE: Why here I have a +1 on the pointers?
-                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),  //       It should be on the nrows, right?
+        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),         
+                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),  
                       grid->node_comm);
 
 
@@ -214,7 +220,8 @@ struct TileHolder
         return(total_nnz);
     }
 
-    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) {
+    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
@@ -232,7 +239,8 @@ struct TileHolder
                          d_node_vals, d_node_colinds, d_node_rowptrs);
     }
 
-    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) {
+    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
@@ -310,6 +318,8 @@ struct TileHolder
 
     volatile IT * flag;
     MPI_Win flag_win;
+
+    IT ptr_size;
 
     MPI_Comm comm;
     int rank;

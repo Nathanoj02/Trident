@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include "hns_spgemm_get.cuh"
 #include "test_utils.cuh"
 #include <ccutils/timers.h>
 #include <Kokkos_Core.hpp>
@@ -12,6 +13,7 @@
         printf("cudaGetDevice failed: %s\n", cudaGetErrorString(err)); \
     } \
 }
+
 
 int main(int argc, char ** argv)
 {
@@ -65,7 +67,7 @@ int main(int argc, char ** argv)
     dmmio::PartitioningType Apart, Bpart, Cpart;
 
     Aop   = dmmio::Operation::None;
-    Apart = (dmmio::PartitioningType)config->part_num;
+    Apart = dmmio::PartitioningType::Naive;
 
     if (Apart == dmmio::PartitioningType::Naive) {
         Bpart = dmmio::PartitioningType::Naive;
@@ -134,12 +136,24 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
+
+
+        mmio::CSX<int32_t, float> *dist_C;
         CPU_TIMER_DEF(spgemm);
-        if (world_rank==0) printf("Beginning spgemm\n");
+        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<50; i++) 
         {
             CPU_TIMER_START(spgemm);
-            mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
+
+            if (!strcmp(config->impl, "main"))
+            {
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
+            }
+            else if (!strcmp(config->impl, "get"))
+            {
+                dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
+            }
+
             CPU_TIMER_STOP(spgemm);
             if (world_rank==0)
             {

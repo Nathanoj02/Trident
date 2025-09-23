@@ -60,7 +60,8 @@ set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC -O3")
 
 # MAIN HNS_SPGEMM LIBRARY
 add_library(hns_spgemm
-            src/hns_spgemm.cu)
+            src/hns_spgemm.cu
+            src/hns_spgemm_get.cu)
 target_link_libraries(hns_spgemm PUBLIC MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
 
 
