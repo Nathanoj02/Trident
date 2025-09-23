@@ -188,6 +188,8 @@ namespace KokkosWrap {
             storage   = csc; // store CSC
             mmio_csx  = rawptr_get(csc);
         }
+
+        CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     template <typename KIT, typename DIT, typename VT>

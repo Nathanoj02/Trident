@@ -8,7 +8,7 @@
 #include <ccutils/cuda/cuda_timers.h>
 
 #define DEBUG_MAIN 0
-#define DETAILED_TIMERS
+//#define DETAILED_TIMERS
 //#define VERBOSE
 
 

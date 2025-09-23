@@ -27,10 +27,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         // Put tile on remote process
         holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
+
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
         FLUSH_WAIT(1.0);
 #endif
+
     }
 
 
@@ -117,6 +119,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     for (int iter = 0; iter < n_iters; iter++)
     {
 
+        if (grid->global_rank == 0)
+        {
+            std::cout<<"Iteration "<<iter<<std::endl;
+        }
 
 #if DEBUG_MAIN
         int A_owner_global = colAtoGet*node_size + *col_rank * (node_size * grid->row_size) + grid->node_rank;
