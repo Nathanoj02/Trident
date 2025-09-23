@@ -66,11 +66,37 @@ thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>&
     return result;
 }
 
+struct BitwiseAnd {
+    __device__ __host__ int operator()(const thrust::tuple<int,int>& t) const {
+        return thrust::get<0>(t) & thrust::get<1>(t);
+    }
+};
+
+thrust::device_vector<int> bitwise_and_transform(
+    const thrust::device_vector<int>& a,
+    const thrust::device_vector<int>& b)
+{
+    int n = a.size();
+    thrust::device_vector<int> d_out(n);
+
+    // Zip iterators over both inputs
+    auto zipped_begin = thrust::make_zip_iterator(thrust::make_tuple(a.begin(), b.begin()));
+    auto zipped_end   = zipped_begin + n;
+
+    // Create transform iterator that applies bitwise AND
+    auto transform_iter = thrust::make_transform_iterator(zipped_begin, BitwiseAnd());
+
+    // Use thrust::copy for simplicity (CUB transform API is experimental and more verbose)
+    thrust::copy(transform_iter, transform_iter + n, d_out.begin());
+
+    return d_out;
+}
+
 int main() {
     thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
 
-    thrust::device_vector<int> A_rowptr{0, 1, 3, 6, 6};
-    thrust::device_vector<int> B_colptr{0, 0, 2, 3, 5};
+    thrust::device_vector<int> A_rowptr{0, 1, 2, 2, 3, 4, 4, 5, 6};
+    thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
 
     // Apply the same function to both
     auto result_test = compress_row_or_col(test_vector, MASK_SIZE);
@@ -87,6 +113,13 @@ int main() {
     for (auto v : h_resultA) std::cout << v << " ";
     std::cout << "\nResult B: ";
     for (auto v : h_resultB) std::cout << v << " ";
+    std::cout << std::endl;
+
+    auto intersection = bitwise_and_transform(resultA, resultB);
+    thrust::host_vector<int> h_intersection = intersection;
+
+    std::cout << "Intersection: ";
+    for (auto v : h_intersection) std::cout << v << " ";
     std::cout << std::endl;
 
     return 0;
