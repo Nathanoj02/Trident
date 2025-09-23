@@ -222,7 +222,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         {
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
         }
-        MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
