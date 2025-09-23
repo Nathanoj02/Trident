@@ -81,7 +81,7 @@ add_test(test_kokkos)
 macro(add_src name)
     add_executable(${name} src/${name}.cu)
     target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
-    #target_compile_options(${name} PRIVATE -O3 -Wall)
+    target_compile_options(${name} PRIVATE -O3 -Wall)
 endmacro()
 
 

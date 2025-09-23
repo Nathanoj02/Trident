@@ -17,10 +17,10 @@ struct TileWindow
         MPI_Win_create(d_vals, sizeof(VT) * nnz, sizeof(VT), MPI_INFO_NULL, comm, &vals_win);
         MPI_Win_create(d_colinds, sizeof(IT) * nnz, sizeof(IT), MPI_INFO_NULL, comm, &colinds_win);
         MPI_Win_create(d_rowptrs, sizeof(IT) * (nrows + 1), sizeof(IT), MPI_INFO_NULL, comm, &rowptrs_win);
+
         MPI_Win_lock_all(MPI_MODE_NOCHECK, vals_win);
         MPI_Win_lock_all(MPI_MODE_NOCHECK, colinds_win);
         MPI_Win_lock_all(MPI_MODE_NOCHECK, rowptrs_win);
-
 
     }
 
@@ -170,9 +170,6 @@ struct TileWindow
         MPI_Win_unlock_all(colinds_win);
         MPI_Win_unlock_all(rowptrs_win);
 
-        //CUDA_FREE_SAFE(d_vals);
-        //CUDA_FREE_SAFE(d_colinds);
-        //CUDA_FREE_SAFE(d_rowptrs);
 
         MPI_Win_free(&vals_win);
         MPI_Win_free(&colinds_win);
