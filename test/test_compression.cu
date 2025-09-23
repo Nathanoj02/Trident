@@ -135,6 +135,41 @@ void printCSRMatrix(const std::vector<int>& colIdx,
     }
 }
 
+void printCSCMatrix(const std::vector<int>& rowIdx,
+                    const std::vector<float>& values,
+                    const std::vector<int>& colPtr) {
+    int ncols = colPtr.size() - 1;
+    int nrows = 0;
+
+    // Find maximum row index to determine number of rows
+    for (int r : rowIdx) {
+        if (r > nrows) nrows = r;
+    }
+    nrows += 1; // since indices start at 0
+
+    for (int r = 0; r < nrows; r++) {
+        std::vector<std::string> row(ncols, " - ");
+
+        // Fill row r with values
+        for (int c = 0; c < ncols; c++) {
+            for (int j = colPtr[c]; j < colPtr[c + 1]; j++) {
+                if (rowIdx[j] == r) {
+                    std::ostringstream ss;
+                    ss << std::fixed << std::setprecision(1) << values[j];
+                    row[c] = ss.str();
+                }
+            }
+        }
+
+        // Print row
+        for (int c = 0; c < ncols; c++) {
+            std::cout << std::setw(4) << row[c] << " ";
+        }
+        std::cout << "\n";
+    }
+}
+
+
 template<typename T>
 void printEntriesByRow(const thrust::host_vector<T>& colIdx,
                        const thrust::host_vector<int>& rowPtr) {
@@ -471,6 +506,94 @@ int tmp_test1 () {
     return 0;
 }
 
+bool div(int i, int j, int k) { return((i%j)==k); }
+bool even(int i) { return(div(i, 2, 0)); }
+bool  odd(int i) { return(div(i, 2, 1)); }
+bool zeroOthree(int i) { return(div(i, 3, 0)); }
+bool oneOthree(int i)  { return(div(i, 3, 1)); }
+bool twoOthree(int i)  { return(div(i, 3, 2)); }
+
+typedef bool(*ConditionFn)(int);
+ConditionFn syntetic_selections(int i) {
+
+}
+
+void gen_syntetic_matrix(int seed, int n) {
+
+    bool(*empty_row_condition)(int);
+    switch(seed) {
+        case 0:
+            empty_row_condition = even;
+            break;
+        case 1:
+            empty_row_condition = odd;
+            break;
+        case 2:
+            empty_row_condition = zeroOthree;
+            break;
+        case 3:
+            empty_row_condition = oneOthree;
+            break;
+        case 4:
+            empty_row_condition = twoOthree;
+            break;
+        default:
+            fprintf(stderr, "Unrecognized seed (%d)\n", seed);
+            exit(__LINE__);
+    }
+
+    std::vector<int> vec_ptr(n+1);
+    vec_ptr[0] = 0;
+    int nnz = 0;
+
+    for (int i=0; i<n; i++) {
+        if (empty_row_condition(i)) {
+            int row_nnz = (i<(n/2)) ? (i+1) : (n-i);
+            vec_ptr[i+1] = vec_ptr[i] + row_nnz;
+            nnz += row_nnz;
+        } else {
+            vec_ptr[i+1] = vec_ptr[i];
+        }
+    }
+
+    std::vector<int>   vec_idx(nnz);
+    std::vector<float> vec_val(nnz);
+    for (int i=0; i<n; i++) {
+        for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
+            vec_idx[vec_ptr[i] + j] = (i<(n/2)) ? (i + j) : (n - j - 1) ;
+            vec_val[vec_ptr[i] + j] = (vec_ptr[i] + j) * 1.0 ;
+        }
+    }
+
+    std::cout << "---------- Syntetic matrix ( " << seed << ", " << n << ") ----------" << std::endl;
+
+    /*
+    std::cout << "Pointer vector: ";
+    for (int x : vec_ptr) {
+        std::cout << x << " ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Index vector: ";
+    for (int x : vec_idx) {
+        std::cout << x << " ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Value vector: ";
+    for (float x : vec_val) {
+        std::cout << x << " ";
+    }
+    std::cout << std::endl;
+    */
+
+    std::cout << "----- CSR -----" << std::endl;
+    printCSRMatrix(vec_idx, vec_val, vec_ptr);
+    std::cout << "----- CSC -----" << std::endl;
+    printCSCMatrix(vec_idx, vec_val, vec_ptr);
+
+}
+
 
 int main() {
     thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
@@ -504,6 +627,9 @@ int main() {
 
     std::cout << "----- Test for compression -----" << std::endl;
     tmp_test1();
+
+    std::cout << "----- Test syntetic matrices -----" << std::endl;
+    for (int i=0; i<8; i++) gen_syntetic_matrix(i%5, 8);
 
     return 0;
 }
