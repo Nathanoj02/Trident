@@ -92,6 +92,58 @@ thrust::device_vector<int> bitwise_and_transform(
     return d_out;
 }
 
+
+// Functor that maps value -> index in segments
+struct SegmentLocator {
+    const int* s;   // pointer to search vector
+    int len;        // length of search vector
+
+    SegmentLocator(const int* s_, int len_) : s(s_), len(len_) {}
+
+    __device__ int operator()(int x) const {
+        // binary search for largest j with s[j] <= x
+        int lo = 0, hi = len;
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if (s[mid] <= x) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo -1 ; // index of segment
+    }
+};
+
+int tmp_test() {
+    // Search vector (segment boundaries)
+    thrust::device_vector<int> s{0, 0, 1, 4, 4, 10, 15};
+    // Input vector
+    thrust::device_vector<int> v{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    thrust::device_vector<int> r(v.size());
+
+    thrust::host_vector<int> h_s = s;
+    thrust::host_vector<int> h_v = v;
+    std::cout << "Search vector: ";
+    for (auto x : h_s) std::cout << x << " ";
+    std::cout << "\nInput vector: ";
+    for (auto x : h_v) std::cout << x << " ";
+    std::cout << "\n";
+
+    // Apply transform
+    auto s_ptr = thrust::raw_pointer_cast(s.data());
+    thrust::transform(v.begin(), v.end(), r.begin(), SegmentLocator(s_ptr, s.size()));
+
+    // Copy back to host
+    thrust::host_vector<int> h_r = r;
+    std::cout << "Result: ";
+    for (auto x : h_r) std::cout << x << " ";
+    std::cout << "\n";
+
+    return 0;
+}
+
+
 int main() {
     thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
 
@@ -121,6 +173,9 @@ int main() {
     std::cout << "Intersection: ";
     for (auto v : h_intersection) std::cout << v << " ";
     std::cout << std::endl;
+
+    std::cout << "----- Test for compression -----" << std::endl;
+    tmp_test();
 
     return 0;
 }
