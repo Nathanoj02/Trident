@@ -17,11 +17,30 @@ struct TileWindow
         MPI_Win_create(d_vals, sizeof(VT) * nnz, sizeof(VT), MPI_INFO_NULL, comm, &vals_win);
         MPI_Win_create(d_colinds, sizeof(IT) * nnz, sizeof(IT), MPI_INFO_NULL, comm, &colinds_win);
         MPI_Win_create(d_rowptrs, sizeof(IT) * (nrows + 1), sizeof(IT), MPI_INFO_NULL, comm, &rowptrs_win);
-
         MPI_Win_lock_all(MPI_MODE_NOCHECK, vals_win);
         MPI_Win_lock_all(MPI_MODE_NOCHECK, colinds_win);
         MPI_Win_lock_all(MPI_MODE_NOCHECK, rowptrs_win);
+
+
     }
+
+
+    void get_tile(mmio::CSR<IT, VT> * csr, const IT nnz, const int target, MPI_Comm comm)
+    {
+
+        csr->nnz = nnz;
+
+
+        MPI_Get(csr->row_ptr, nrows+1, MPIType<IT>(), target, 0, nrows+1, MPIType<IT>(), rowptrs_win);
+        MPI_Get(csr->val, nnz, MPIType<VT>(), target, 0, nnz, MPIType<VT>(), vals_win);
+        MPI_Get(csr->col_idx, nnz, MPIType<IT>(), target, 0, nnz, MPIType<VT>(), colinds_win);
+
+        MPI_Win_flush(target, vals_win);
+        MPI_Win_flush(target, colinds_win);
+        MPI_Win_flush(target, rowptrs_win);
+    }
+
+
 
 
     int node_allgather(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid,
@@ -50,6 +69,7 @@ struct TileWindow
         CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
         CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
         CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
         
 
         // Allgatherv each buffer
@@ -143,31 +163,16 @@ struct TileWindow
     }
 
 
-    void get_tile(mmio::CSR<IT, VT> * csr, const IT nnz, const int target, MPI_Comm comm)
-    {
-
-        csr->nnz = nnz;
-
-        MPI_Get(csr->val, nnz, MPIType<VT>(), target, 0, nnz, MPIType<VT>(), vals_win);
-        MPI_Get(csr->col_idx, nnz, MPIType<IT>(), target, 0, nnz, MPIType<VT>(), colinds_win);
-        MPI_Get(csr->row_ptr, nrows+1, MPIType<IT>(), target, 0, nrows+1, MPIType<IT>(), rowptrs_win);
-
-        MPI_Win_flush(target, vals_win);
-        MPI_Win_flush(target, colinds_win);
-        MPI_Win_flush(target, rowptrs_win);
-    }
-
-
 
     ~TileWindow()
     {
-        CUDA_FREE_SAFE(d_vals);
-        CUDA_FREE_SAFE(d_colinds);
-        CUDA_FREE_SAFE(d_rowptrs);
-
         MPI_Win_unlock_all(vals_win);
         MPI_Win_unlock_all(colinds_win);
         MPI_Win_unlock_all(rowptrs_win);
+
+        //CUDA_FREE_SAFE(d_vals);
+        //CUDA_FREE_SAFE(d_colinds);
+        //CUDA_FREE_SAFE(d_rowptrs);
 
         MPI_Win_free(&vals_win);
         MPI_Win_free(&colinds_win);

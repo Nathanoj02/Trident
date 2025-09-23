@@ -6,6 +6,9 @@
 template <typename IT, typename VT>
 mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B)
 {
+    // Asserts
+    assert(kwd_A.mmio_csx->majordim == mmio::MajorDim::ROWS);
+
 
     // Process grid info
     auto grid = kwd_A.partitioning->grid;
@@ -18,11 +21,12 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Get max nnz for A and B tiles (to allocate recv buffers once)
-    uint64_t A_max_nnz = (uint64_t)(kwd_A.getLocalNnz()); // have to cast, since MPI_MAX won't work on MPIType<IT>()
+    uint64_t A_max_nnz = (uint64_t)(kwd_A.mmio_csx->nnz); // have to cast, since MPI_MAX won't work on MPIType<IT>()
     MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->row_comm);
 
-    uint64_t B_max_nnz = (uint64_t)(kwd_B.getLocalNnz());
+    uint64_t B_max_nnz = (uint64_t)(kwd_B.mmio_csx->nnz);
     MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
+    // This is necessary to prevent non-empty windows from being created using null pointers
 
 
     // Local C tile to accumulate the result (during each iter: C += A*B)
@@ -31,27 +35,33 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     
     // Tiles to hold remote chunks of the inputs
     mmio::CSR<IT, VT> A_remote, B_remote;
-    A_remote.nrows = kwd_A.getLocalNrows();
-    A_remote.ncols = kwd_A.getLocalNcols();
+    A_remote.nrows = kwd_A.mmio_csx->nrows;
+    A_remote.ncols = kwd_A.mmio_csx->ncols;
 
     CHECK_CUDA(cudaMalloc(&A_remote.val, sizeof(VT) * A_max_nnz));
     CHECK_CUDA(cudaMalloc(&A_remote.col_idx, sizeof(IT) * A_max_nnz));
     CHECK_CUDA(cudaMalloc(&A_remote.row_ptr, sizeof(IT) * (A_remote.nrows+1)));
 
 
-    B_remote.nrows = kwd_B.getLocalNrows();
-    B_remote.ncols = kwd_B.getLocalNcols();
+    B_remote.nrows = kwd_B.mmio_csx->nrows;
+    B_remote.ncols = kwd_B.mmio_csx->ncols;
 
     CHECK_CUDA(cudaMalloc(&B_remote.val, sizeof(VT) * B_max_nnz));
     CHECK_CUDA(cudaMalloc(&B_remote.col_idx, sizeof(IT) * B_max_nnz));
     CHECK_CUDA(cudaMalloc(&B_remote.row_ptr, sizeof(IT) * (B_remote.nrows+1)));
 
+#if DEBUG_GET
+    par_print("mmio A ptr: %p, nnzA: %d\n", kwd_A.mmio_csx->val, kwd_A.mmio_csx->nnz);
+    par_print("mmio B ptr: %p, nnzB: %d\n", kwd_B.mmio_csx->val, kwd_B.mmio_csx->nnz);
+#endif
 
     // Tile windows
     TileWindow<IT, VT> A_win(kwd_A.mmio_csx->val, kwd_A.mmio_csx->idx_vec, kwd_A.mmio_csx->ptr_vec, 
-                             A_remote.nrows, A_max_nnz, grid->row_comm);
+                             kwd_A.mmio_csx->nnz, kwd_A.mmio_csx->nrows, 
+                             grid->row_comm);
     TileWindow<IT, VT> B_win(kwd_B.mmio_csx->val, kwd_B.mmio_csx->idx_vec, kwd_B.mmio_csx->ptr_vec, 
-                             B_remote.nrows, B_max_nnz, grid->row_comm);
+                             kwd_B.mmio_csx->nnz, kwd_B.mmio_csx->nrows, 
+                             grid->col_comm);
 
 
     // Row and column rank 
@@ -60,28 +70,36 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Precompute nnz to be fetched each iteration
-    std::vector<IT> A_tile_nnz(n_iters, 0);
-    std::vector<IT> B_tile_nnz(n_iters, 0);
+    std::vector<int32_t> A_tile_nnz(n_iters, 0);
+    std::vector<int32_t> B_tile_nnz(n_iters, 0);
 
-    A_tile_nnz[row_rank] = kwd_A.getLocalNnz();
-    B_tile_nnz[col_rank] = kwd_B.getLocalNnz();
+    A_tile_nnz[row_rank] = kwd_A.mmio_csx->nnz;
+    B_tile_nnz[col_rank] = kwd_B.mmio_csx->nnz;
 
-    MPI_Allreduce(MPI_IN_PLACE, A_tile_nnz.data(), n_iters, MPIType<IT>(), MPI_SUM, grid->row_comm);
-    MPI_Allreduce(MPI_IN_PLACE, B_tile_nnz.data(), n_iters, MPIType<IT>(), MPI_SUM, grid->col_comm);
+    MPI_Allreduce(MPI_IN_PLACE, A_tile_nnz.data(), n_iters, MPI_INT32_T, MPI_SUM, grid->row_comm);
+    MPI_Allreduce(MPI_IN_PLACE, B_tile_nnz.data(), n_iters, MPI_INT32_T, MPI_SUM, grid->col_comm);
 
 
     // Main loop
     for (int iter=0; iter<n_iters; iter++)
     {
-        if (grid->global_rank == 0)
-        {
-            std::cout<<"Iteration "<<iter<<std::endl;
-        }
+
+#if DEBUG_GET
+        par_print("Iteration %d\b", iter);
+#endif
 
 
         // Get remote tiles
         A_win.get_tile(&A_remote, A_tile_nnz[colAtoGet], colAtoGet, grid->row_comm);
         B_win.get_tile(&B_remote, B_tile_nnz[rowBtoGet], rowBtoGet, grid->col_comm);
+
+
+#if DEBUG_GET
+        print_d_arr(A_remote.col_idx, A_remote.nnz, "A_remote colinds: ");
+        print_d_arr(B_remote.col_idx, B_remote.nnz, "B_remote colinds: ");
+        print_d_arr(A_remote.row_ptr, A_remote.nrows + 1, "A_remote rowptrs: ");
+        print_d_arr(B_remote.row_ptr, B_remote.nrows + 1, "B_remote rowptrs: ");
+#endif
 
 
         // Convert to kokkos crs
@@ -117,6 +135,13 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(KC_local);
+    int64_t nnz_local = out->nnz;
+    MPI_Allreduce(MPI_IN_PLACE, &nnz_local, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+    if (grid->global_rank==0)
+    {
+        std::cout<<"NNZ C: "<<nnz_local<<std::endl;
+    }
+
     return out;
 
 }

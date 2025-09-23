@@ -164,3 +164,17 @@ void print_rkn(int rank, const char * msg, Args... args)
     FLUSH_WAIT(0.5);
 }
 
+
+template <typename... Args>
+void par_print(const char * str, Args... args)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Barrier(MPI_COMM_WORLD);
+    fprintf(stdout, "---Process %d---\n", rank);
+    fprintf(stdout, str, args...);
+    fprintf(stdout, "----------------\n");
+    fflush(stdout);
+    sleep(1);
+    MPI_Barrier(MPI_COMM_WORLD);
+}

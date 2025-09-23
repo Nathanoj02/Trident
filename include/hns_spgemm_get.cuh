@@ -3,6 +3,7 @@
 #include "KokkosWrap.hpp"
 
 
+#define DEBUG_GET 0
 
 
 template <typename IT, typename VT>
