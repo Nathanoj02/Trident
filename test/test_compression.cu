@@ -3,6 +3,7 @@
 #include <thrust/transform.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <cub/device/device_segmented_reduce.cuh>
+#include <cub/device/device_adjacent_difference.cuh>
 #include <iostream>
 
 #include <cub/cub.cuh>
@@ -101,7 +102,9 @@ thrust::device_vector<int> bitwise_and_transform(
 // For the compression
 // -------------------
 
-void printCSRMatrix(const std::vector<int>& colIdx, const std::vector<int>& rowPtr) {
+void printCSRMatrix(const std::vector<int>& colIdx,
+                    const std::vector<float>& values,
+                    const std::vector<int>& rowPtr) {
     int nrows = rowPtr.size() - 1;
     int ncols = 0;
 
@@ -112,19 +115,25 @@ void printCSRMatrix(const std::vector<int>& colIdx, const std::vector<int>& rowP
     ncols += 1; // since indices start at 0
 
     for (int r = 0; r < nrows; r++) {
-        std::vector<char> row(ncols, '-');
+        std::vector<std::string> row(ncols, " - ");
+
+        // Fill row with values
         for (int j = rowPtr[r]; j < rowPtr[r + 1]; j++) {
-            row[colIdx[j]] = '1';
+            std::ostringstream ss;
+            ss << std::fixed << std::setprecision(1) << values[j]; // e.g. "3.0"
+            row[colIdx[j]] = ss.str();
         }
+
         // Print row
         for (int c = 0; c < ncols; c++) {
-            std::cout << row[c] << " ";
+            std::cout << std::setw(4) << row[c] << " ";
         }
         std::cout << "\n";
     }
 }
 
-void printEntriesByRow(const thrust::host_vector<int>& colIdx,
+template<typename T>
+void printEntriesByRow(const thrust::host_vector<T>& colIdx,
                        const thrust::host_vector<int>& rowPtr) {
     int nrows = rowPtr.size() - 1;
     for (int r = 0; r < nrows; r++) {
@@ -167,9 +176,72 @@ struct KeepFlagByIndex
     }
 };
 
+struct MaskedTransform
+{
+    const int* c; // bitmask
+
+    __host__ __device__
+    MaskedTransform(const int* c_) : c(c_) {}
+
+    __device__ __forceinline__
+    int operator()(const thrust::tuple<int,int>& t) const {
+        int idx = thrust::get<0>(t);
+        int val = thrust::get<1>(t);
+        int word = idx / MASK_SIZE;
+        int bit  = idx % MASK_SIZE;
+        return ( (c[word] >> bit) & 1 ) ? val : 0;
+    }
+};
+
+
+// ---------- Copied from outside, just include them ----------
+
+template <typename T>
+struct DiffOp2
+{
+    DiffOp2(){}
+    __host__ __device__ __forceinline__
+    T operator()(const T& lhs, const T& rhs)
+    {
+        return lhs - rhs;
+    }
+};
+
+template <typename IT>
+void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows) {
+    void * d_tmp = NULL;
+    size_t tmp_size = 0;
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
+    cudaMalloc(&d_tmp, tmp_size);
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
+    cudaFree(d_tmp);
+    cudaDeviceSynchronize();
+}
+
+template <typename IT>
+void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows) {
+    void * d_tmp = NULL;
+    size_t tmp_size = 0;
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
+    cudaMalloc(&d_tmp, tmp_size);
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
+    cudaFree(d_tmp);
+    cudaDeviceSynchronize();
+}
+// ------------------------------------------------------------
+
 int tmp_test1 () {
     // Example input
-    thrust::host_vector<int> h_v{0,
+    thrust::host_vector<float> h_val{1.0,
+                                   2.0,   3.0,  4.0,
+                                   5.0,   6.0,  7.0,  8.0,  9.0, 10.0,
+                                   11.0, 12.0, 13.0, 14.0, 15.0,
+                                   16.0, 17.0, 18.0, 19.0, 20.0,
+                                   21.0, 22.0,
+                                   23.0, 24.0, 25.0,
+                                   26.0, 27.0
+    };
+    thrust::host_vector<int> h_col{0,
                                  1, 3, 7,
                                  0, 1, 4, 7, 8, 10,
                                  0, 2, 4, 6, 8,
@@ -178,12 +250,15 @@ int tmp_test1 () {
                                  1, 5, 7,
                                  0, 10
     };
-    thrust::host_vector<int> h_s{0, 1, 4, 10, 15, 20, 22, 25, 27}; // 8 segments
+    thrust::host_vector<int> h_row{0, 1, 4, 10, 15, 20, 22, 25, 27}; // 8 segments
     thrust::host_vector<int> h_c(2); // 8 bits total (2 words * MASK_SIZE=4)
 
-    printCSRMatrix(std::vector<int>(h_v.begin(), h_v.end()),
-               std::vector<int>(h_s.begin(), h_s.end()));
-    printEntriesByRow(h_v, h_s);
+    printCSRMatrix(std::vector<int>(h_col.begin(), h_col.end()),
+                   std::vector<float>(h_val.begin(), h_val.end()),
+                   std::vector<int>(h_row.begin(), h_row.end())
+    );
+    printEntriesByRow(h_col, h_row);
+    printEntriesByRow(h_val, h_row);
 
 
     // condition mask:
@@ -192,20 +267,20 @@ int tmp_test1 () {
     h_c[0] = (1 << 0) | (1 << 1);       // bits 0 and 1 set
     h_c[1] = (1 << 0) | (1 << 3);       // bits 4 and 7 set
 
-    int n = h_v.size();
-    int m = h_s.size();
+    int n = h_col.size();
+    int m = h_row.size();
 
     std::cout << "Input vector v: ";
-    for (int x : h_v) std::cout << x << " ";
+    for (int x : h_col) std::cout << x << " ";
     std::cout << "\nSearch vector s: ";
-    for (int x : h_s) std::cout << x << " ";
+    for (int x : h_row) std::cout << x << " ";
     std::cout << "\nBitmask vector c: ";
     for (int x : h_c) std::cout << x << " ";
     std::cout << "\n";
 
     // Copy to device
-    thrust::device_vector<int> d_v = h_v;
-    thrust::device_vector<int> d_s = h_s;
+    thrust::device_vector<int> d_col = h_col;
+    thrust::device_vector<int> d_row = h_row;
     thrust::device_vector<int> d_c = h_c;
     thrust::device_vector<int> d_out(n);
     thrust::device_vector<int> d_num_selected(1);
@@ -213,7 +288,7 @@ int tmp_test1 () {
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
         counting,
-        KeepFlagByIndex(thrust::raw_pointer_cast(d_s.data()), m,
+        KeepFlagByIndex(thrust::raw_pointer_cast(d_row.data()), m,
                         thrust::raw_pointer_cast(d_c.data()))
     );
 
@@ -223,7 +298,7 @@ int tmp_test1 () {
 
     cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
-        thrust::raw_pointer_cast(d_v.data()), // values
+        thrust::raw_pointer_cast(d_col.data()), // values
         flags_it,                             // lazy flags
         thrust::raw_pointer_cast(d_out.data()),
         thrust::raw_pointer_cast(d_num_selected.data()),
@@ -234,7 +309,7 @@ int tmp_test1 () {
 
     cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
-        thrust::raw_pointer_cast(d_v.data()), // values
+        thrust::raw_pointer_cast(d_col.data()), // values
         flags_it,                             // lazy flags
         thrust::raw_pointer_cast(d_out.data()),
         thrust::raw_pointer_cast(d_num_selected.data()),
@@ -247,6 +322,37 @@ int tmp_test1 () {
 
     std::cout << "Selected " << num_selected << " values:\n";
     for (int x : h_out) std::cout << x << " ";
+    std::cout << "\n";
+
+    // Part for row pointer
+    int* raw_ptr = thrust::raw_pointer_cast(d_row.data());
+    rowptrs_to_rownnz<int>(raw_ptr, d_row.size());
+
+    h_row = d_row; // Update the host mirror
+    std::cout << "New s: ";
+    for (int x : h_row) std::cout << x << " ";
+    std::cout << "\n";
+
+    counting = thrust::make_counting_iterator<int>(0);
+    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, d_row.begin()+1));
+
+    thrust::transform(
+        zipped, zipped + m,
+        d_row.begin()+1,
+        MaskedTransform(thrust::raw_pointer_cast(d_c.data()))
+    );
+
+    h_row = d_row; // Update the host mirror
+    std::cout << "Masked s: ";
+    for (int x : h_row) std::cout << x << " ";
+    std::cout << "\n";
+
+    raw_ptr = thrust::raw_pointer_cast(d_row.data());
+    rownnz_to_rowptrs<int>(raw_ptr, m);
+
+    h_row = d_row; // Update the host mirror
+    std::cout << "New s: ";
+    for (int x : h_row) std::cout << x << " ";
     std::cout << "\n";
 
     cudaFree(d_temp_storage);
