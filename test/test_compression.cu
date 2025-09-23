@@ -11,7 +11,10 @@
 #include <vector>
 #include <iomanip>
 
+#include "common.h"
+
 #define MASK_SIZE 4   // set to 32 in production
+#define DEBUG
 
 // A general function to compute result vector given a row/col pointer array
 thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>& ptr, int mask_size) {
@@ -230,6 +233,113 @@ void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows) {
 }
 // ------------------------------------------------------------
 
+template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
+int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, PT* mask, VT **output) {
+
+    int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
+    auto counting = thrust::make_counting_iterator<int>(0);
+    auto flags_it = thrust::make_transform_iterator(
+        counting,
+        KeepFlagByIndex(ptr_vec, m, mask)
+    );
+
+    VT  *d_out;
+    int *d_num_selected;
+    cudaMalloc(&d_out, sizeof(VT)*n);
+    cudaMalloc(&d_num_selected, sizeof(int));
+
+    // Temp storage
+    void* d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+
+    cub::DeviceSelect::Flagged(
+        d_temp_storage, temp_storage_bytes,
+        input_vec, // values
+        flags_it,                             // lazy flags
+        d_out,
+        d_num_selected,
+        n
+    );
+
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+    cub::DeviceSelect::Flagged(
+        d_temp_storage, temp_storage_bytes,
+        input_vec, // values
+        flags_it,                             // lazy flags
+        d_out,
+        d_num_selected,
+        n
+    );
+
+    // Move num_selected on host
+    int num_selected;
+    cudaMemcpy(&num_selected, d_num_selected, sizeof(int), cudaMemcpyDeviceToHost);
+
+#ifdef DEBUG
+    VT* h_out = (VT*)malloc(sizeof(VT)*num_selected);
+    cudaMemcpy(h_out, d_out, sizeof(VT)*num_selected, cudaMemcpyDeviceToHost);
+
+    std::cout << "Selected " << num_selected << " values:\n";
+    for (int i=0; i<num_selected; i++) std::cout << h_out[i] << " ";
+    std::cout << "\n";
+    free(h_out);
+#endif
+
+    cudaFree(d_temp_storage);
+
+    *output = d_out;
+    return(num_selected);
+}
+
+template<typename IT>
+IT* select_ptrs(IT* raw_ptr, int m, IT* mask) {
+
+    rowptrs_to_rownnz<IT>(raw_ptr, m);
+
+    int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
+    thrust::device_vector<IT> d_mask(mask, mask + mask_size);
+    thrust::device_vector<IT> d_row(raw_ptr, raw_ptr + m);
+
+#ifdef DEBUG
+    thrust::host_vector<IT> h_row = d_row;
+    std::cout << "Nnz ptr_vec: ";
+    for (int x : h_row) std::cout << x << " ";
+    std::cout << "\n";
+#endif
+
+    auto counting = thrust::make_counting_iterator<int>(0);
+    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, d_row.begin()+1));
+
+    thrust::transform(
+        zipped, zipped + m,
+        d_row.begin()+1,
+        MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
+    );
+
+#ifdef DEBUG
+    h_row = d_row; // Update the host mirror
+    std::cout << "Masked ptr_vec: ";
+    for (int x : h_row) std::cout << x << " ";
+    std::cout << "\n";
+#endif
+
+    raw_ptr = thrust::raw_pointer_cast(d_row.data());
+    rownnz_to_rowptrs<int>(raw_ptr, m);
+
+#ifdef DEBUG
+    h_row = d_row; // Update the host mirror
+    std::cout << "New ptr_vec: ";
+    for (int x : h_row) std::cout << x << " ";
+    std::cout << "\n";
+#endif
+
+    IT *output;
+    cudaMalloc(&output, sizeof(IT)*m);
+    cudaMemcpy(output, raw_ptr, m*sizeof(IT), cudaMemcpyDeviceToDevice);
+    return(output);
+}
+
 int tmp_test1 () {
     // Example input
     thrust::host_vector<float> h_val{1.0,
@@ -251,7 +361,7 @@ int tmp_test1 () {
                                  0, 10
     };
     thrust::host_vector<int> h_row{0, 1, 4, 10, 15, 20, 22, 25, 27}; // 8 segments
-    thrust::host_vector<int> h_c(2); // 8 bits total (2 words * MASK_SIZE=4)
+    thrust::host_vector<int> h_mask(2); // 8 bits total (2 words * MASK_SIZE=4)
 
     printCSRMatrix(std::vector<int>(h_col.begin(), h_col.end()),
                    std::vector<float>(h_val.begin(), h_val.end()),
@@ -259,13 +369,13 @@ int tmp_test1 () {
     );
     printEntriesByRow(h_col, h_row);
     printEntriesByRow(h_val, h_row);
-
+    fflush(stdout);
 
     // condition mask:
     // let's enable segments {0,1,4,7} for fun
     // word0 covers segments [0..3], word1 covers [4..7]
-    h_c[0] = (1 << 0) | (1 << 1);       // bits 0 and 1 set
-    h_c[1] = (1 << 0) | (1 << 3);       // bits 4 and 7 set
+    h_mask[0] = (1 << 0) | (1 << 1);       // bits 0 and 1 set
+    h_mask[1] = (1 << 0) | (1 << 3);       // bits 4 and 7 set
 
     int n = h_col.size();
     int m = h_row.size();
@@ -275,87 +385,89 @@ int tmp_test1 () {
     std::cout << "\nSearch vector s: ";
     for (int x : h_row) std::cout << x << " ";
     std::cout << "\nBitmask vector c: ";
-    for (int x : h_c) std::cout << x << " ";
+    for (int x : h_mask) std::cout << x << " ";
     std::cout << "\n";
+    fflush(stdout);
 
     // Copy to device
-    thrust::device_vector<int> d_col = h_col;
-    thrust::device_vector<int> d_row = h_row;
-    thrust::device_vector<int> d_c = h_c;
-    thrust::device_vector<int> d_out(n);
-    thrust::device_vector<int> d_num_selected(1);
+    thrust::device_vector<float> d_val  = h_val;
+    thrust::device_vector<int>   d_col  = h_col;
+    thrust::device_vector<int>   d_row  = h_row;
+    thrust::device_vector<int>   d_mask = h_mask;
 
-    auto counting = thrust::make_counting_iterator<int>(0);
-    auto flags_it = thrust::make_transform_iterator(
-        counting,
-        KeepFlagByIndex(thrust::raw_pointer_cast(d_row.data()), m,
-                        thrust::raw_pointer_cast(d_c.data()))
+    int* new_col;
+    int num_selected = select_entries<int, int>(
+            thrust::raw_pointer_cast(d_col.data()), n,
+            thrust::raw_pointer_cast(d_row.data()), m,
+            thrust::raw_pointer_cast(d_mask.data()),
+            &new_col
     );
+    {
+        int *tmp = (int*)malloc(sizeof(int)*num_selected);
+        cudaMemcpy(tmp, new_col, sizeof(int)*num_selected, cudaMemcpyDeviceToHost);
 
-    // Temp storage
-    void* d_temp_storage = nullptr;
-    size_t temp_storage_bytes = 0;
+        std::cout << "[out] Selected " << num_selected << " values:\n";
+        for (int i=0; i<num_selected; i++) std::cout << tmp[i] << " ";
+        std::cout << "\n";
+        free(tmp);
+    }
+    fflush(stdout);
 
-    cub::DeviceSelect::Flagged(
-        d_temp_storage, temp_storage_bytes,
-        thrust::raw_pointer_cast(d_col.data()), // values
-        flags_it,                             // lazy flags
-        thrust::raw_pointer_cast(d_out.data()),
-        thrust::raw_pointer_cast(d_num_selected.data()),
-        n
+    float* new_val;
+    int num_selected_val = select_entries<float, int>(
+            thrust::raw_pointer_cast(d_val.data()), n,
+            thrust::raw_pointer_cast(d_row.data()), m,
+            thrust::raw_pointer_cast(d_mask.data()),
+            &new_val
     );
+    {
+        float *tmp = (float*)malloc(sizeof(float)*num_selected_val);
+        cudaMemcpy(tmp, new_val, sizeof(float)*num_selected_val, cudaMemcpyDeviceToHost);
 
-    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+        std::cout << "[out] Selected " << num_selected_val << " values:\n";
+        for (int i=0; i<num_selected_val; i++) std::cout << tmp[i] << " ";
+        std::cout << "\n";
+        free(tmp);
+    }
+    fflush(stdout);
 
-    cub::DeviceSelect::Flagged(
-        d_temp_storage, temp_storage_bytes,
-        thrust::raw_pointer_cast(d_col.data()), // values
-        flags_it,                             // lazy flags
-        thrust::raw_pointer_cast(d_out.data()),
-        thrust::raw_pointer_cast(d_num_selected.data()),
-        n
-    );
-
-    // Copy results back
-    int num_selected = d_num_selected[0];
-    thrust::host_vector<int> h_out(d_out.begin(), d_out.begin() + num_selected);
-
-    std::cout << "Selected " << num_selected << " values:\n";
-    for (int x : h_out) std::cout << x << " ";
-    std::cout << "\n";
+    if (num_selected != num_selected_val) {
+        fprintf(stderr, "Error: num_selected_val (%d) differ from num_selected (%d)!\n", num_selected_val, num_selected);
+        exit(__LINE__);
+    }
 
     // Part for row pointer
-    int* raw_ptr = thrust::raw_pointer_cast(d_row.data());
-    rowptrs_to_rownnz<int>(raw_ptr, d_row.size());
+    int *new_row = select_ptrs(thrust::raw_pointer_cast(d_row.data()), m, thrust::raw_pointer_cast(d_mask.data()));
+    fflush(stdout);
 
-    h_row = d_row; // Update the host mirror
-    std::cout << "New s: ";
-    for (int x : h_row) std::cout << x << " ";
-    std::cout << "\n";
+    std::cout << "Test at line " << __LINE__ << std::endl; fflush(stdout);
 
-    counting = thrust::make_counting_iterator<int>(0);
-    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, d_row.begin()+1));
+    thrust::device_ptr<float> d_val_ptr(new_val);
+    thrust::device_ptr<int>   d_col_ptr(new_col);
+    thrust::device_ptr<int>   d_row_ptr(new_row);
 
-    thrust::transform(
-        zipped, zipped + m,
-        d_row.begin()+1,
-        MaskedTransform(thrust::raw_pointer_cast(d_c.data()))
+    std::cout << "Test at line " << __LINE__ << std::endl; fflush(stdout);
+
+    std::cout << "new_val ptr: " << new_val << ", new_col ptr: " << new_col
+          << ", d_row ptr: " << new_row
+          << ", num_selected: " << num_selected
+          << ", m: " << m << std::endl;
+
+    // Copy to host vectors
+    thrust::host_vector<float> h_new_val(num_selected);
+    thrust::host_vector<int>   h_new_col(num_selected);
+    thrust::host_vector<int>   h_new_row(m);
+
+    thrust::copy(d_val_ptr, d_val_ptr + num_selected, h_new_val.begin());
+    thrust::copy(d_col_ptr, d_col_ptr + num_selected, h_new_col.begin());
+    thrust::copy(d_row_ptr, d_row_ptr + m, h_new_row.begin());
+
+    printCSRMatrix(std::vector<int>(h_new_col.begin(), h_new_col.end()),
+                   std::vector<float>(h_new_val.begin(), h_new_val.end()),
+                   std::vector<int>(h_new_row.begin(), h_new_row.end())
     );
+    fflush(stdout);
 
-    h_row = d_row; // Update the host mirror
-    std::cout << "Masked s: ";
-    for (int x : h_row) std::cout << x << " ";
-    std::cout << "\n";
-
-    raw_ptr = thrust::raw_pointer_cast(d_row.data());
-    rownnz_to_rowptrs<int>(raw_ptr, m);
-
-    h_row = d_row; // Update the host mirror
-    std::cout << "New s: ";
-    for (int x : h_row) std::cout << x << " ";
-    std::cout << "\n";
-
-    cudaFree(d_temp_storage);
     return 0;
 }
 
