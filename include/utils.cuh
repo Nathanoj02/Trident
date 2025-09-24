@@ -18,6 +18,33 @@
 
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
+#define CHECK_PTR(PT, IT) {  \
+    if (PT == nullptr) {  \
+        std::cerr << "Process " << world_rank << ", " << __func__ << ":" << __LINE__ << "nullptr\n";  \
+    } else {  \
+        CUmemorytype memType;  \
+        CUresult res = cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(PT));  \
+        if (res != CUDA_SUCCESS) {  \
+            int world_rank;  \
+            const char* errName = nullptr;  \
+            cuGetErrorName(res, &errName);  \
+            MPI_Comm_rank(MPI_COMM_WORLD, &world_rank); \
+            std::cerr << "Process " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ <<  \
+                    " --- Error code: " << res << ", name: " << (errName ? errName : "Unknown") << "\n";  \
+        } else { \
+            std::string memStr; \
+            switch (memType) { \
+                case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break; \
+                case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break; \
+                case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break; \
+                default:                   memStr = "UNKNOWN"; break; \
+            } \
+            if (memType != CU_MEMORYTYPE_DEVICE) std::cerr << "Pointer is not from device, memory type: " << memStr << "\n"; \
+            else std::cout << "Pointer of proc " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ << " is fine\n"; \
+        } \
+    }  \
+}
+
 typedef struct {
     int rowidx;
     int colidx;
@@ -162,5 +189,70 @@ void print_rkn(int rank, const char * msg, Args... args)
     fprintf(stdout, msg, args...);
     fprintf(stdout, "\n");
     FLUSH_WAIT(0.5);
+}
+
+template<typename IT>
+void move2gpu(IT** ptr, uint64_t size) {
+    /*  // NOTE nice to set but it don't work
+    CUmemorytype memType;
+    cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(ptr));
+
+    std::string memStr;
+    switch (memType) {
+        case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break;
+        case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break;
+        case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break;
+        default:                   memStr = "UNKNOWN"; break;
+    }
+
+    if (memType != CU_MEMORYTYPE_HOST) std::cerr << "Error: function " << __func__ << " took in input a non host pointer: " << memStr;
+    */
+
+    IT *tmp;
+    CUDA_CHECK(cudaMalloc(&tmp, sizeof(IT)*size));
+    CUDA_CHECK(cudaMemcpy(tmp, *ptr, sizeof(IT)*size, cudaMemcpyHostToDevice));
+    free(*ptr);
+    *ptr = tmp;
+}
+
+template<typename IT>
+void move2host(IT** ptr, uint64_t size) {
+    /* // NOTE nice to set but it don't work
+    CUmemorytype memType;
+    cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(ptr));
+
+    std::string memStr;
+    switch (memType) {
+        case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break;
+        case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break;
+        case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break;
+        default:                   memStr = "UNKNOWN"; break;
+    }
+
+    if (memType != CU_MEMORYTYPE_DEVICE) std::cerr << "Error: function " << __func__ << " took in input a non device pointer: " << memStr;
+    */
+
+    IT *tmp = (IT*)malloc(sizeof(IT)*size);
+    CUDA_CHECK(cudaMemcpy(tmp, *ptr, sizeof(IT)*size, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(*ptr));
+    *ptr = tmp;
+}
+
+template<typename IT, typename VT>
+void moveCSX2device (mmio::CSX<IT,VT> *csx) {
+    IT ptrdim = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->ncols+1) : (csx->nrows+1) ;
+
+    move2gpu(&(csx->ptr_vec), ptrdim);
+    move2gpu(&(csx->idx_vec), csx->nnz);
+    move2gpu(&(csx->val), csx->nnz);
+}
+
+template<typename IT, typename VT>
+void moveCSX2host (mmio::CSX<IT,VT> *csx) {
+    IT ptrdim = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->ncols+1) : (csx->nrows+1) ;
+
+    move2host(&(csx->ptr_vec), ptrdim);
+    move2host(&(csx->idx_vec), csx->nnz);
+    move2host(&(csx->val), csx->nnz);
 }
 

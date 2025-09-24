@@ -12,6 +12,7 @@
 #include <iomanip>
 
 #include "common.h"
+#include "utils.cuh"
 #include "test_utils.cuh"
 
 #define MASK_SIZE 4   // set to 32 in production
@@ -42,7 +43,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     int num_segments  = (n%mask_size == 0) ? (n/mask_size) : ((n/mask_size)+1) ;
     // thrust::device_vector<int> result(num_segments);
     int8_t *result;
-    cudaMalloc(&result, sizeof(int8_t)*num_segments);
+    CUDA_CHECK(cudaMalloc(&result, sizeof(int8_t)*num_segments));
 
     thrust::host_vector<int> h_offsets(num_segments + 1);
     for (int i = 0; i < num_segments; i++) {
@@ -86,7 +87,7 @@ template<typename T>
 T* intersect_bitmasks(const T* a, const T* b, int n) {
     // Allocate output buffer on device
     T* d_out = nullptr;
-    cudaMalloc(&d_out, sizeof(T) * n);
+    CUDA_CHECK(cudaMalloc(&d_out, sizeof(T) * n));
 
     // Wrap raw pointers with device_ptr so Thrust can use them
     auto a_begin = thrust::device_pointer_cast(a);
@@ -601,6 +602,16 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(int seed, int n, mmio::MajorDim layout, b
 
 }
 
+void printBit_left2right(int8_t* bitmask, int nwords, FILE* fp=stdout) {
+    for (int i=0; i<nwords; i++) {
+        for (int j=0; j<MASK_SIZE; j++) {
+            fprintf(fp, "%c", (bitmask[i] & (1<<j)) ? '1' : '0');
+        }
+        if (i!=(nwords-1)) fprintf(fp, "|");
+    }
+}
+
+#define DEBUG_SPCOMM
 
 template<typename IT, typename VT>
 void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
@@ -615,33 +626,90 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
 
     int k = Acsc->ncols;
     int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
-    auto A_map = gen_bitmask(Acsc->ptr_vec, MASK_SIZE);
-    auto B_map = gen_bitmask(Bcsr->ptr_vec, MASK_SIZE);
-    IT *raw_A_map = thrust::raw_pointer_cast(A_map.data());
-    IT *raw_B_map = thrust::raw_pointer_cast(B_map.data());
+    int8_t *A_map = gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
+    int8_t *B_map = gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
 
     // ---------- Ghatering all the required maps ----------
-    int8_t *recv_A_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));  // BUG: This must be done with cudaMalloc
-    MPI_Allgather(raw_A_map, mask_size, MPI_INT8_T, recv_A_maps, mask_size, MPI_INT8_T, grid->row_comm);
+    // int8_t *recv_A_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));
+    int8_t *recv_A_maps;
+    CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(int8_t)*mask_size*(grid->row_size)) );
+    MPI_Allgather(A_map, mask_size, MPI_INT8_T, recv_A_maps, mask_size, MPI_INT8_T, grid->row_comm);
 
-    int8_t *recv_B_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));  // BUG: This must be done with cudaMalloc
-    MPI_Allgather(raw_B_map, mask_size, MPI_INT8_T, recv_B_maps, mask_size, MPI_INT8_T, grid->col_comm);
+    // int8_t *recv_B_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));
+    int8_t *recv_B_maps;
+    CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(int8_t)*mask_size*(grid->col_size)) );
+    MPI_Allgather(B_map, mask_size, MPI_INT8_T, recv_B_maps, mask_size, MPI_INT8_T, grid->col_comm);
 
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
-    auto all_intersections = intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
+    int8_t *all_intersections = intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
 
     // ---------- Alltoall data sisplacement back ----------
-    *col_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));  // BUG: This must be done with cudaMalloc
-    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, col_filters, mask_size, MPI_INT8_T, grid->row_comm);
+    // *col_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));
+    CUDA_CHECK( cudaMalloc(col_filters, sizeof(int8_t)*mask_size*(grid->row_size)) );
+    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, *col_filters, mask_size, MPI_INT8_T, grid->row_comm);
 
-    *row_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));  // BUG: This must be done with cudaMalloc
-    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, row_filters, mask_size, MPI_INT8_T, grid->col_comm);
+    // *row_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));
+    CUDA_CHECK( cudaMalloc(row_filters, sizeof(int8_t)*mask_size*(grid->col_size)) );
+    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, *row_filters, mask_size, MPI_INT8_T, grid->col_comm);
 
-    free(recv_A_maps);
-    free(recv_B_maps);
-    // free(raw_A_map);  // Now managen by cub
-    // free(raw_B_map);  // Now managen by cub
+#ifdef DEBUG_SPCOMM
+    {
+        int size = mask_size*(grid->row_size);
+        int8_t *h_A_map             = (int8_t*)malloc(sizeof(int8_t)*mask_size);
+        int8_t *h_B_map             = (int8_t*)malloc(sizeof(int8_t)*mask_size);
+        int8_t *h_recv_A_maps       = (int8_t*)malloc(sizeof(int8_t)*size);
+        int8_t *h_recv_B_maps       = (int8_t*)malloc(sizeof(int8_t)*size);
+        int8_t *h_all_intersections = (int8_t*)malloc(sizeof(int8_t)*size);
+        int8_t *h_col_filters       = (int8_t*)malloc(sizeof(int8_t)*size);
+        int8_t *h_row_filters       = (int8_t*)malloc(sizeof(int8_t)*size);
+        CUDA_CHECK(cudaMemcpy(h_A_map,             A_map,             sizeof(int8_t)*mask_size, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_B_map,             B_map,             sizeof(int8_t)*mask_size, cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_recv_A_maps,       recv_A_maps,       sizeof(int8_t)*size,      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_recv_B_maps,       recv_B_maps,       sizeof(int8_t)*size,      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_all_intersections, all_intersections, sizeof(int8_t)*size,      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_col_filters,       *col_filters,      sizeof(int8_t)*size,      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(h_row_filters,       *row_filters,      sizeof(int8_t)*size,      cudaMemcpyDeviceToDevice));
+
+        MPI_ALL_PRINT(
+            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "local A_map");
+            printBit_left2right(h_A_map, mask_size, fp);
+            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "local B_map");
+            printBit_left2right(h_B_map, mask_size, fp);
+            fprintf(fp, "\n\n");
+
+            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "recv A bitmasks");
+            printBit_left2right(h_recv_A_maps, size, fp);
+            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "recv B bitmasks");
+            printBit_left2right(h_recv_B_maps, size, fp);
+            fprintf(fp, "\n");
+
+            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_all_intersections");
+            printBit_left2right(h_all_intersections, size, fp);
+            fprintf(fp, "\n\n");
+
+            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_col_filters");
+            printBit_left2right(h_col_filters, size, fp);
+            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_row_filters");
+            printBit_left2right(h_row_filters, size, fp);
+            fprintf(fp, "\n");
+        )
+
+        free(h_all_intersections);
+        free(h_recv_A_maps);
+        free(h_recv_B_maps);
+        free(h_col_filters);
+        free(h_row_filters);
+        free(h_A_map);
+        free(h_B_map);
+    }
+#endif
+
+    CUDA_CHECK(cudaFree(all_intersections));
+    CUDA_CHECK(cudaFree(recv_A_maps));
+    CUDA_CHECK(cudaFree(recv_B_maps));
+    CUDA_CHECK(cudaFree(A_map));
+    CUDA_CHECK(cudaFree(B_map));
 }
 
 int main(int argc, char ** argv) {
@@ -662,6 +730,8 @@ int main(int argc, char ** argv) {
     int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
     dmmio::ProcessGrid *grid = dmmio::io::ProcessGrid_create(nprocrows, nproccols, nprocpergroup);
 
+    int skip = config->spcomm; // I use spcomm as flag for skip the first experiments
+    if (skip) goto parallel_exps;
     // ----------------------------------------------------------------------------------------------------
 
     if (world_rank == 0) {
@@ -682,9 +752,9 @@ int main(int argc, char ** argv) {
         std::vector<int8_t> h_resultA(num_segments_A);
         std::vector<int8_t> h_resultB(num_segments_B);
 
-        cudaMemcpy(h_test.data(),    result_test, sizeof(int8_t) * num_segments_test, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_resultA.data(), resultA,     sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_resultB.data(), resultB,     sizeof(int8_t) * num_segments_B, cudaMemcpyDeviceToHost);
+        CHECK_CUDA(cudaMemcpy(h_test.data(),    result_test, sizeof(int8_t) * num_segments_test, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_resultA.data(), resultA,     sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_resultB.data(), resultB,     sizeof(int8_t) * num_segments_B, cudaMemcpyDeviceToHost));
 
         std::cout << "Result test: ";
         for (auto v : h_test) std::cout << static_cast<int>(v) << " ";
@@ -714,6 +784,7 @@ int main(int argc, char ** argv) {
 
     // ----------------------------------------------------------------------------------------------------
 
+    parallel_exps:
     if (world_rank==0) std::cout << "-------------------- Parallel part --------------------" << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -740,12 +811,65 @@ int main(int argc, char ** argv) {
     mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 8, mmio::MajorDim::COLS);
     mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +3, 8, mmio::MajorDim::ROWS);
 
+    // MPI_ALL_PRINT(
+    //     fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
+    //             grid->global_rank, grid->row_rank, grid->col_rank, grid->node_rank
+    //     );
+    //     mmio::utils::CSX_print_as_dense(A_csx, "A matrix", fp);
+    //     mmio::utils::CSX_print_as_dense(B_csx, "B matrix", fp);
+    // )
+
+    moveCSX2device(A_csx);
+    moveCSX2device(B_csx);
+
+    if (world_rank==0) std::cout << "----- Test spcomm_2D -----" << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    fflush(stdout);
+
+    int8_t *col_filters, *row_filters;
+    spcomm_2D(A_csx, B_csx, grid, &col_filters, &row_filters);
+
+    int k = A_csx->ncols; // We know  A_csx->ncols == B_csx->nrows
+    int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
+    int filter_size = mask_size * grid->row_size ;
+
+    std::vector<int8_t> h_col_filters(filter_size);
+    std::vector<int8_t> h_row_filters(filter_size);
+
+    CHECK_CUDA(cudaMemcpy(h_col_filters.data(), col_filters, sizeof(int8_t) * filter_size, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_row_filters.data(), row_filters, sizeof(int8_t) * filter_size, cudaMemcpyDeviceToHost));
+
+    int8_t *A_map = gen_bitmask(A_csx->ptr_vec, A_csx->ncols, MASK_SIZE);
+    int8_t *B_map = gen_bitmask(B_csx->ptr_vec, B_csx->nrows, MASK_SIZE);
+
+    move2host(&A_map, mask_size);
+    move2host(&B_map, mask_size);
+
     MPI_ALL_PRINT(
-        fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
-                grid->global_rank, grid->row_rank, grid->col_rank, grid->node_rank
-        );
-        mmio::utils::CSX_print_as_dense(A_csx, "A matrix", fp);
-        mmio::utils::CSX_print_as_dense(B_csx, "B matrix", fp);
+        fprintf(fp, "A[%d,%d] bitmask: ", grid->col_rank, grid->row_rank);
+        printBit_left2right(A_map, mask_size, fp);
+        fprintf(fp, "\n");
+
+        fprintf(fp, "B[%d,%d] bitmask: ", grid->col_rank, grid->row_rank);
+        printBit_left2right(B_map, mask_size, fp);
+        fprintf(fp, "\n");
+
+        for (int i=0; i<grid->row_size; i++) {
+            fprintf(fp, "Col_filters for C[%d,%d,%d] = A[%d,%d] * B[%d, %d]: ",
+                    grid->col_rank, i, grid->row_rank,
+                    grid->col_rank, grid->row_rank,
+                    grid->row_rank, i
+            );
+            printBit_left2right(h_col_filters.data()+(i*mask_size), mask_size, fp);
+
+            fprintf(fp, "\nRow_filters for C[%d,%d,%d] = A[%d,%d] * B[%d, %d]: ",
+                    i, grid->row_rank, grid->col_rank,
+                    i, grid->col_rank,
+                    grid->col_rank, grid->row_rank
+            );
+            printBit_left2right(h_row_filters.data()+(i*mask_size), mask_size, fp);
+            fprintf(fp, "\n");
+        }
     )
 
     return 0;
