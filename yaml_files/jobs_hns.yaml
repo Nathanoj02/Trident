@@ -1,0 +1,32 @@
+variables:
+  mtx: 'matrices/matrices_list.txt'
+  async_mpi: ['__mpi-async', '']
+  args:
+   - "--impl get"
+   - "--impl main"
+   - "--impl main --Acsc"
+   - "--impl main --Acsc --spcomm"
+
+command: "srun -n {np} -G {np} --gpu-bind=single:1 --cpus-per-task=3 --tasks-per-node 4 ./build_hns/run_spgemm --matA {mtx} --matB {mtx} --2D-pgrid {grid} {args}"
+
+jobs:
+  - config: "1_nodes__3_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "HnS-SpGEMM"
+        variables:
+          np: [4]
+          grid: ["2x2"]
+
+  - config: "4_nodes__3_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "HnS-SpGEMM"
+        variables:
+          np: [16]
+          grid: ["2x2", "4x4"]
+
+  - config: "16_nodes__3_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "HnS-SpGEMM"
+        variables:
+          np: [64]
+          grid: ["2x2", "4x4", "8x8"]

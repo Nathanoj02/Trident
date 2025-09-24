@@ -169,8 +169,12 @@ int main(int argc, char ** argv)
         mmio::CSX<int32_t, float> *dist_C;
         CPU_TIMER_DEF(spgemm);
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<50; i++) 
+        for (int i=0; i<10; i++) 
         {
+            if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
+            fflush(stdout);
+            sleep(0.2);
+            MPI_Barrier(MPI_COMM_WORLD);
             CPU_TIMER_START(spgemm);
 
             if (!strcmp(config->impl, "main"))
@@ -182,14 +186,18 @@ int main(int argc, char ** argv)
                 dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
             }
 
+            MPI_Barrier(MPI_COMM_WORLD);
             CPU_TIMER_STOP(spgemm);
             if (world_rank==0)
             {
-                TIMER_PRINT(spgemm);
+                TIMER_PRINT_LAST(spgemm);
             }
             delete dist_C;
         }
-        if (world_rank==0) printf("Done spgemm\n");
+        if (world_rank==0) {
+            printf("Done spgemm\n");
+            TIMER_PRINT(spgemm);
+        }
     }
 
     dmmio::DCOO_destroy(&dcoo_A);

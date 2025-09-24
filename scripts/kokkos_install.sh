@@ -4,27 +4,42 @@ set -e
 
 source scripts/variables.sh
 
-[[ -d kokkos ]] || git clone --depth=2 --branch 4.7.00 https://github.com/kokkos/kokkos.git
+if [[ ! -d kokkos ]]; then
+  wget ${Kokkos_DOWNLOAD_URL}/kokkos-${Kokkos_VERSION}.tar.gz
+  tar -xzvf kokkos-${Kokkos_VERSION}.tar.gz
+  mv kokkos-${Kokkos_VERSION} kokkos
+  rm kokkos-${Kokkos_VERSION}.tar.gz
+fi
 cd kokkos
 
 cmake -S . -B build \
-  -DCMAKE_INSTALL_PREFIX="$KOKKOS_PREFIX" \
+  -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
+  -DCMAKE_INSTALL_PREFIX="$Kokkos_PREFIX" \
   -DKokkos_ENABLE_CUDA=ON \
   -DKokkos_ENABLE_CUDA_LAMBDA=ON \
+  -DKokkos_ARCH_AMPERE80=ON \
   -DKokkos_ENABLE_SERIAL=ON \
   -DKokkos_ENABLE_OPENMP=OFF \
   -DKokkos_ENABLE_DEPRECATED_CODE_4=OFF \
   -DKokkos_ENABLE_TESTS=OFF 
-  # -DCMAKE_CXX_COMPILER="$NVCC_WRAPPER" \
 
 cmake --build build -j8
 cmake --install build
 
-cd ../kokkos-kernels
+
+cd ..
+if [[ ! -d kokkos-kernels ]]; then
+  wget https://github.com/kokkos/kokkos-kernels/releases/download/4.7.01/kokkos-kernels-4.7.01.tar.gz
+  tar -xzvf kokkos-kernels-4.7.01.tar.gz
+  mv kokkos-kernels-4.7.01 kokkos-kernels
+  rm kokkos-kernels-4.7.01.tar.gz
+fi
+cd kokkos-kernels
+
 cmake -S . -B build \
-  -DCMAKE_INSTALL_PREFIX="$KK_PREFIX" \
-  -DCMAKE_CXX_COMPILER="$KOKKOS_PREFIX/bin/nvcc_wrapper" \
-  -DKokkos_ROOT="$KOKKOS_PREFIX" \
+  -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
+  -DCMAKE_INSTALL_PREFIX="$Kokkos_PREFIX" \
+  -DKokkos_ROOT="$Kokkos_PREFIX" \
   -DKokkosKernels_ENABLE_TESTS=OFF \
   -DKokkosKernels_ENABLE_EXAMPLES=OFF \
   -DKokkosKernels_ENABLE_CUDA=ON \
@@ -36,19 +51,6 @@ cmake -S . -B build \
   -DKokkosKernels_ENABLE_TPL_CUBLAS=OFF \
   -DKokkosKernels_ENABLE_TPL_CUSOLVER=OFF \
   -DKokkosKernels_ENABLE_TPL_CUSPARSE=OFF
-\
-  # ETI: only build the combos you use
-  -DKokkosKernels_INST_COMPLEX_DOUBLE=OFF \
-  -DKokkosKernels_INST_COMPLEX_FLOAT=OFF \
-  -DKokkosKernels_INST_ORDINAL_INT=ON \
-  -DKokkosKernels_INST_ORDINAL_INT64_T=OFF \
-  -DKokkosKernels_INST_OFFSET_SIZE_T=OFF \
-  -DKokkosKernels_INST_OFFSET_INT=ON \
-  -DKokkosKernels_INST_LAYOUTRIGHT=OFF \
-  -DKokkosKernels_INST_EXECSPACE_OPENMP=OFF \
-  -DKokkosKernels_INST_EXECSPACE_THREADS=OFF \
-  -DKokkosKernels_INST_MEMSPACE_CUDASPACE=ON \
 
 cmake --build build -j8
 cmake --install build
-

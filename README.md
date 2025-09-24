@@ -10,7 +10,8 @@ cmake on Perlmutter:
 
 ## Modules
 
-- **Baldo**: `GCC/12.3.0 CUDA/12.3.2 OpenMpi/4.1.5-CUDA-12.3.2 OpenBLAS/0.3.23-GCC-12.3.0`
+<!-- - **Baldo**: `GCC/12.3.0 CUDA/12.3.2 OpenMpi/4.1.5-CUDA-12.3.2 OpenBLAS/0.3.23-GCC-12.3.0` -->
+- **Perlmutter**: `cmake/3.30.2 cudatoolkit/12.9 craype-hugepages2G cray-pmi/6.1.15`
 
 # Baselines
 
