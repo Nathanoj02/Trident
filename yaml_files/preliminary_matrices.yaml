@@ -1,0 +1,13 @@
+path: /global/cfs/cdirs/m4646/hnsspgemm/datasets
+
+known_squaring_nnz:
+  suite_sparse_matrix_list:
+    - Belcastro/mouse_gene
+    - GHS_psdef/ldoor
+    - Dziekonski/dielFilterV3real
+    - vanHeukelum/cage15
+    - DIMACS10/delaunay_n24
+    - Schenk/nlpkkt160
+    - Fluorem/HV15R
+    - LAW/it-2004
+

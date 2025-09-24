@@ -5,7 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
 
 
-
 # FIND CUDATOOLKIT
 find_package(CUDAToolkit REQUIRED)
 message(STATUS "Found CUDA: " ${CUDAToolkit_VERSION})
@@ -20,7 +19,6 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 # FIND KOKKOS
 find_package(Kokkos REQUIRED)
 find_package(KokkosKernels REQUIRED)
-
 
 
 # ADD INCLUDE DIRECTORY
@@ -49,6 +47,7 @@ endif()
 #    -ffast-math
 #    -ftree-vectorize
 #    -pthread)
+
 
 # THREADS
 find_package(Threads REQUIRED)
@@ -88,3 +87,24 @@ endmacro()
 # EXECUTABLES
 add_src(run_spgemm)
 add_src(scratch)
+
+
+# (Optional) Baselines
+option(ENABLE_TRILINOS "Enables Trilinos" OFF)
+
+if(ENABLE_TRILINOS)
+    message("Trilinos has been enabled!")
+    find_package(Trilinos REQUIRED COMPONENTS Teuchos Tpetra)
+    message("\nFound Trilinos!  Here are the details: ")
+    message("   Trilinos_DIR = ${Trilinos_DIR}")
+    message("   Trilinos_VERSION = ${Trilinos_VERSION}")
+    message("   Trilinos_PACKAGE_LIST = ${Trilinos_PACKAGE_LIST}")
+    message("   Trilinos_LIBRARIES = ${Trilinos_LIBRARIES}")
+    message("   Trilinos_INCLUDE_DIRS = ${Trilinos_INCLUDE_DIRS}")
+    message("   Trilinos_TPL_LIST = ${Trilinos_TPL_LIST}")
+    message("   Trilinos_TPL_LIBRARIES = ${Trilinos_TPL_LIBRARIES}")
+    message("   Trilinos_BUILD_SHARED_LIBS = ${Trilinos_BUILD_SHARED_LIBS}")
+    message("End of Trilinos details\n")
+    add_executable(trilinos_spgemm ${CMAKE_CURRENT_SOURCE_DIR}/baselines/trilinos/trilinos_spgemm.cpp)
+    target_link_libraries(TrilinosSpGEMM Trilinos::all_selected_libs)
+endif()
