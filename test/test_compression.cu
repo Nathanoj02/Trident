@@ -18,10 +18,7 @@
 #define DEBUG
 
 // A general function to compute result vector given a row/col pointer array
-thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>& ptr, int mask_size) {
-    auto ptr_d = thrust::raw_pointer_cast(ptr.data());
-    size_t n = ptr.size() - 1;  // number of rows/cols
-
+int* compress_row_or_col(const int* ptr_d, int n, int mask_size) {
     thrust::device_vector<int> presult(n);
 
     thrust::transform(
@@ -42,7 +39,9 @@ thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>&
     int initial_value = 0;
     int segment_size  = mask_size;
     int num_segments  = (n%mask_size == 0) ? (n/mask_size) : ((n/mask_size)+1) ;
-    thrust::device_vector<int> result(num_segments);
+    // thrust::device_vector<int> result(num_segments);
+    int *result;
+    cudaMalloc(&result, sizeof(int)*num_segments);
 
     thrust::host_vector<int> h_offsets(num_segments + 1);
     for (int i = 0; i < num_segments; i++) {
@@ -57,7 +56,7 @@ thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>&
     size_t temp_storage_bytes = 0;
     cub::DeviceSegmentedReduce::Reduce(
        d_temp_storage, temp_storage_bytes, 
-       presult.begin(), result.begin(), 
+       presult.begin(), result,
        num_segments, d_offsets.data(), d_offsets.data()+1, 
        op, initial_value
     );
@@ -68,7 +67,7 @@ thrust::device_vector<int> compress_row_or_col(const thrust::device_vector<int>&
     // Run reduction
     cub::DeviceSegmentedReduce::Reduce(
  	d_temp_storage, temp_storage_bytes, 
-	presult.begin(), result.begin(), 
+	presult.begin(), result,
 	num_segments, d_offsets.data(), d_offsets.data()+1, 
 	op, initial_value
     );
@@ -82,24 +81,28 @@ struct BitwiseAnd {
     }
 };
 
-thrust::device_vector<int> bitwise_and_transform(
-    const thrust::device_vector<int>& a,
-    const thrust::device_vector<int>& b)
-{
-    int n = a.size();
-    thrust::device_vector<int> d_out(n);
+template<typename T>
+T* bitwise_and_transform(const T* a, const T* b, int n) {
+    // Allocate output buffer on device
+    T* d_out = nullptr;
+    cudaMalloc(&d_out, sizeof(T) * n);
+
+    // Wrap raw pointers with device_ptr so Thrust can use them
+    auto a_begin = thrust::device_pointer_cast(a);
+    auto b_begin = thrust::device_pointer_cast(b);
+    auto out_begin = thrust::device_pointer_cast(d_out);
 
     // Zip iterators over both inputs
-    auto zipped_begin = thrust::make_zip_iterator(thrust::make_tuple(a.begin(), b.begin()));
+    auto zipped_begin = thrust::make_zip_iterator(thrust::make_tuple(a_begin, b_begin));
     auto zipped_end   = zipped_begin + n;
 
     // Create transform iterator that applies bitwise AND
     auto transform_iter = thrust::make_transform_iterator(zipped_begin, BitwiseAnd());
 
-    // Use thrust::copy for simplicity (CUB transform API is experimental and more verbose)
-    thrust::copy(transform_iter, transform_iter + n, d_out.begin());
+    // Copy results into d_out
+    thrust::copy(transform_iter, transform_iter + n, out_begin);
 
-    return d_out;
+    return d_out; // caller must cudaFree()
 }
 
 // -------------------
@@ -625,13 +628,20 @@ int main(int argc, char ** argv) {
         thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
 
         // Apply the same function to both
-        auto result_test = compress_row_or_col(test_vector, MASK_SIZE);
-        auto resultA = compress_row_or_col(A_rowptr, MASK_SIZE);
-        auto resultB = compress_row_or_col(B_colptr, MASK_SIZE);
+        auto result_test = compress_row_or_col(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
+        auto resultA = compress_row_or_col(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
+        auto resultB = compress_row_or_col(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
 
-        thrust::host_vector<int> h_test = result_test;
-        thrust::host_vector<int> h_resultA = resultA;
-        thrust::host_vector<int> h_resultB = resultB;
+        int num_segments_test = ((test_vector.size()-1)%MASK_SIZE == 0) ? ((test_vector.size()-1)/MASK_SIZE) : (((test_vector.size()-1)/MASK_SIZE)+1);
+        int num_segments_A    = ((A_rowptr.size()-1)%MASK_SIZE == 0) ? ((A_rowptr.size()-1)/MASK_SIZE) : (((A_rowptr.size()-1)/MASK_SIZE)+1);
+        int num_segments_B    = ((B_colptr.size()-1)%MASK_SIZE == 0) ? ((B_colptr.size()-1)/MASK_SIZE) : (((B_colptr.size()-1)/MASK_SIZE)+1);
+        std::vector<int> h_test(num_segments_test);
+        std::vector<int> h_resultA(num_segments_A);
+        std::vector<int> h_resultB(num_segments_B);
+
+        cudaMemcpy(h_test.data(),    result_test, sizeof(int) * num_segments_test, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_resultA.data(), resultA,     sizeof(int) * num_segments_A, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_resultB.data(), resultB,     sizeof(int) * num_segments_B, cudaMemcpyDeviceToHost);
 
         std::cout << "Result test: ";
         for (auto v : h_test) std::cout << v << " ";
@@ -641,8 +651,11 @@ int main(int argc, char ** argv) {
         for (auto v : h_resultB) std::cout << v << " ";
         std::cout << std::endl;
 
-        auto intersection = bitwise_and_transform(resultA, resultB);
-        thrust::host_vector<int> h_intersection = intersection;
+        ASSERT(num_segments_A == num_segments_B, "For the intersection num_segments_A == num_segments_B");
+        auto intersection = bitwise_and_transform(resultA, resultB, num_segments_A);
+
+        std::vector<int> h_intersection(num_segments_A);
+        cudaMemcpy(h_intersection.data(), intersection, sizeof(int) * num_segments_A, cudaMemcpyDeviceToHost);
 
         std::cout << "Intersection: ";
         for (auto v : h_intersection) std::cout << v << " ";
