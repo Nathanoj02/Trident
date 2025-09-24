@@ -51,8 +51,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     const int n_iters = common_grid_size;
 
 
-    // Are we using spcomm?
-    bool spcomm = (kwd_A.mmio_csx->majordim == mmio::MajorDim::COLS);
+    // Are we using Acsc_flag?
+    bool Acsc_flag = (kwd_A.mmio_csx->majordim == mmio::MajorDim::COLS);
 
 
     // Indices of tiles to fetch in the first iteration from each communicator
@@ -226,7 +226,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // Cleanup
         // B_node underlying storage must be manually freed because its views are unmanaged
         B_node.freeBuffers();
-        if (spcomm)
+        if (Acsc_flag)
         {
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
         }

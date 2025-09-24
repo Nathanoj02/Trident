@@ -81,6 +81,46 @@ int main(int argc, char ** argv)
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
     }
 
+    // Some prints
+    if (world_rank == 0)
+    {
+      std::cout << "A matrix file path: " << config->matpathA << std::endl;
+      std::cout << "B matrix file path: " << config->matpathB << std::endl;
+      std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
+      std::cout << "Number of processes per col: "  << nproccols     << std::endl;
+      std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
+      std::cout << "Chosen implementation: " << config->impl << "(main use MPI_Put)" << std::endl;
+      std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
+      std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
+    }
+
+    // Checks on the input params
+    {
+        if (config->spcomm && (!config->Acsc)) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm requires --Acsc\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+        // NOTE: strcmp(a,b) return 0 if a == b, meaning that if a==b than 'if(strcmp(a,b))' is false
+        if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
+            if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+        if (!strcmp(config->impl, "get") && (config->Acsc || config->spcomm)) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+
+        // TODO
+        if ( config->spcomm ) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm is not supported yet\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+    }
+
     // Reading the distribuited matrices
     std::string A_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
@@ -108,18 +148,6 @@ int main(int argc, char ** argv)
     }
     // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
 
-
-    // Some prints
-    if (world_rank == 0) 
-    {
-      std::cout << "A matrix file path: " << config->matpathA << std::endl;
-      std::cout << "B matrix file path: " << config->matpathB << std::endl;
-      std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
-      std::cout << "Number of processes per col: "  << nproccols     << std::endl;
-      std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
-      std::cout << "Spcomm enabled: " << config->spcomm << " (when enabled, A becomes a CSC)" << std::endl;
-    }
-
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -128,7 +156,7 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        mmio::MajorDim A_maj = (config->spcomm) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
+        mmio::MajorDim A_maj = (config->Acsc) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, A_maj);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
 

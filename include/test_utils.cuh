@@ -17,6 +17,7 @@ struct config
 {
     const char * impl;
     bool spcomm;
+    bool Acsc;
 
     int nprocrows;
     int nproccols;
@@ -69,6 +70,7 @@ char* extract_matrix_name(const char* filepath)
 void parse_args(int argc, char ** argv, Config * config)
 {
     config->spcomm = false;
+    config->Acsc = false;
     config->impl = "none";
     config->nprocrows = 1;
     config->nproccols = 1;
@@ -97,6 +99,10 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--spcomm"))
         {
             config->spcomm = true;
+        }
+        else if (!strcmp(argname, "--Acsc"))
+        {
+            config->Acsc = true;
         }
         else if (!strcmp(argname, "--impl"))
         {
