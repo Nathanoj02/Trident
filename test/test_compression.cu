@@ -12,6 +12,7 @@
 #include <iomanip>
 
 #include "common.h"
+#include "test_utils.cuh"
 
 #define MASK_SIZE 4   // set to 32 in production
 #define DEBUG
@@ -105,9 +106,10 @@ thrust::device_vector<int> bitwise_and_transform(
 // For the compression
 // -------------------
 
-void printCSRMatrix(const std::vector<int>& colIdx,
-                    const std::vector<float>& values,
-                    const std::vector<int>& rowPtr) {
+template<typename IT, typename VT>
+void printCSRMatrix(const std::vector<IT>& colIdx,
+                    const std::vector<VT>& values,
+                    const std::vector<IT>& rowPtr) {
     int nrows = rowPtr.size() - 1;
     int ncols = 0;
 
@@ -135,9 +137,10 @@ void printCSRMatrix(const std::vector<int>& colIdx,
     }
 }
 
-void printCSCMatrix(const std::vector<int>& rowIdx,
-                    const std::vector<float>& values,
-                    const std::vector<int>& colPtr) {
+template<typename IT, typename VT>
+void printCSCMatrix(const std::vector<IT>& rowIdx,
+                    const std::vector<VT>& values,
+                    const std::vector<IT>& colPtr) {
     int ncols = colPtr.size() - 1;
     int nrows = 0;
 
@@ -271,7 +274,6 @@ void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows) {
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
 int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, PT* mask, VT **output) {
 
-    int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
         counting,
@@ -518,7 +520,8 @@ ConditionFn syntetic_selections(int i) {
 
 }
 
-void gen_syntetic_matrix(int seed, int n) {
+template<typename IT, typename VT>
+mmio::CSX<IT, VT>* gen_syntetic_matrix(int seed, int n, mmio::MajorDim layout, bool print=false) {
 
     bool(*empty_row_condition)(int);
     switch(seed) {
@@ -542,13 +545,13 @@ void gen_syntetic_matrix(int seed, int n) {
             exit(__LINE__);
     }
 
-    std::vector<int> vec_ptr(n+1);
+    std::vector<IT> vec_ptr(n+1);
     vec_ptr[0] = 0;
-    int nnz = 0;
+    IT nnz = 0;
 
     for (int i=0; i<n; i++) {
         if (empty_row_condition(i)) {
-            int row_nnz = (i<(n/2)) ? (i+1) : (n-i);
+            IT row_nnz = (i<(n/2)) ? (i+1) : (n-i);
             vec_ptr[i+1] = vec_ptr[i] + row_nnz;
             nnz += row_nnz;
         } else {
@@ -556,8 +559,8 @@ void gen_syntetic_matrix(int seed, int n) {
         }
     }
 
-    std::vector<int>   vec_idx(nnz);
-    std::vector<float> vec_val(nnz);
+    std::vector<IT> vec_idx(nnz);
+    std::vector<VT> vec_val(nnz);
     for (int i=0; i<n; i++) {
         for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
             vec_idx[vec_ptr[i] + j] = (i<(n/2)) ? (i + j) : (n - j - 1) ;
@@ -565,71 +568,129 @@ void gen_syntetic_matrix(int seed, int n) {
         }
     }
 
-    std::cout << "---------- Syntetic matrix ( " << seed << ", " << n << ") ----------" << std::endl;
+    if (print) {
+        std::cout << "---------- Syntetic matrix ( " << seed << ", " << n << ") ----------" << std::endl;
 
-    /*
-    std::cout << "Pointer vector: ";
-    for (int x : vec_ptr) {
-        std::cout << x << " ";
+        if (layout == mmio::MajorDim::ROWS) {
+            std::cout << "----- CSR -----" << std::endl;
+            printCSRMatrix(vec_idx, vec_val, vec_ptr);
+        } else {
+            std::cout << "----- CSC -----" << std::endl;
+            printCSCMatrix(vec_idx, vec_val, vec_ptr);
+        }
     }
-    std::cout << std::endl;
 
-    std::cout << "Index vector: ";
-    for (int x : vec_idx) {
-        std::cout << x << " ";
-    }
-    std::cout << std::endl;
+    mmio::CSX<IT,VT> *csx = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+    csx->majordim = layout;
+    csx->nnz      = nnz;
+    csx->nrows    = n;
+    csx->ncols    = n;
+    csx->val     = (VT*)malloc(nnz * sizeof(VT));
+    csx->idx_vec = (IT*)malloc(nnz * sizeof(IT));
+    csx->ptr_vec = (IT*)malloc((n+1) * sizeof(IT));
 
-    std::cout << "Value vector: ";
-    for (float x : vec_val) {
-        std::cout << x << " ";
-    }
-    std::cout << std::endl;
-    */
+    std::copy(vec_val.begin(), vec_val.end(), csx->val);
+    std::copy(vec_idx.begin(), vec_idx.end(), csx->idx_vec);
+    std::copy(vec_ptr.begin(), vec_ptr.end(), csx->ptr_vec);
 
-    std::cout << "----- CSR -----" << std::endl;
-    printCSRMatrix(vec_idx, vec_val, vec_ptr);
-    std::cout << "----- CSC -----" << std::endl;
-    printCSCMatrix(vec_idx, vec_val, vec_ptr);
+    return(csx);
 
 }
 
 
-int main() {
-    thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
+int main(int argc, char ** argv) {
 
-    thrust::device_vector<int> A_rowptr{0, 1, 2, 2, 3, 4, 4, 5, 6};
-    thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
+    MPI_Init(&argc, &argv);
 
-    // Apply the same function to both
-    auto result_test = compress_row_or_col(test_vector, MASK_SIZE);
-    auto resultA = compress_row_or_col(A_rowptr, MASK_SIZE);
-    auto resultB = compress_row_or_col(B_colptr, MASK_SIZE);
+    int world_size;
+    int world_rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    MPI_Barrier(MPI_COMM_WORLD);
 
-    thrust::host_vector<int> h_test = result_test;
-    thrust::host_vector<int> h_resultA = resultA;
-    thrust::host_vector<int> h_resultB = resultB;
+    Config * config = (Config *)(malloc(sizeof(Config)));
+    parse_args(argc, argv, config);
+    MPI_Barrier(MPI_COMM_WORLD);
 
-    std::cout << "Result test: ";
-    for (auto v : h_test) std::cout << v << " ";
-    std::cout << "\nResult A: ";
-    for (auto v : h_resultA) std::cout << v << " ";
-    std::cout << "\nResult B: ";
-    for (auto v : h_resultB) std::cout << v << " ";
-    std::cout << std::endl;
+    // Set the process grid parameeters
+    int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
+    dmmio::ProcessGrid *grid = dmmio::io::ProcessGrid_create(nprocrows, nproccols, nprocpergroup);
 
-    auto intersection = bitwise_and_transform(resultA, resultB);
-    thrust::host_vector<int> h_intersection = intersection;
+    // ----------------------------------------------------------------------------------------------------
 
-    std::cout << "Intersection: ";
-    for (auto v : h_intersection) std::cout << v << " ";
-    std::cout << std::endl;
+    if (world_rank == 0) {
+        thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
 
-    std::cout << "----- Test for compression -----" << std::endl;
-    tmp_test1();
+        thrust::device_vector<int> A_rowptr{0, 1, 2, 2, 3, 4, 4, 5, 6};
+        thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
 
-    std::cout << "----- Test syntetic matrices -----" << std::endl;
-    for (int i=0; i<8; i++) gen_syntetic_matrix(i%5, 8);
+        // Apply the same function to both
+        auto result_test = compress_row_or_col(test_vector, MASK_SIZE);
+        auto resultA = compress_row_or_col(A_rowptr, MASK_SIZE);
+        auto resultB = compress_row_or_col(B_colptr, MASK_SIZE);
+
+        thrust::host_vector<int> h_test = result_test;
+        thrust::host_vector<int> h_resultA = resultA;
+        thrust::host_vector<int> h_resultB = resultB;
+
+        std::cout << "Result test: ";
+        for (auto v : h_test) std::cout << v << " ";
+        std::cout << "\nResult A: ";
+        for (auto v : h_resultA) std::cout << v << " ";
+        std::cout << "\nResult B: ";
+        for (auto v : h_resultB) std::cout << v << " ";
+        std::cout << std::endl;
+
+        auto intersection = bitwise_and_transform(resultA, resultB);
+        thrust::host_vector<int> h_intersection = intersection;
+
+        std::cout << "Intersection: ";
+        for (auto v : h_intersection) std::cout << v << " ";
+        std::cout << std::endl;
+
+        std::cout << "----- Test for compression -----" << std::endl;
+        tmp_test1();
+
+        std::cout << "----- Test syntetic matrices -----" << std::endl;
+        for (int i=0; i<8; i++) free(gen_syntetic_matrix<int,float>(i%5, 8, (i<=4) ? (mmio::MajorDim::ROWS) : (mmio::MajorDim::COLS), true));
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // ----------------------------------------------------------------------------------------------------
+
+    if (world_rank==0) std::cout << "-------------------- Parallel part --------------------" << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    dmmio::utils::ProcessGrid_graph(grid, stdout);
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    /* Here I am generating the matrices in the way that:
+     *                     B:
+     *                     ---------------
+     *                     | 2%3  | 1%3  |
+     *                     ---------------
+     *                     | 2%3  | 1%3  |
+     *                     ---------------
+     *                        ||    ||
+     * A:                     \/    \/
+     * ---------------     ---------------
+     * | even | even | --> | 2%6  | 4%6  |
+     * ---------------     ---------------
+     * | odd  | odd  | --> | 5%6  | 1%6  |
+     * ---------------     ---------------
+     *
+     */
+    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 8, mmio::MajorDim::COLS);
+    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +3, 8, mmio::MajorDim::ROWS);
+
+    MPI_ALL_PRINT(
+        fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
+                grid->global_rank, grid->row_rank, grid->col_rank, grid->node_rank
+        );
+        mmio::utils::CSX_print_as_dense(A_csx, "A matrix", fp);
+        mmio::utils::CSX_print_as_dense(B_csx, "B matrix", fp);
+    )
 
     return 0;
 }
