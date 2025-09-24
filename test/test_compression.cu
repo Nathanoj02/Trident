@@ -601,6 +601,48 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(int seed, int n, mmio::MajorDim layout, b
 }
 
 
+template<typename IT, typename VT>
+void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
+                int8_t** col_filters, int8_t** row_filters) {
+    ASSERT(Acsc->majordim==mmio::MajorDim::COLS, "A must be a CSC");
+    ASSERT(Bcsr->majordim==mmio::MajorDim::ROWS, "B must be a CSR");
+    ASSERT(Acsc->ncols == Bcsr->nrows, "In 2D mask cols of A must be equal to rows of B");
+    ASSERT(grid->row_size == grid->col_size, "The 2D grid must be a square");
+    ASSERT(grid->node_size == 1, "The spcomm 2D do not support node size > 1");
+    ASSERT((Acsc->ncols % 8) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
+    ASSERT((Bcsr->ncols % 8) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
+
+    int k = Acsc->ncols;
+    int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
+    auto A_map = compress_row_or_col(Acsc->ptr_vec, MASK_SIZE);
+    auto B_map = compress_row_or_col(Bcsr->ptr_vec, MASK_SIZE);
+    IT *raw_A_map = thrust::raw_pointer_cast(A_map.data());
+    IT *raw_B_map = thrust::raw_pointer_cast(B_map.data());
+
+    // ---------- Ghatering all the required maps ----------
+    int8_t *recv_A_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));  // BUG: This must be done with cudaMalloc
+    MPI_Allgather(raw_A_map, mask_size, MPI_INT8_T, recv_A_maps, mask_size, MPI_INT8_T, grid->row_comm);
+
+    int8_t *recv_B_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));  // BUG: This must be done with cudaMalloc
+    MPI_Allgather(raw_B_map, mask_size, MPI_INT8_T, recv_B_maps, mask_size, MPI_INT8_T, grid->col_comm);
+
+    // ---------- Performing the mask intersection ----------
+    // since mapsizes are equal, we can comput all the intersections togheter
+    auto all_intersections = bitwise_and_transform(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
+
+    // ---------- Alltoall data sisplacement back ----------
+    *col_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));  // BUG: This must be done with cudaMalloc
+    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, col_filters, mask_size, MPI_INT8_T, grid->row_comm);
+
+    *row_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));  // BUG: This must be done with cudaMalloc
+    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, row_filters, mask_size, MPI_INT8_T, grid->col_comm);
+
+    free(recv_A_maps);
+    free(recv_B_maps);
+    // free(raw_A_map);  // Now managen by cub
+    // free(raw_B_map);  // Now managen by cub
+}
+
 int main(int argc, char ** argv) {
 
     MPI_Init(&argc, &argv);
