@@ -18,17 +18,18 @@
 #define DEBUG
 
 // A general function to compute result vector given a row/col pointer array
-int* compress_row_or_col(const int* ptr_d, int n, int mask_size) {
-    thrust::device_vector<int> presult(n);
+template<typename IT>
+int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
+    thrust::device_vector<int8_t> presult(n);
 
     thrust::transform(
         thrust::make_counting_iterator<int>(0),
         thrust::make_counting_iterator<int>(n),
         presult.begin(),
         [=] __device__(int i) {
-            int a = ptr_d[i];
-            int b = ptr_d[i + 1];
-            int c = 0;
+            IT a = ptr_d[i];
+            IT b = ptr_d[i + 1];
+            int8_t c = 0;
             if (a != b) {
                 c = 1 << (i % mask_size);
             }
@@ -40,8 +41,8 @@ int* compress_row_or_col(const int* ptr_d, int n, int mask_size) {
     int segment_size  = mask_size;
     int num_segments  = (n%mask_size == 0) ? (n/mask_size) : ((n/mask_size)+1) ;
     // thrust::device_vector<int> result(num_segments);
-    int *result;
-    cudaMalloc(&result, sizeof(int)*num_segments);
+    int8_t *result;
+    cudaMalloc(&result, sizeof(int8_t)*num_segments);
 
     thrust::host_vector<int> h_offsets(num_segments + 1);
     for (int i = 0; i < num_segments; i++) {
@@ -82,7 +83,7 @@ struct BitwiseAnd {
 };
 
 template<typename T>
-T* bitwise_and_transform(const T* a, const T* b, int n) {
+T* intersect_bitmasks(const T* a, const T* b, int n) {
     // Allocate output buffer on device
     T* d_out = nullptr;
     cudaMalloc(&d_out, sizeof(T) * n);
@@ -614,8 +615,8 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
 
     int k = Acsc->ncols;
     int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
-    auto A_map = compress_row_or_col(Acsc->ptr_vec, MASK_SIZE);
-    auto B_map = compress_row_or_col(Bcsr->ptr_vec, MASK_SIZE);
+    auto A_map = gen_bitmask(Acsc->ptr_vec, MASK_SIZE);
+    auto B_map = gen_bitmask(Bcsr->ptr_vec, MASK_SIZE);
     IT *raw_A_map = thrust::raw_pointer_cast(A_map.data());
     IT *raw_B_map = thrust::raw_pointer_cast(B_map.data());
 
@@ -628,7 +629,7 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
 
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
-    auto all_intersections = bitwise_and_transform(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
+    auto all_intersections = intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
 
     // ---------- Alltoall data sisplacement back ----------
     *col_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));  // BUG: This must be done with cudaMalloc
@@ -670,37 +671,37 @@ int main(int argc, char ** argv) {
         thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
 
         // Apply the same function to both
-        auto result_test = compress_row_or_col(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
-        auto resultA = compress_row_or_col(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
-        auto resultB = compress_row_or_col(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
+        int8_t *result_test = gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
+        int8_t *resultA     = gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
+        int8_t *resultB     = gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
 
         int num_segments_test = ((test_vector.size()-1)%MASK_SIZE == 0) ? ((test_vector.size()-1)/MASK_SIZE) : (((test_vector.size()-1)/MASK_SIZE)+1);
         int num_segments_A    = ((A_rowptr.size()-1)%MASK_SIZE == 0) ? ((A_rowptr.size()-1)/MASK_SIZE) : (((A_rowptr.size()-1)/MASK_SIZE)+1);
         int num_segments_B    = ((B_colptr.size()-1)%MASK_SIZE == 0) ? ((B_colptr.size()-1)/MASK_SIZE) : (((B_colptr.size()-1)/MASK_SIZE)+1);
-        std::vector<int> h_test(num_segments_test);
-        std::vector<int> h_resultA(num_segments_A);
-        std::vector<int> h_resultB(num_segments_B);
+        std::vector<int8_t> h_test(num_segments_test);
+        std::vector<int8_t> h_resultA(num_segments_A);
+        std::vector<int8_t> h_resultB(num_segments_B);
 
-        cudaMemcpy(h_test.data(),    result_test, sizeof(int) * num_segments_test, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_resultA.data(), resultA,     sizeof(int) * num_segments_A, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_resultB.data(), resultB,     sizeof(int) * num_segments_B, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_test.data(),    result_test, sizeof(int8_t) * num_segments_test, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_resultA.data(), resultA,     sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_resultB.data(), resultB,     sizeof(int8_t) * num_segments_B, cudaMemcpyDeviceToHost);
 
         std::cout << "Result test: ";
-        for (auto v : h_test) std::cout << v << " ";
+        for (auto v : h_test) std::cout << static_cast<int>(v) << " ";
         std::cout << "\nResult A: ";
-        for (auto v : h_resultA) std::cout << v << " ";
+        for (auto v : h_resultA) std::cout << static_cast<int>(v) << " ";
         std::cout << "\nResult B: ";
-        for (auto v : h_resultB) std::cout << v << " ";
+        for (auto v : h_resultB) std::cout << static_cast<int>(v) << " ";
         std::cout << std::endl;
 
         ASSERT(num_segments_A == num_segments_B, "For the intersection num_segments_A == num_segments_B");
-        auto intersection = bitwise_and_transform(resultA, resultB, num_segments_A);
+        int8_t *intersection = intersect_bitmasks(resultA, resultB, num_segments_A);
 
-        std::vector<int> h_intersection(num_segments_A);
-        cudaMemcpy(h_intersection.data(), intersection, sizeof(int) * num_segments_A, cudaMemcpyDeviceToHost);
+        std::vector<int8_t> h_intersection(num_segments_A);
+        cudaMemcpy(h_intersection.data(), intersection, sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost);
 
         std::cout << "Intersection: ";
-        for (auto v : h_intersection) std::cout << v << " ";
+        for (auto v : h_intersection) std::cout << static_cast<int>(v) << " ";
         std::cout << std::endl;
 
         std::cout << "----- Test for compression -----" << std::endl;
