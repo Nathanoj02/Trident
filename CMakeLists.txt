@@ -108,23 +108,3 @@ endmacro()
 add_src(run_spgemm)
 add_src(scratch)
 
-
-# (Optional) Baselines
-option(ENABLE_TRILINOS "Enables Trilinos" OFF)
-
-if(ENABLE_TRILINOS)
-    message("Trilinos has been enabled!")
-    find_package(Trilinos REQUIRED COMPONENTS Teuchos Tpetra)
-    message("\nFound Trilinos!  Here are the details: ")
-    message("   Trilinos_DIR = ${Trilinos_DIR}")
-    message("   Trilinos_VERSION = ${Trilinos_VERSION}")
-    message("   Trilinos_PACKAGE_LIST = ${Trilinos_PACKAGE_LIST}")
-    message("   Trilinos_LIBRARIES = ${Trilinos_LIBRARIES}")
-    message("   Trilinos_INCLUDE_DIRS = ${Trilinos_INCLUDE_DIRS}")
-    message("   Trilinos_TPL_LIST = ${Trilinos_TPL_LIST}")
-    message("   Trilinos_TPL_LIBRARIES = ${Trilinos_TPL_LIBRARIES}")
-    message("   Trilinos_BUILD_SHARED_LIBS = ${Trilinos_BUILD_SHARED_LIBS}")
-    message("End of Trilinos details\n")
-    add_executable(trilinos_spgemm comparison/trilinos/trilinos_spgemm.cpp)
-    target_link_libraries(trilinos_spgemm PRIVATE Trilinos::all_selected_libs KokkosCore KokkosContainers)
-endif()
