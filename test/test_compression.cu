@@ -340,24 +340,32 @@ int check_mod_pattern(const int8_t* mask, int n, int k, int m) {
     return 1;
 }
 
+#define NGPU_PER_NODE 4
+
 int main(int argc, char ** argv) {
 
-    cudaSetDevice(0);
     MPI_Init(&argc, &argv);
 
     int world_size;
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    // cudaSetDevice(world_rank%NGPU_PER_NODE);
     MPI_Barrier(MPI_COMM_WORLD);
+
+    MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
     MPI_Barrier(MPI_COMM_WORLD);
 
+    MPI_Abort(MPI_COMM_WORLD, 1); // Debug
+
     // Set the process grid parameeters
     int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
     dmmio::ProcessGrid *grid = dmmio::io::ProcessGrid_create(nprocrows, nproccols, nprocpergroup);
+
+    MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
     int skip = config->spcomm; // I use spcomm as flag for skip the first experiments
     if (skip) goto parallel_exps;
@@ -371,6 +379,8 @@ int main(int argc, char ** argv) {
 
         // Apply the same function to both
         int8_t *result_test = SpaComm::gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
+        MPI_Abort(MPI_COMM_WORLD, 1); // Debug
+
         int8_t *resultA     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
         int8_t *resultB     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
 
