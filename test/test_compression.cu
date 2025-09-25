@@ -15,7 +15,7 @@
 #include "utils.cuh"
 #include "test_utils.cuh"
 
-#define MASK_SIZE 4   // set to 32 in production
+#define MASK_SIZE 8   // set to 8 in production
 #define DEBUG
 
 // A general function to compute result vector given a row/col pointer array
@@ -537,13 +537,13 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(int seed, int n, mmio::MajorDim layout, b
             empty_row_condition = odd;
             break;
         case 2:
-            empty_row_condition = zeroOthree;
+            empty_row_condition = twoOthree;
             break;
         case 3:
             empty_row_condition = oneOthree;
             break;
         case 4:
-            empty_row_condition = twoOthree;
+            empty_row_condition = zeroOthree;
             break;
         default:
             fprintf(stderr, "Unrecognized seed (%d)\n", seed);
@@ -808,8 +808,8 @@ int main(int argc, char ** argv) {
      * ---------------     ---------------
      *
      */
-    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 8, mmio::MajorDim::COLS);
-    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +3, 8, mmio::MajorDim::ROWS);
+    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 16, mmio::MajorDim::COLS);
+    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +2, 16, mmio::MajorDim::ROWS);
 
     // MPI_ALL_PRINT(
     //     fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
