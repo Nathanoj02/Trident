@@ -1,8 +1,6 @@
 #!/usr/bin/bash
 
-export KOKKOS_PREFIX=~/local
-export KK_PREFIX=~/local
-export NVCC_WRAPPER_DEFAULT_COMPILER=CC
+source scripts/variables.sh
 
 cmake -S . -B build \
     -DCCUTILS_ENABLE_CUDA=ON \

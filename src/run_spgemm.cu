@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include "hns_spgemm_get.cuh"
 #include "test_utils.cuh"
 #include <ccutils/timers.h>
 #include <Kokkos_Core.hpp>
@@ -12,6 +13,7 @@
         printf("cudaGetDevice failed: %s\n", cudaGetErrorString(err)); \
     } \
 }
+
 
 int main(int argc, char ** argv)
 {
@@ -65,7 +67,7 @@ int main(int argc, char ** argv)
     dmmio::PartitioningType Apart, Bpart, Cpart;
 
     Aop   = dmmio::Operation::None;
-    Apart = (dmmio::PartitioningType)config->part_num;
+    Apart = dmmio::PartitioningType::Naive;
 
     if (Apart == dmmio::PartitioningType::Naive) {
         Bpart = dmmio::PartitioningType::Naive;
@@ -77,6 +79,46 @@ int main(int argc, char ** argv)
         // TODO wirite it for other partitionings and check it
         fprintf(stderr, "Partitioning different by Naive are not supported yet.\n");
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
+    }
+
+    // Some prints
+    if (world_rank == 0)
+    {
+      std::cout << "A matrix file path: " << config->matpathA << std::endl;
+      std::cout << "B matrix file path: " << config->matpathB << std::endl;
+      std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
+      std::cout << "Number of processes per col: "  << nproccols     << std::endl;
+      std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
+      std::cout << "Chosen implementation: " << config->impl << "(main use MPI_Put)" << std::endl;
+      std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
+      std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
+    }
+
+    // Checks on the input params
+    {
+        if (config->spcomm && (!config->Acsc)) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm requires --Acsc\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+        // NOTE: strcmp(a,b) return 0 if a == b, meaning that if a==b than 'if(strcmp(a,b))' is false
+        if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
+            if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+        if (!strcmp(config->impl, "get") && (config->Acsc || config->spcomm)) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+
+        // TODO
+        if ( config->spcomm ) {
+            if (world_rank == 0) fprintf(stderr, "Error: --spcomm is not supported yet\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
     }
 
     // Reading the distribuited matrices
@@ -106,18 +148,6 @@ int main(int argc, char ** argv)
     }
     // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
 
-
-    // Some prints
-    if (world_rank == 0) 
-    {
-      std::cout << "A matrix file path: " << config->matpathA << std::endl;
-      std::cout << "B matrix file path: " << config->matpathB << std::endl;
-      std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
-      std::cout << "Number of processes per col: "  << nproccols     << std::endl;
-      std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
-      std::cout << "Spcomm enabled: " << config->spcomm << " (when enabled, A becomes a CSC)" << std::endl;
-    }
-
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -126,7 +156,7 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        mmio::MajorDim A_maj = (config->spcomm) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
+        mmio::MajorDim A_maj = (config->Acsc) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, A_maj);
         KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
 
@@ -134,12 +164,24 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
+
+
+        mmio::CSX<int32_t, float> *dist_C;
         CPU_TIMER_DEF(spgemm);
-        if (world_rank==0) printf("Beginning spgemm\n");
+        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<50; i++) 
         {
             CPU_TIMER_START(spgemm);
-            mmio::CSX<int32_t, float> *dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
+
+            if (!strcmp(config->impl, "main"))
+            {
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
+            }
+            else if (!strcmp(config->impl, "get"))
+            {
+                dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
+            }
+
             CPU_TIMER_STOP(spgemm);
             if (world_rank==0)
             {

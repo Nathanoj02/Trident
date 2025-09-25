@@ -51,8 +51,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     const int n_iters = common_grid_size;
 
 
-    // Are we using spcomm?
-    bool spcomm = (kwd_A.mmio_csx->majordim == mmio::MajorDim::COLS);
+    // Are we using Acsc_flag?
+    bool Acsc_flag = (kwd_A.mmio_csx->majordim == mmio::MajorDim::COLS);
 
 
     // Indices of tiles to fetch in the first iteration from each communicator
@@ -172,7 +172,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(data_proc_A)
 #endif
+
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(handle, A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(data_proc_A)
 #endif
@@ -180,7 +182,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(data_proc_B)
 #endif
+
         KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(data_proc_B)
 #endif
@@ -196,6 +200,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // Local multiply
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
+        print_d_arr((int*)A_remote.storage.graph.entries.data(), A_remote.storage.nnz(), "A_remote colinds");
+        print_d_arr((int*)B_node.storage.graph.entries.data(), B_node.storage.nnz(), "B_remote colinds");
+        print_d_arr((int*)A_remote.storage.graph.row_map.data(), A_remote.storage.numRows() + 1, "B_remote rowptrs");
+        print_d_arr((int*)B_node.storage.graph.row_map.data(), B_node.storage.numRows() + 1, "B_remote rowptrs");
 #endif
 
 
@@ -218,11 +226,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // Cleanup
         // B_node underlying storage must be manually freed because its views are unmanaged
         B_node.freeBuffers();
-        if (spcomm)
+        if (Acsc_flag)
         {
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
         }
-        MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
@@ -266,7 +273,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
-    return(out);
+    return out;
 }
 
 template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B);

@@ -1,29 +1,24 @@
 #!/usr/bin/bash
 
-export KOKKOS_PREFIX=~/local
-export KK_PREFIX=~/local
+set -e
 
+source scripts/variables.sh
+
+[[ -d kokkos ]] || git clone --depth=2 --branch 4.7.00 https://github.com/kokkos/kokkos.git
 cd kokkos
-# (Recommended) checkout a release tag that matches KokkosKernels later, e.g.:
-# git checkout 4.4.00   # example – use the tag you want
-
-# Use kokkos' nvcc_wrapper as the C++ compiler
-export NVCC_WRAPPER_DEFAULT_COMPILER=CC
-export NVCC_WRAPPER=$PWD/bin/nvcc_wrapper
 
 cmake -S . -B build \
   -DCMAKE_INSTALL_PREFIX="$KOKKOS_PREFIX" \
-  -DCMAKE_CXX_COMPILER="$NVCC_WRAPPER" \
   -DKokkos_ENABLE_CUDA=ON \
   -DKokkos_ENABLE_CUDA_LAMBDA=ON \
   -DKokkos_ENABLE_SERIAL=ON \
   -DKokkos_ENABLE_OPENMP=OFF \
   -DKokkos_ENABLE_DEPRECATED_CODE_4=OFF \
   -DKokkos_ENABLE_TESTS=OFF 
+  # -DCMAKE_CXX_COMPILER="$NVCC_WRAPPER" \
 
 cmake --build build -j8
 cmake --install build
-
 
 cd ../kokkos-kernels
 cmake -S . -B build \
