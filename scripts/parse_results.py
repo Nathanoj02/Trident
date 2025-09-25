@@ -17,6 +17,7 @@ row 1  | Node0 [2  ]     | Node0 [3  ]     |
 Beginning conversion
 Done conversion
 Beginning spgemm -- implementation: main
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=80.441933,stddev=39.232296,min=52.700512,max=108.183357,sum=160.883865
@@ -25,6 +26,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=24.127888,stddev=33.386776,min=0.519872,max=47.735905,sum=48.255775
 NNZ C: 929023247
 <Timer>[spgemm] 2296.719482 ms
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=59.890045,stddev=40.993816,min=30.903040,max=88.877052,sum=119.780090
@@ -33,6 +35,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.761968,stddev=0.299248,min=0.550368,max=0.973568,sum=1.523936
 NNZ C: 929023247
 <Timer>[spgemm] n=2,avg=1775.370850,stddev=737.298340,min=1254.022217,max=2296.719482,sum=3550.741699
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=16.104912,stddev=22.641558,min=0.094912,max=32.114910,sum=32.209824
@@ -41,6 +44,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.755104,stddev=3.089095,min=0.570784,max=4.939424,sum=5.510208
 NNZ C: 929023247
 <Timer>[spgemm] n=3,avg=1640.472778,stddev=571.311523,min=1254.022217,max=2296.719482,sum=4921.418457
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=54.013649,stddev=56.964954,min=13.733344,max=94.293953,sum=108.027298
@@ -49,6 +53,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=11.369008,stddev=14.397848,min=1.188192,max=21.549824,sum=22.738016
 NNZ C: 929023247
 <Timer>[spgemm] n=4,avg=1550.570557,stddev=499.927551,min=1254.022217,max=2296.719482,sum=6202.282227
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=38.982674,stddev=26.732870,min=20.079679,max=57.885666,sum=77.965347
@@ -57,6 +62,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=34.280800,stddev=47.761547,min=0.508288,max=68.053314,sum=68.561600
 NNZ C: 929023247
 <Timer>[spgemm] n=5,avg=1486.759888,stddev=455.855988,min=1231.517212,max=2296.719482,sum=7433.799316
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=20.108288,stddev=16.439135,min=8.484064,max=31.732512,sum=40.216576
@@ -65,6 +71,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.851632,stddev=0.381068,min=0.582176,max=1.121088,sum=1.703264
 NNZ C: 929023247
 <Timer>[spgemm] n=6,avg=1457.552368,stddev=413.959167,min=1231.517212,max=2296.719482,sum=8745.314453
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=32.141937,stddev=31.624598,min=9.779968,max=54.503902,sum=64.283875
@@ -73,6 +80,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.562496,stddev=2.881963,min=0.524640,max=4.600352,sum=5.124992
 NNZ C: 929023247
 <Timer>[spgemm] n=7,avg=1436.398560,stddev=382.013367,min=1231.517212,max=2296.719482,sum=10054.790039
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=39.458096,stddev=39.812782,min=11.306208,max=67.609985,sum=78.916191
@@ -81,6 +89,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.778896,stddev=0.478502,min=0.440544,max=1.117248,sum=1.557792
 NNZ C: 929023247
 <Timer>[spgemm] n=8,avg=1417.270386,stddev=357.789795,min=1231.517212,max=2296.719482,sum=11338.163086
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=30.363985,stddev=42.763851,min=0.125376,max=60.602592,sum=60.727970
@@ -89,6 +98,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.233456,stddev=3.233254,min=0.947200,max=5.519712,sum=6.466912
 NNZ C: 929023247
 <Timer>[spgemm] n=9,avg=1406.351074,stddev=336.281067,min=1231.517212,max=2296.719482,sum=12657.159180
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 1]>[comm_wait] n=2,avg=685.595459,stddev=639.573914,min=233.348389,max=1137.842529,sum=1371.190918
@@ -205,6 +215,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.708000,stddev=0.290219,min=0.502784,max=0.913216,sum=1.416000
 NNZ C: 929023247
 <Timer>[spgemm] n=10,avg=1397.115845,stddev=318.391022,min=1231.517212,max=2296.719482,sum=13971.158203
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=31.699856,stddev=27.866816,min=11.995040,max=51.404671,sum=63.399712
@@ -213,6 +224,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.739360,stddev=0.431731,min=0.434080,max=1.044640,sum=1.478720
 NNZ C: 929023247
 <Timer>[spgemm] n=11,avg=1389.244263,stddev=303.178345,min=1231.517212,max=2296.719482,sum=15281.687500
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=15.411264,stddev=6.144113,min=11.066720,max=19.755808,sum=30.822529
@@ -221,6 +233,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.737728,stddev=0.406569,min=0.450240,max=1.025216,sum=1.475456
 NNZ C: 929023247
 <Timer>[spgemm] n=12,avg=1384.946411,stddev=289.452393,min=1231.517212,max=2296.719482,sum=16619.357422
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=38.755871,stddev=27.302467,min=19.450111,max=58.061630,sum=77.511742
@@ -229,6 +242,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.712480,stddev=2.468018,min=0.967328,max=4.457632,sum=5.424960
 NNZ C: 929023247
 <Timer>[spgemm] n=13,avg=1377.513916,stddev=278.422241,min=1231.517212,max=2296.719482,sum=17907.681641
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=25.344448,stddev=12.174455,min=16.735807,max=33.953087,sum=50.688896
@@ -237,6 +251,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.872976,stddev=0.524300,min=0.502240,max=1.243712,sum=1.745952
 NNZ C: 929023247
 <Timer>[spgemm] n=14,avg=1372.204224,stddev=268.236176,min=1231.517212,max=2296.719482,sum=19210.859375
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=8.446976,stddev=11.819476,min=0.089344,max=16.804607,sum=16.893951
@@ -245,6 +260,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.080032,stddev=2.138834,min=0.567648,max=3.592416,sum=4.160064
 NNZ C: 929023247
 <Timer>[spgemm] n=15,avg=1368.611450,stddev=258.853119,min=1231.517212,max=2296.719482,sum=20529.171875
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=14.782256,stddev=2.574298,min=12.961952,max=16.602560,sum=29.564512
@@ -253,6 +269,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=6.953104,stddev=9.159781,min=0.476160,max=13.430048,sum=13.906208
 NNZ C: 929023247
 <Timer>[spgemm] n=16,avg=1365.745117,stddev=250.338547,min=1231.517212,max=2296.719482,sum=21851.921875
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=33.796688,stddev=14.669919,min=23.423489,max=44.169888,sum=67.593376
@@ -261,6 +278,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.715792,stddev=3.202164,min=0.451520,max=4.980064,sum=5.431584
 NNZ C: 929023247
 <Timer>[spgemm] n=17,avg=1363.286011,stddev=242.601227,min=1231.517212,max=2296.719482,sum=23175.861328
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=36.744896,stddev=27.312199,min=17.432257,max=56.057537,sum=73.489792
@@ -269,6 +287,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.431744,stddev=2.435570,min=0.709536,max=4.153952,sum=4.863488
 NNZ C: 929023247
 <Timer>[spgemm] n=18,avg=1359.364624,stddev=235.945038,min=1231.517212,max=2296.719482,sum=24468.562500
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 1]>[comm_wait] n=2,avg=205.101440,stddev=17.039530,min=193.052673,max=217.150208,sum=410.202881
@@ -388,6 +407,7 @@ Iteration 1
 NNZ C: 929023247
 <[process 3]>[comm_wait] n=2,avg=65.200111,stddev=36.130669,min=39.651871,max=90.748352,sum=130.400223
 <Timer>[spgemm] n=19,avg=1355.969238,stddev=229.774475,min=1231.517212,max=2296.719482,sum=25763.416016
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=18.272928,stddev=0.674026,min=17.796320,max=18.749537,sum=36.545856
@@ -396,6 +416,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=5.664432,stddev=1.452793,min=4.637152,max=6.691712,sum=11.328864
 NNZ C: 929023247
 <Timer>[spgemm] n=20,avg=1354.113770,stddev=223.799957,min=1231.517212,max=2296.719482,sum=27082.275391
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=36.122063,stddev=46.007893,min=3.589568,max=68.654556,sum=72.244125
@@ -404,6 +425,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.860368,stddev=3.913977,min=1.092768,max=6.627968,sum=7.720736
 NNZ C: 929023247
 <Timer>[spgemm] n=21,avg=1351.388916,stddev=218.490295,min=1231.517212,max=2296.719482,sum=28379.167969
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=16.277584,stddev=0.899779,min=15.641344,max=16.913824,sum=32.555168
@@ -412,6 +434,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.117312,stddev=2.365832,min=0.444416,max=3.790208,sum=4.234624
 NNZ C: 929023247
 <Timer>[spgemm] n=22,avg=1349.036255,stddev=213.510056,min=1231.517212,max=2296.719482,sum=29678.796875
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=21.134705,stddev=11.241957,min=13.185440,max=29.083967,sum=42.269409
@@ -420,6 +443,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=1.505536,stddev=1.503275,min=0.442560,max=2.568512,sum=3.011072
 NNZ C: 929023247
 <Timer>[spgemm] n=23,avg=1345.303223,stddev=209.367950,min=1231.517212,max=2296.719482,sum=30941.974609
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=23.837440,stddev=10.858626,min=16.159231,max=31.515648,sum=47.674881
@@ -428,6 +452,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.724000,stddev=3.070088,min=0.553120,max=4.894880,sum=5.448000
 NNZ C: 929023247
 <Timer>[spgemm] n=24,avg=1343.907349,stddev=204.880066,min=1231.517212,max=2296.719482,sum=32253.775391
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=18.335201,stddev=0.066117,min=18.288448,max=18.381952,sum=36.670403
@@ -436,6 +461,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.824608,stddev=0.158030,min=0.712864,max=0.936352,sum=1.649216
 NNZ C: 929023247
 <Timer>[spgemm] n=25,avg=1343.622192,stddev=200.571396,min=1231.517212,max=2296.719482,sum=33590.554688
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=58.515648,stddev=42.053776,min=28.779137,max=88.252159,sum=117.031296
@@ -444,6 +470,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=19.478224,stddev=26.909000,min=0.450688,max=38.505760,sum=38.956448
 NNZ C: 929023247
 <Timer>[spgemm] n=26,avg=1341.187256,stddev=196.910873,min=1231.517212,max=2296.719482,sum=34870.867188
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=24.311312,stddev=5.621985,min=20.335968,max=28.286655,sum=48.622623
@@ -452,6 +479,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.811152,stddev=0.241276,min=0.640544,max=0.981760,sum=1.622304
 NNZ C: 929023247
 <Timer>[spgemm] n=27,avg=1340.546265,stddev=193.115753,min=1231.517212,max=2296.719482,sum=36194.750000
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 1]>[comp_time] n=2,avg=84.268173,stddev=40.924198,min=55.330399,max=113.205956,sum=168.536346
@@ -571,6 +599,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.752672,stddev=0.389554,min=0.477216,max=1.028128,sum=1.505344
 NNZ C: 929023247
 <Timer>[spgemm] n=28,avg=1338.810425,stddev=189.728226,min=1231.517212,max=2296.719482,sum=37486.691406
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=23.145840,stddev=9.705012,min=16.283360,max=30.008320,sum=46.291679
@@ -579,6 +608,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.788272,stddev=0.279562,min=0.590592,max=0.985952,sum=1.576544
 NNZ C: 929023247
 <Timer>[spgemm] n=29,avg=1337.797607,stddev=186.389267,min=1231.517212,max=2296.719482,sum=38796.128906
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=23.705008,stddev=8.875220,min=17.429279,max=29.980736,sum=47.410015
@@ -587,6 +617,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.639712,stddev=3.103848,min=0.444960,max=4.834464,sum=5.279424
 NNZ C: 929023247
 <Timer>[spgemm] n=30,avg=1335.815796,stddev=183.468826,min=1231.517212,max=2296.719482,sum=40074.472656
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=32.864944,stddev=8.268714,min=27.018080,max=38.711807,sum=65.729889
@@ -595,6 +626,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.753088,stddev=0.305515,min=0.537056,max=0.969120,sum=1.506176
 NNZ C: 929023247
 <Timer>[spgemm] n=31,avg=1334.762817,stddev=180.480331,min=1231.517212,max=2296.719482,sum=41377.648438
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=65.856239,stddev=41.963562,min=36.183521,max=95.528961,sum=131.712479
@@ -603,6 +635,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.805968,stddev=2.248147,min=1.216288,max=4.395648,sum=5.611936
 NNZ C: 929023247
 <Timer>[spgemm] n=32,avg=1334.269653,stddev=177.567429,min=1231.517212,max=2296.719482,sum=42696.628906
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=43.514881,stddev=36.295509,min=17.850080,max=69.179680,sum=87.029762
@@ -611,6 +644,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.792528,stddev=0.501084,min=0.438208,max=1.146848,sum=1.585056
 NNZ C: 929023247
 <Timer>[spgemm] n=33,avg=1332.673096,stddev=175.011398,min=1231.517212,max=2296.719482,sum=43978.210938
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=39.754433,stddev=30.737082,min=18.020033,max=61.488831,sum=79.508865
@@ -619,6 +653,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.815536,stddev=0.198737,min=0.675008,max=0.956064,sum=1.631072
 NNZ C: 929023247
 <Timer>[spgemm] n=34,avg=1332.031982,stddev=172.379883,min=1231.517212,max=2296.719482,sum=45289.085938
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=30.081568,stddev=39.931190,min=1.845952,max=58.317184,sum=60.163136
@@ -627,6 +662,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.982816,stddev=4.897116,min=0.520032,max=7.445600,sum=7.965632
 NNZ C: 929023247
 <Timer>[spgemm] n=35,avg=1331.305786,stddev=169.880264,min=1231.517212,max=2296.719482,sum=46595.703125
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=36.267426,stddev=22.583881,min=20.298208,max=52.236641,sum=72.534851
@@ -635,6 +671,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=4.253264,stddev=4.618867,min=0.987232,max=7.519296,sum=8.506528
 NNZ C: 929023247
 <Timer>[spgemm] n=36,avg=1331.891602,stddev=167.472717,min=1231.517212,max=2296.719482,sum=47948.097656
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 1]>[data_proc_A] n=2,avg=9.809248,stddev=9.521346,min=3.076640,max=16.541857,sum=19.618496
@@ -753,6 +790,7 @@ Iteration 1
 NNZ C: 929023247
 <[process 3]>[data_proc_A] n=2,avg=5.732288,stddev=5.304862,min=1.981184,max=9.483392,sum=11.464576
 <Timer>[spgemm] n=37,avg=1330.158447,stddev=165.466492,min=1231.517212,max=2296.719482,sum=49215.863281
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=40.547134,stddev=31.626114,min=18.184095,max=62.910175,sum=81.094269
@@ -761,6 +799,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.873536,stddev=0.433903,min=0.566720,max=1.180352,sum=1.747072
 NNZ C: 929023247
 <Timer>[spgemm] n=38,avg=1328.818115,stddev=163.424149,min=1231.517212,max=2296.719482,sum=50495.089844
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=14.011440,stddev=1.272452,min=13.111680,max=14.911200,sum=28.022881
@@ -769,6 +808,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.237104,stddev=3.774774,min=0.567936,max=5.906272,sum=6.474208
 NNZ C: 929023247
 <Timer>[spgemm] n=39,avg=1329.107422,stddev=161.269608,min=1231.517212,max=2296.719482,sum=51835.187500
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=40.681263,stddev=20.814348,min=25.963297,max=55.399231,sum=81.362526
@@ -777,6 +817,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.847360,stddev=0.465129,min=0.518464,max=1.176256,sum=1.694720
 NNZ C: 929023247
 <Timer>[spgemm] n=40,avg=1328.932007,stddev=159.192474,min=1231.517212,max=2296.719482,sum=53157.281250
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=38.254784,stddev=31.083193,min=16.275648,max=60.233921,sum=76.509567
@@ -785,6 +826,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.833744,stddev=0.551226,min=0.443968,max=1.223520,sum=1.667488
 NNZ C: 929023247
 <Timer>[spgemm] n=41,avg=1327.720825,stddev=157.381165,min=1231.517212,max=2296.719482,sum=54436.554688
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=77.650093,stddev=86.366432,min=16.579807,max=138.720383,sum=155.300186
@@ -793,6 +835,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.754192,stddev=0.251323,min=0.576480,max=0.931904,sum=1.508384
 NNZ C: 929023247
 <Timer>[spgemm] n=42,avg=1327.189209,stddev=155.488220,min=1231.517212,max=2296.719482,sum=55741.945312
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=78.653297,stddev=87.060593,min=17.092159,max=140.214432,sum=157.306595
@@ -801,6 +844,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.140336,stddev=2.780027,min=1.174560,max=5.106112,sum=6.280672
 NNZ C: 929023247
 <Timer>[spgemm] n=43,avg=1326.833740,stddev=153.643707,min=1231.517212,max=2296.719482,sum=57053.851562
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=81.726143,stddev=91.246368,min=17.205215,max=146.247070,sum=163.452286
@@ -809,6 +853,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=5.654896,stddev=1.795327,min=4.385408,max=6.924384,sum=11.309792
 NNZ C: 929023247
 <Timer>[spgemm] n=44,avg=1327.289185,stddev=151.876709,min=1231.517212,max=2296.719482,sum=58400.726562
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=63.920929,stddev=67.104958,min=16.470560,max=111.371300,sum=127.841858
@@ -817,6 +862,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=0.828560,stddev=0.540592,min=0.446304,max=1.210816,sum=1.657120
 NNZ C: 929023247
 <Timer>[spgemm] n=45,avg=1325.896484,stddev=150.431274,min=1231.517212,max=2296.719482,sum=59665.343750
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 2]>[data_proc_A] n=2,avg=4.328432,stddev=4.309369,min=1.281248,max=7.375616,sum=8.656864
@@ -898,6 +944,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=1.946640,stddev=1.895431,min=0.606368,max=3.286912,sum=3.893280
 NNZ C: 929023247
 <Timer>[spgemm] n=46,avg=1325.477783,stddev=148.777527,min=1231.517212,max=2296.719482,sum=60971.976562
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 1]>[data_proc_B] n=2,avg=0.898176,stddev=0.499432,min=0.545024,max=1.251328,sum=1.796352
@@ -943,6 +990,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=2.306768,stddev=1.173661,min=1.476864,max=3.136672,sum=4.613536
 NNZ C: 929023247
 <Timer>[spgemm] n=47,avg=1324.827515,stddev=147.219009,min=1231.517212,max=2296.719482,sum=62266.894531
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=14.807104,stddev=20.740381,min=0.141440,max=29.472769,sum=29.614208
@@ -951,6 +999,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=3.586912,stddev=4.151905,min=0.651072,max=6.522752,sum=7.173824
 NNZ C: 929023247
 <Timer>[spgemm] n=48,avg=1325.043823,stddev=145.652145,min=1231.517212,max=2296.719482,sum=63602.105469
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=68.955185,stddev=71.112106,min=18.671328,max=119.239037,sum=137.910370
@@ -959,6 +1008,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=6.001152,stddev=6.799992,min=1.192832,max=10.809472,sum=12.002304
 NNZ C: 929023247
 <Timer>[spgemm] n=49,avg=1324.556885,stddev=144.167221,min=1231.517212,max=2296.719482,sum=64903.289062
+STARTING spgemm round: 
 Iteration 0
 Iteration 1
 <[process 0]>[comm_wait] n=2,avg=44.595119,stddev=22.748768,min=28.509312,max=60.680927,sum=89.190239
@@ -967,6 +1017,7 @@ Iteration 1
 <[process 0]>[data_proc_B] n=2,avg=20.014576,stddev=27.679327,min=0.442336,max=39.586815,sum=40.029152
 NNZ C: 929023247
 <Timer>[spgemm] n=50,avg=1323.026367,stddev=143.098404,min=1231.517212,max=2296.719482,sum=66151.320312
+STARTING spgemm round: 
 Done spgemm
 <[process 2]>[data_proc_B] n=2,avg=6.403200,stddev=0.979134,min=5.710848,max=7.095552,sum=12.806400
 <[process 2]>[comm_wait] n=2,avg=78.421822,stddev=22.303165,min=62.651104,max=94.192543,sum=156.843643
@@ -1022,20 +1073,74 @@ Done spgemm
 
 from pathlib import Path
 import re
+import pandas as pd
+from typing import Dict, List
 # from statistics import geometric_mean, stdev
-# import pandas as pd
-# from typing import Dict, List
 # import sbatchman as sbm
 
 OUT_DIR = Path('results')
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def parse_stdout(stdout: str):
-  run = None
+def parse_timer_string(timer_str):
+  """Parse a timer string like 'n=2,avg=36.2,...' into a dict."""
+  parts = timer_str.split(",")
+  out = {}
+  for p in parts:
+    k, v = p.split("=")
+    out[k.strip()] = float(v)
+  return out
+
+def runs_to_dataframe(runs):
+  """
+  Convert list of runs into a Pandas DataFrame.
+  Each row = one (run, rank, timer_name).
+  """
+  records = []
+  
+  for run_id, run in enumerate(runs):
+    for key, val in run.items():
+      if key == "global_timer":
+        # Global timer is a single entry
+        rec = parse_timer_string(val)
+        rec.update({
+          "run": run_id,
+          "rank": "global",
+          "timer": "global_timer"
+        })
+        records.append(rec)
+      else:
+        # Key is rank (int)
+        rank = key
+        timers = val
+        for timer_name, timer_str in timers.items():
+          rec = parse_timer_string(timer_str)
+          rec.update({
+            "run": run_id,
+            "rank": rank,
+            "timer": timer_name
+          })
+          records.append(rec)
+  
+  return pd.DataFrame(records)
+
+def parse_stdout(stdout: str) -> List[Dict[str, Dict[str, str]]]:
+  runs = []
+  run_i = -1
   for line in stdout.splitlines():
-    if line.startswith('<['):
+    if line.startswith('STARTING spgemm round'):
+      run_i += 1
+      runs.append({})
+    elif line.startswith('<['):
       m = re.match(r'<\[process (\d+)\]>\[(\w+)\] (.+)', line)
-      # TODO
+      rank = int(m.group(1))
+      timer_name = m.group(2)
+      timer_data = m.group(3)
+      if not runs[run_i].get(rank): runs[run_i][rank] = {}
+      runs[run_i][rank][timer_name] = timer_data
+    elif line.startswith('<Timer>[spgemm]'):
+      runs[run_i]['global_timer'] = line.split(' ')[-1]
+
+  return runs
 
 # def parse_stdout(job: sbm.Job):
 #   pass
@@ -1063,5 +1168,25 @@ def main():
   print(f'Data saved to {path.resolve().absolute()}')
 
 if __name__ == "__main__":
-  parse_stdout(stdout)
+  import pprint
+  runs = parse_stdout(stdout)[35]
+  runs = [runs, runs]
+  pprint.pprint(runs)
+  df = runs_to_dataframe(runs)
+  print(df)
+  data = []
+  for p in ['hns_main', 'hns_get', 'trilinos']:
+    for n in [1,4,16]:
+      df1 = df.copy()
+      df1['cluster'] = 'test'
+      df1['program'] = p
+      df1['nodes'] = n
+      df1['cpus_per_task'] = 3
+      df1['mpi_async'] = True
+      data.append(df1)
+
+  df = pd.concat(data, ignore_index=True)
+  path = OUT_DIR / f'hns_spgemm_test_data.csv'
+  df.to_csv(path, index=False)
+  print(f'Data saved to {path.resolve().absolute()}')
   # main()
