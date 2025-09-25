@@ -156,6 +156,7 @@ int tmp_test1 () {
     thrust::device_vector<int>   d_col  = h_col;
     thrust::device_vector<int>   d_row  = h_row;
     thrust::device_vector<int>   d_mask = h_mask;
+    // return(0); // DEBUG
 
     int* new_col;
     int num_selected = SpaComm::select_entries<int, int>(
@@ -201,6 +202,8 @@ int tmp_test1 () {
     // Part for row pointer
     int *new_row = SpaComm::select_ptrs(thrust::raw_pointer_cast(d_row.data()), m, thrust::raw_pointer_cast(d_mask.data()));
     fflush(stdout);
+
+    return(0); // DEBUG
 
     std::cout << "Test at line " << __LINE__ << std::endl; fflush(stdout);
 
@@ -380,7 +383,7 @@ int main(int argc, char ** argv) {
 
         // Apply the same function to both
         int8_t *result_test = SpaComm::gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
-        return(0); // MPI_Abort(MPI_COMM_WORLD, 1); // Debug
+        // return(0); // MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
         int8_t *resultA     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
         int8_t *resultB     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
@@ -406,6 +409,7 @@ int main(int argc, char ** argv) {
 
         ASSERT(num_segments_A == num_segments_B, "For the intersection num_segments_A == num_segments_B");
         int8_t *intersection = SpaComm::intersect_bitmasks(resultA, resultB, num_segments_A);
+        // return(0); // DEBUG
 
         std::vector<int8_t> h_intersection(num_segments_A);
         cudaMemcpy(h_intersection.data(), intersection, sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost);
