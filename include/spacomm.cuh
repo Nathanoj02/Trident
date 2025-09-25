@@ -11,8 +11,6 @@
 
 #include <cub/cub.cuh>
 
-#define MASK_SIZE 8   // set to 8 in production
-
 namespace SpaComm
 {
 

@@ -272,11 +272,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     CUSPARSE_CHECK(cusparseDestroy(handle));
 
-    if (grid->global_rank==0) std::cout<<"Test fi debug: "<<__LINE__<< std::endl;
-
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
-
-    if (grid->global_rank==0) std::cout<<"Test fi debug: "<<__LINE__<< std::endl;
 
     return out;
 }

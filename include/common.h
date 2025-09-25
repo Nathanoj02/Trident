@@ -49,6 +49,7 @@
 #include <KokkosSparse_spgemm.hpp>
 #include <KokkosSparse_spadd.hpp>
 
+#define MASK_SIZE 8   // set to 8 in production
 
 extern FILE * logfile;
 

@@ -157,12 +157,12 @@ namespace KokkosWrap {
     {
         static_assert(std::is_same<KIT, DIT>::value);
         using namespace dmmio::partitioning::indextransform;
-        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size) != 0)
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0)
         {
             dcoo->coo->nrows++;
         }
 
-        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size) != 0)
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size * MASK_SIZE) != 0)
         {
             dcoo->coo->ncols++;
         }

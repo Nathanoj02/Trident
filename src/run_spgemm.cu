@@ -177,6 +177,8 @@ int main(int argc, char ** argv)
             SpaComm::SpaCommHandler<int32_t, float> *spcomm_data;
             if (config->spcomm) {
                 spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+            } else {
+                spcomm_data = nullptr;
             }
 
             CPU_TIMER_STOP(spacomm);
@@ -189,7 +191,7 @@ int main(int argc, char ** argv)
 
             if (!strcmp(config->impl, "main"))
             {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, config->spcomm?spcomm_data:nullptr);
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, spcomm_data);
             }
             else if (!strcmp(config->impl, "get"))
             {
