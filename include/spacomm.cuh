@@ -359,7 +359,7 @@ IT* select_ptrs(IT* raw_ptr, int m, IT* mask) {
     auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, d_row.begin()+1));
 
     thrust::transform(
-        zipped, zipped + m,
+        zipped, zipped + (m-1),
         d_row.begin()+1,
         MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
     );

@@ -203,7 +203,7 @@ int tmp_test1 () {
     int *new_row = SpaComm::select_ptrs(thrust::raw_pointer_cast(d_row.data()), m, thrust::raw_pointer_cast(d_mask.data()));
     fflush(stdout);
 
-    return(0); // DEBUG
+    // return(0); // DEBUG
 
     std::cout << "Test at line " << __LINE__ << std::endl; fflush(stdout);
 
