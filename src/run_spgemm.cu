@@ -114,8 +114,8 @@ int main(int argc, char ** argv)
         }
 
         // TODO
-        if ( config->spcomm ) {
-            if (world_rank == 0) fprintf(stderr, "Error: --spcomm is not supported yet\n");
+        if ( config->spcomm && nprocpergroup > 1) {
+            if (world_rank == 0) fprintf(stderr, "Error: on 3D grids, --spcomm is not supported yet\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
@@ -168,14 +168,28 @@ int main(int argc, char ** argv)
 
         mmio::CSX<int32_t, float> *dist_C;
         CPU_TIMER_DEF(spgemm);
+        CPU_TIMER_DEF(spacomm);
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<50; i++) 
         {
+            CPU_TIMER_START(spacomm);
+
+            SpaComm::SpaCommHandler<int32_t, float> *spcomm_data;
+            if (config->spcomm) {
+                spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+            }
+
+            CPU_TIMER_STOP(spacomm);
+            if (world_rank==0)
+            {
+                TIMER_PRINT(spacomm);
+            }
+
             CPU_TIMER_START(spgemm);
 
             if (!strcmp(config->impl, "main"))
             {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, config->spcomm?spcomm_data:nullptr);
             }
             else if (!strcmp(config->impl, "get"))
             {

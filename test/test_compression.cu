@@ -342,6 +342,7 @@ int check_mod_pattern(const int8_t* mask, int n, int k, int m) {
 
 int main(int argc, char ** argv) {
 
+    cudaSetDevice(0);
     MPI_Init(&argc, &argv);
 
     int world_size;

@@ -109,7 +109,7 @@ T* intersect_bitmasks(const T* a, const T* b, int n) {
     return d_out; // caller must cudaFree()
 }
 
-void printBit_left2right(int8_t* bitmask, int nwords, FILE* fp=stdout) {
+inline void printBit_left2right(int8_t* bitmask, int nwords, FILE* fp=stdout) {
     for (int i=0; i<nwords; i++) {
         for (int j=0; j<MASK_SIZE; j++) {
             fprintf(fp, "%c", (bitmask[i] & (1<<j)) ? '1' : '0');
@@ -118,7 +118,7 @@ void printBit_left2right(int8_t* bitmask, int nwords, FILE* fp=stdout) {
     }
 }
 
-#define DEBUG_SPCOMM
+// #define DEBUG_SPCOMM
 
 template<typename IT, typename VT>
 void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
@@ -388,15 +388,15 @@ struct SpaCommHandler
     SpaCommHandler(KWrapDMat<IT, VT>& dist_A, KWrapDMat<IT, VT>& dist_B)
     {
 
-        grid = dist_A->partitioning->grid;
+        grid = dist_A.partitioning->grid;
         assert(grid->row_size == grid->col_size);
         int grid_dim = grid->row_size;
 
-        ASSERT(dist_A->mmio_csx->ncols == dist_B->mmio_csx->nrows, "A cols must be equal to B rows");
+        ASSERT(dist_A.mmio_csx->ncols == dist_B.mmio_csx->nrows, "A cols must be equal to B rows");
 
-        int cdim = dist_A->mmio_csx->ncols;
+        int cdim = dist_A.mmio_csx->ncols;
         mask_len = ((cdim%MASK_SIZE)==0) ? (cdim/MASK_SIZE) : ((cdim/MASK_SIZE)+1) ;
-        spcomm_2D(dist_A->mmio_csx, dist_B->mmio_csx, grid, &A_column_filters, &B_rows_filters);
+        spcomm_2D(dist_A.mmio_csx, dist_B.mmio_csx, grid, &A_column_filters, &B_rows_filters);
 
     }
 
