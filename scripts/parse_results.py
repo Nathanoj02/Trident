@@ -1169,21 +1169,30 @@ def main():
 
 if __name__ == "__main__":
   import pprint
-  runs = parse_stdout(stdout)[35]
+  runs = parse_stdout(stdout)[36]
   runs = [runs, runs]
   pprint.pprint(runs)
   df = runs_to_dataframe(runs)
   print(df)
   data = []
-  for p in ['hns_main', 'hns_get', 'trilinos']:
-    for n in [1,4,16]:
-      df1 = df.copy()
-      df1['cluster'] = 'test'
-      df1['program'] = p
-      df1['nodes'] = n
-      df1['cpus_per_task'] = 3
-      df1['mpi_async'] = True
-      data.append(df1)
+  for grid in ['2x2x1', '4x4x2']:
+    for p in ['hns_main', 'hns_get', 'trilinos']:
+      for n in [1,4,16]:
+        df1 = df.copy()
+        df1['cluster'] = 'test'
+        df1['program'] = p
+        df1['nodes'] = n
+        df1['cpus_per_task'] = 3
+        df1['mpi_async'] = True
+        df1['grid'] = grid if 'hns' in p else '-'
+        # FIXME delete
+        if p == 'hns_get':
+          df1['avg'] = df1['avg']*.8
+        if p == 'trilinos':
+          df1['avg'] = df1['avg']*.5
+        if grid == '2x2x1':
+          df1['avg'] = df1['avg']*.9
+        data.append(df1)
 
   df = pd.concat(data, ignore_index=True)
   path = OUT_DIR / f'hns_spgemm_test_data.csv'
