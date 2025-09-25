@@ -436,8 +436,62 @@ struct SpaCommHandler
 
     }
 
-    mmio::CSX<IT,VT>* CompressA (int iteration_number) {
+    mmio::CSX<IT,VT>* Compress (KWrapDMat<IT, VT>& dist_M, int iteration_number) {
 
+        ASSERT(iteration_number < grid->row_comm, "ERROR: provided an invalid iteration number");
+
+        mmio::CSX<IT,VT> *M = dist_M->mmio_csx;
+        mmio::MajorDim layout = M->majordim;
+
+        // Set-up parameeters according to A or B operand
+        int ptr_size;
+        int8_t *mask;
+        if (layout == mmio::MajorDim::ROWS) {
+            ptr_size = M->nrows+1;
+            mask = B_rows_filters + mask_len*iteration_number;
+        } else {
+            ptr_size = M->ncols+1;
+            mask = A_column_filters + mask_len*iteration_number;
+        }
+
+        // Compute compressed index vector
+        IT* new_idx;
+        int num_selected = select_entries<IT, IT>(
+                M->idx_vec, M->nnz,
+                M->ptr_vec, ptr_size,
+                mask,
+                &new_idx
+        );
+
+        // Compute compressed value vector
+        VT* new_val;
+        int num_selected_val = select_entries<VT, IT>(
+                M->val, M->nnz,
+                M->ptr_vec, ptr_size,
+                mask,
+                &new_val
+        );
+
+        // Check
+        if (num_selected != num_selected_val) {
+            fprintf(stderr, "Error: num_selected_val (%d) differ from num_selected (%d)!\n", num_selected_val, num_selected);
+            MPI_Abort(grid->world_comm, __LINE__);
+        }
+
+        // Compute compressed pointer vector
+        int *new_row = select_ptrs(M->ptr_vec, ptr_size, mask);
+
+        // Wrapping results in the output csx
+        mmio::CSX<IT,VT> *output = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+        output->majordim = M->majordim;
+        output->nnz      = num_selected;
+        output->nrows    = M->nrows;
+        output->ncols    = M->ncols;
+        output->val      = new_val;
+        output->ptr_vec  = new_row;
+        output->idx_vec  = new_idx;
+
+        return(output);
     }
 
 
@@ -447,19 +501,14 @@ struct SpaCommHandler
         CUDA_FREE_SAFE(B_rows_filters);
     }
 
+    // Communicator grid
     dmmio::ProcessGrid * grid;
 
-    // Each entry of this vector is a device buffer that stores the indices of the nonzero columns of A to be sent to each node
-    // A_nzc[n] -> indices of columns of A to be sent to node n in my node row
-    int8_t* A_column_filters;
+    // These two vectors are device vectors that the process will use to compress local tiles before the communication
+    int8_t* A_column_filters; // Filters to be applied to A(i,j) matrix before than send to Process (i,k)
+    int8_t* B_rows_filters;   // Filters to be applied to B(i,j) matrix before than send to Process (k,j)
 
-    // B_nzr[n] -> indices of rows of B to be sent to node n in my node row
-    int8_t* B_rows_filters;
-
-    IT mask_len;
-
-
-
+    IT mask_len;  // This is the len of every single mask (i.e. A-B common dimension / MASK_SIZE)
 
 };
 
