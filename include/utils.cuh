@@ -256,3 +256,38 @@ void moveCSX2host (mmio::CSX<IT,VT> *csx) {
     move2host(&(csx->val), csx->nnz);
 }
 
+// ---------- Moved from tile_holder.cuh to use them also from spacomm ----------
+
+template <typename T>
+struct DiffOp2
+{
+    DiffOp2(){}
+    __host__ __device__ __forceinline__
+    T operator()(const T& lhs, const T& rhs)
+    {
+        return lhs - rhs;
+    }
+};
+
+template <typename IT>
+void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows) {
+    void * d_tmp = NULL;
+    size_t tmp_size = 0;
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
+    cudaMalloc(&d_tmp, tmp_size);
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
+    cudaFree(d_tmp);
+    cudaDeviceSynchronize();
+}
+
+template <typename IT>
+void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows) {
+    void * d_tmp = NULL;
+    size_t tmp_size = 0;
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
+    cudaMalloc(&d_tmp, tmp_size);
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
+    cudaFree(d_tmp);
+    cudaDeviceSynchronize();
+}
+// ------------------------------------------------------------

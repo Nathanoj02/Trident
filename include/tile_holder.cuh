@@ -225,43 +225,6 @@ struct TileHolder
     }
 
 
-    template <typename T>
-    struct DiffOp2
-    {
-        DiffOp2(){}
-        __host__ __device__ __forceinline__
-        T operator()(const T& lhs, const T& rhs)
-        {
-            return lhs - rhs;
-        }
-    };
-
-
-    void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows)
-    {
-        void * d_tmp = NULL;
-        size_t tmp_size = 0;
-        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows));
-        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
-        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows));
-        CUDA_FREE_SAFE(d_tmp);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
-
-    void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows)
-    {
-        void * d_tmp = NULL;
-        size_t tmp_size = 0;
-        CUDA_CHECK(cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}));
-        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
-        CUDA_CHECK(cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}));
-        CUDA_FREE_SAFE(d_tmp);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
-
-
     ~TileHolder()
     {
         MPI_Win_unlock_all(d_ptrs_win);
