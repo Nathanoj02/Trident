@@ -712,6 +712,24 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     CUDA_CHECK(cudaFree(B_map));
 }
 
+int check_mod_pattern(const int8_t* mask, int n, int k, int m) {
+    for (int byte_idx = 0; byte_idx < n; ++byte_idx) {
+        int8_t expected = 0;
+        // Build expected pattern for this byte
+        for (int bit = 0; bit < 8; ++bit) {
+            int global_bit = byte_idx * 8 + bit;
+            if ((global_bit % m) == k) {
+                expected |= (1 << bit);
+            }
+        }
+        // Compare against actual
+        if (mask[byte_idx] != expected) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int main(int argc, char ** argv) {
 
     MPI_Init(&argc, &argv);
@@ -871,6 +889,35 @@ int main(int argc, char ** argv) {
             fprintf(fp, "\n");
         }
     )
+
+    int input_check = 1, global_check;
+    if ((grid->col_rank % 2) == 0) input_check = (input_check && check_mod_pattern(A_map, mask_size, 0, 2));
+    if ((grid->col_rank % 2) == 1) input_check = (input_check && check_mod_pattern(A_map, mask_size, 1, 2));
+    if ((grid->row_rank % 2) == 0) input_check = (input_check && check_mod_pattern(B_map, mask_size, 2, 3));
+    if ((grid->row_rank % 2) == 1) input_check = (input_check && check_mod_pattern(B_map, mask_size, 1, 3));
+    MPI_Allreduce(&input_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    if (world_rank==0) { if(global_check) fprintf(stdout, "Input check passed\n"); else fprintf(stderr, "ERROR on input check\n"); }
+
+    int output_check = 1;
+    if ((grid->col_rank % 2) == 0) {
+        output_check = (output_check && check_mod_pattern(h_col_filters.data()            , mask_size, 2, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() + mask_size, mask_size, 4, 6));
+    }
+    if ((grid->col_rank % 2) == 1) {
+        output_check = (output_check && check_mod_pattern(h_col_filters.data()            , mask_size, 5, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() + mask_size, mask_size, 1, 6));
+    }
+    if ((grid->row_rank % 2) == 0) {
+        output_check = (output_check && check_mod_pattern(h_row_filters.data()            , mask_size, 2, 6));
+        output_check = (output_check && check_mod_pattern(h_row_filters.data() + mask_size, mask_size, 5, 6));
+    }
+    if ((grid->row_rank % 2) == 1) {
+        output_check = (output_check && check_mod_pattern(h_row_filters.data()            , mask_size, 4, 6));
+        output_check = (output_check && check_mod_pattern(h_row_filters.data() + mask_size, mask_size, 1, 6));
+    }
+
+    MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    if (world_rank==0) { if(global_check) fprintf(stdout, "Output check passed\n"); else fprintf(stderr, "ERROR on output check\n"); }
 
     return 0;
 }
