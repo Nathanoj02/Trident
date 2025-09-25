@@ -343,7 +343,7 @@ int check_mod_pattern(const int8_t* mask, int n, int k, int m) {
 #define NGPU_PER_NODE 4
 
 int main(int argc, char ** argv) {
-
+/*
     MPI_Init(&argc, &argv);
 
     int world_size;
@@ -362,6 +362,7 @@ int main(int argc, char ** argv) {
     MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
     // Set the process grid parameeters
+    Config * config = (Config *)(malloc(sizeof(Config)));
     int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
     dmmio::ProcessGrid *grid = dmmio::io::ProcessGrid_create(nprocrows, nproccols, nprocpergroup);
 
@@ -370,8 +371,8 @@ int main(int argc, char ** argv) {
     int skip = config->spcomm; // I use spcomm as flag for skip the first experiments
     if (skip) goto parallel_exps;
     // ----------------------------------------------------------------------------------------------------
-
-    if (world_rank == 0) {
+*/
+//    if (world_rank == 0) {
         thrust::device_vector<int> test_vector{0, 0, 1, 1, 3, 3, 6, 6};
 
         thrust::device_vector<int> A_rowptr{0, 1, 2, 2, 3, 4, 4, 5, 6};
@@ -379,7 +380,7 @@ int main(int argc, char ** argv) {
 
         // Apply the same function to both
         int8_t *result_test = SpaComm::gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
-        MPI_Abort(MPI_COMM_WORLD, 1); // Debug
+        return(0); // MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
         int8_t *resultA     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
         int8_t *resultB     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
@@ -418,11 +419,11 @@ int main(int argc, char ** argv) {
 
         std::cout << "----- Test syntetic matrices -----" << std::endl;
         for (int i=0; i<8; i++) free(gen_syntetic_matrix<int,float>(i%5, 8, (i<=4) ? (mmio::MajorDim::ROWS) : (mmio::MajorDim::COLS), true));
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
+//    }
+//    MPI_Barrier(MPI_COMM_WORLD);
 
     // ----------------------------------------------------------------------------------------------------
-
+/*
     parallel_exps:
     if (world_rank==0) std::cout << "-------------------- Parallel part --------------------" << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -430,7 +431,7 @@ int main(int argc, char ** argv) {
     dmmio::utils::ProcessGrid_graph(grid, stdout);
     fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
-
+*/
     /* Here I am generating the matrices in the way that:
      *                     B:
      *                     ---------------
@@ -447,6 +448,7 @@ int main(int argc, char ** argv) {
      * ---------------     ---------------
      *
      */
+/*
     mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 16, mmio::MajorDim::COLS);
     mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +2, 16, mmio::MajorDim::ROWS);
 
@@ -539,7 +541,7 @@ int main(int argc, char ** argv) {
 
     MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
     if (world_rank==0) { if(global_check) fprintf(stdout, "Output check passed\n"); else fprintf(stderr, "ERROR on output check\n"); }
-
+*/
     return 0;
 }
 

@@ -51,7 +51,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     for (int i = 0; i < num_segments; i++) {
         h_offsets[i] = i * segment_size;
     }
-    h_offsets[num_segments] = num_segments * segment_size;
+    h_offsets[num_segments] = n;
 
     thrust::device_vector<int> d_offsets = h_offsets;
 
