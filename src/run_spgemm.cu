@@ -46,8 +46,10 @@ int main(int argc, char ** argv)
         std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
     }
 
+#ifdef LOGFILE
     std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
     FILE * logfile = fopen(logname.c_str(), "w");
+#endif
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
@@ -203,7 +205,9 @@ int main(int argc, char ** argv)
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
+#ifdef LOGFILE
     fclose(logfile);
+#endif
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

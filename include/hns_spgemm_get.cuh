@@ -4,6 +4,7 @@
 
 
 #define DEBUG_GET 0
+#define DETAILED_TIMERS
 
 
 template <typename IT, typename VT>

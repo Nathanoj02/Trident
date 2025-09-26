@@ -2,6 +2,7 @@
 #include <Tpetra_CrsMatrix.hpp>
 #include <MatrixMarket_Tpetra.hpp>
 #include <TpetraExt_MatrixMatrix.hpp>
+#include <ccutils/timers.h>
 
 // Return a pointer (RCP is like std::shared_ptr) to an output stream.
 // It prints on Process 0 of the given MPI communicator, but ignores
@@ -24,6 +25,10 @@ int main(int narg, char *arg[]) {
   // Create Tpetra scope (calls Kokkos::Initialize and Tpetra::Initialize
   Tpetra::ScopeGuard scope(&narg, &arg);
   {
+    int world_size;
+    int world_rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     // Get a default communicator:  MPI_COMM_WORLD
     const Teuchos::RCP<const Teuchos::Comm<int> > comm = Tpetra::getDefaultComm();
 
@@ -36,22 +41,22 @@ int main(int narg, char *arg[]) {
     Teuchos::CommandLineProcessor cmdp(false,true);
 
     std::string filenameA = "";
-    cmdp.setOption("mtxA", &filenameA, "Path and filename of the matrix A to be read.");
+    cmdp.setOption("matA", &filenameA, "Path and filename of the matrix A to be read.");
 
     std::string filenameB = "";
-    cmdp.setOption("mtxB", &filenameB, "Path and filename of the matrix B to be read.");
+    cmdp.setOption("matB", &filenameB, "Path and filename of the matrix B to be read.");
 
     std::string filenameC = "";
-    cmdp.setOption("mtxC", &filenameC, "Path and filename of the matrix C file to write.");
+    //cmdp.setOption("matC", &filenameC, "Path and filename of the matrix C file to write.");
 
     std::string distribution ="1D";
     cmdp.setOption("distribution", &distribution, "Parallel distribution to use: 1D, 2D, LowerTriangularBlock, MMFile");
 
     bool randomize = false;
-    cmdp.setOption("randomize", "norandomize", &randomize, "Randomly permute the matrix rows and columns");
+    //cmdp.setOption("randomize", "norandomize", &randomize, "Randomly permute the matrix rows and columns");
 
     bool binary = false;  
-    cmdp.setOption("binary", "mtx", &binary, "Reading a binary file instead of a matrix market file");
+    //cmdp.setOption("binary", "mtx", &binary, "Reading a binary file instead of a matrix market file");
 
     int chunkSize = 10000;
     cmdp.setOption("chunksize", &chunkSize, "Number of edges to be read and broadcasted at once");
@@ -93,15 +98,26 @@ int main(int narg, char *arg[]) {
     out << std::endl << std::endl;
 
     // Multiply
-    Teuchos::RCP<matrix_t> Cmat = Teuchos::rcp(new matrix_t(Amat->getRowMap(), 0));
-    Tpetra::MatrixMatrix::Multiply(*Amat, false, *Bmat, false, *Cmat, true);
+    CPU_TIMER_DEF(spgemm);
+    for (int i=0; i<10; i++)
+    {
+        Teuchos::RCP<matrix_t> Cmat = Teuchos::rcp(new matrix_t(Amat->getRowMap(), 0));
+        CPU_TIMER_START(spgemm);
+        Tpetra::MatrixMatrix::Multiply(*Amat, false, *Bmat, false, *Cmat, true);
+        MPI_Barrier(MPI_COMM_WORLD);
+        CPU_TIMER_STOP(spgemm);
+        if (world_rank==0)
+        {
+            TIMER_PRINT_LAST(spgemm);
+        }
+    }
 
-    out << "Matrix C=AxB:" << std::endl;
-    Cmat->describe(foo, Teuchos::VERB_HIGH);
+    //out << "Matrix C=AxB:" << std::endl;
+    //Cmat->describe(foo, Teuchos::VERB_HIGH);
 
     // Write C to MatrixMarket file
-    Tpetra::MatrixMarket::Writer<matrix_t>::writeSparseFile(filenameC, Cmat);
-    out << "Matrix C has been written to " << filenameC << std::endl;
+    //Tpetra::MatrixMarket::Writer<matrix_t>::writeSparseFile(filenameC, Cmat);
+    //out << "Matrix C has been written to " << filenameC << std::endl;
   }
 
   return 0;

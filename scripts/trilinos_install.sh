@@ -10,8 +10,8 @@ cd Trilinos
 cmake -B build \
   -D CMAKE_BUILD_TYPE=RELEASE \
   -D CMAKE_INSTALL_PREFIX="${Trilinos_PREFIX}" \
-  -D CMAKE_CXX_COMPILER="$(which g++)" \
-  -D CMAKE_CUDA_COMPILER="$(which nvcc)" \
+  -D CMAKE_CXX_COMPILER=CC \
+  -D CMAKE_CUDA_COMPILER=CC \
   -D Kokkos_ENABLE_CUDA=ON \
   -D Kokkos_ENABLE_CUDA_LAMBDA=ON \
   -D Kokkos_ARCH_AMPERE80=ON \

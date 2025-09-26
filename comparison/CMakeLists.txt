@@ -8,6 +8,11 @@ find_package(CUDAToolkit REQUIRED COMPONENTS cusparse)
 find_package(Trilinos REQUIRED COMPONENTS Teuchos Tpetra)
 find_package(MPI REQUIRED COMPONENTS CXX)
 
+set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
+set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
+
+add_subdirectory(ccutils)
+
 message("\nFound Trilinos!  Here are the details: ")
 message("   Trilinos_DIR = ${Trilinos_DIR}")
 message("   Trilinos_VERSION = ${Trilinos_VERSION}")
@@ -24,4 +29,5 @@ message(${Tpetra_DIR})
 find_package(Tpetra REQUIRED Tpetra )
 find_package(Teuchos REQUIRED Teuchos )
 add_executable(trilinos_spgemm trilinos/trilinos_spgemm.cpp)
-target_link_libraries(trilinos_spgemm PRIVATE Tpetra::all_libs Teuchos::all_libs)
+target_link_libraries(trilinos_spgemm PRIVATE Tpetra::all_libs Teuchos::all_libs MPI::MPI_CXX ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi)
+target_compile_options(trilinos_spgemm PRIVATE -O3)

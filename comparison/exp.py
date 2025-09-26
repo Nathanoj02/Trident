@@ -7,15 +7,27 @@ import tarfile
 import shutil
 
 
+matrices_dir = "hns_matrices"
+scripts_dir = "scripts"
+output_dir = "output"
 
 NODES = [1, 4, 16]
+
 FLAGS = {"run_spgemm": [["--impl get"],
                        ["--impl main"],
                        ["--Acsc", "--impl main"]],
          "trilinos_spgemm": [' ']
         } 
+
+PGRIDS = {1: ["1x1"],
+          4: ["4x4", "2x2"],
+          16: ["8x1", "4x4"]
+          }
+
 EXECUTABLES = ["run_spgemm", "trilinos_spgemm"]
 
+EXEC_DIR = {"run_spgemm": "../build",
+            "trilinos_spgemm": "./build_trilinos"}
 
 
 def get_matrices(matrix_list_file):
@@ -69,7 +81,6 @@ def download_matrix(group_matrix, matrices_dir):
 
 def download_matrices(args):
     fpath = args.matrix_list
-    matrices_dir = "hns_matrices"
 
     # Ensure matrices directory exists
     os.makedirs(matrices_dir, exist_ok=True)
@@ -85,40 +96,48 @@ def make_scripts(matrix):
     for node in NODES:
         gpus = 4 * node
         header = f"""#!/usr/bin/bash
-        -N {node}
-        -G {gpus}
-        -A m4646
-        -t 00:20:00
-        -C gpu
-        -q regular\n
+        #SBATCH -N {node}
+        #SBATCH -G {gpus}
+        #SBATCH -A m4646
+        #SBATCH -t 00:20:00
+        #SBATCH -C gpu
+        #SBATCH -q regular\n
 
         """
-        fname = f"scripts/{matrix}/gpus-{gpus}.sbatch"
-        matpath = f"matrices/{matrix}/{matrix}.bmtx"
-        with open(fname, 'w') as file:
-            file.write(header)
-            for ex in EXECUTABLES:
-                for flags in FLAGS[ex]:
+        for ex in EXECUTABLES:
+            for flags in FLAGS[ex]:
 
-                    flag_str = ''.join(flags)
-                    flag_str = flag_str.replace('-', '')
-                    flag_str = flag_str.replace(' ', '')
+                flag_str = ''.join(flags)
+                flag_str = flag_str.replace('-', '')
+                flag_str = flag_str.replace(' ', '')
 
-                    output = f"output/{matrix}/e:{ex}-g:{gpus}-f:{flag_str}"
+                flags_args = ' '.join(flags)
+                fname = f"scripts/{matrix}/{ex}-{gpus}-{flag_str}.sbatch"
+                with open(fname, 'w') as file:
+                    file.write(header)
 
-                    flags_args = ' '.join(flags)
-
-                    cmd = f"srun -G {gpus} -n {gpus} -o {output} {ex} {flags_args} --matA {matpath} --matB {matpath}\n"
-                    file.write(cmd)
-    
+                    if ex=="run_spgemm":
+                        matpath = f"hns_matrices/{matrix}/{matrix}.bmtx"
+                        for grid in PGRIDS[node]:
+                            output = f"output/{matrix}/timing_e:{ex}-g:{gpus}-pg:{grid}-f:{flag_str}.out"
+                            err = f"output/{matrix}/timing_e:{ex}-g:{gpus}-pg:{grid}-f:{flag_str}.err"
+                            cmd = f"srun -G {gpus} -n {gpus} -o {output} {EXEC_DIR[ex]}/{ex} {flags_args} --matA {matpath} --matB {matpath} --2D-pgrid {grid} \n"
+                            file.write(f"echo {cmd}")
+                            file.write(cmd)
+                    else:
+                        matpath = f"hns_matrices/{matrix}/{matrix}.mtx"
+                        output = f"output/{matrix}/timing_e:{ex}-g:{gpus}-pg:none-f:{flag_str}.out"
+                        err = f"output/{matrix}/timing_e:{ex}-g:{gpus}-pg:none-f:{flag_str}.err"
+                        cmd = f"srun -G {gpus} -n {gpus} -o {output} {EXEC_DIR[ex]}/{ex} --matA={matpath} --matB={matpath}\n"
+                        file.write(f"echo {cmd}")
+                        file.write(cmd)
 
 
 def setup_scripts(args):
     fpath = args.matrix_list
-    matrices_dir = "hns_matrices"
 
-    # Ensure matrices directory exists
-    os.makedirs(matrices_dir, exist_ok=True)
+    os.makedirs(scripts_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     matrices = get_matrices(fpath)
     print(matrices)
@@ -132,10 +151,6 @@ def setup_scripts(args):
     
 def submit_scripts(args):
     fpath = args.matrix_list
-    matrices_dir = "hns_matrices"
-
-    # Ensure matrices directory exists
-    os.makedirs(matrices_dir, exist_ok=True)
 
     matrices = get_matrices(fpath)
     print(matrices)
