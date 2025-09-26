@@ -19,7 +19,6 @@ EXECUTABLES = ["run_spgemm", "trilinos_spgemm"]
 
 
 def get_matrices(matrix_list_file):
-    """Read matrix names from file (GROUP/MATRIXNAME format)"""
     matrices = []
     with open(matrix_list_file, 'r') as f:
         for line in f:
@@ -30,7 +29,6 @@ def get_matrices(matrix_list_file):
 
 
 def download_matrix(group_matrix, matrices_dir):
-    """Download a single matrix from SuiteSparse"""
     group, matrix_name = group_matrix.split('/')
     matrix_dir = os.path.join(matrices_dir, f"{matrix_name}")
 
@@ -71,7 +69,7 @@ def download_matrix(group_matrix, matrices_dir):
 
 def download_matrices(args):
     fpath = args.matrix_list
-    matrices_dir = "matrices"
+    matrices_dir = "hns_matrices"
 
     # Ensure matrices directory exists
     os.makedirs(matrices_dir, exist_ok=True)
@@ -102,7 +100,6 @@ def make_scripts(matrix):
             for ex in EXECUTABLES:
                 for flags in FLAGS[ex]:
 
-                    print(flags)
                     flag_str = ''.join(flags)
                     flag_str = flag_str.replace('-', '')
                     flag_str = flag_str.replace(' ', '')
@@ -112,14 +109,13 @@ def make_scripts(matrix):
                     flags_args = ' '.join(flags)
 
                     cmd = f"srun -G {gpus} -n {gpus} -o {output} {ex} {flags_args} --matA {matpath} --matB {matpath}\n"
-                    print(cmd)
                     file.write(cmd)
     
 
 
 def setup_scripts(args):
     fpath = args.matrix_list
-    matrices_dir = "matrices"
+    matrices_dir = "hns_matrices"
 
     # Ensure matrices directory exists
     os.makedirs(matrices_dir, exist_ok=True)
@@ -129,12 +125,14 @@ def setup_scripts(args):
 
     for matrix in matrices:
         m = matrix.split("/")[-1]
+        os.makedirs(f"output/{m}", exist_ok=True)
+        os.makedirs(f"scripts/{m}", exist_ok=True)
         make_scripts(m)
         
     
 def submit_scripts(args):
     fpath = args.matrix_list
-    matrices_dir = "matrices"
+    matrices_dir = "hns_matrices"
 
     # Ensure matrices directory exists
     os.makedirs(matrices_dir, exist_ok=True)
