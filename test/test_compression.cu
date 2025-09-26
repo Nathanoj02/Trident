@@ -436,23 +436,23 @@ int main(int argc, char ** argv) {
 
     /* Here I am generating the matrices in the way that:
      *                     B:
-     *                     ---------------
-     *                     | 2%3  | 1%3  |
-     *                     ---------------
-     *                     | 2%3  | 1%3  |
-     *                     ---------------
+     *                     ----------------------
+     *                     | 2%3  | 1%3  | 0%3  |
+     *                     ----------------------
+     *                     | 2%3  | 1%3  | 0%3  |
+     *                     ----------------------
      *                        ||    ||
      * A:                     \/    \/
-     * ---------------     ---------------
-     * | even | even | --> | 2%6  | 4%6  |
-     * ---------------     ---------------
-     * | odd  | odd  | --> | 5%6  | 1%6  |
-     * ---------------     ---------------
+     * ---------------     ----------------------
+     * | even | even | --> | 2%6  | 4%6  | 0%6  |
+     * ---------------     ----------------------
+     * | odd  | odd  | --> | 5%6  | 1%6  | 3%6  |
+     * ---------------     ----------------------
      *
      */
 
-    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(grid->col_rank   , 16, mmio::MajorDim::COLS);
-    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(grid->row_rank +2, 16, mmio::MajorDim::ROWS);
+    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>((grid->col_rank%2)   , 32, mmio::MajorDim::COLS);
+    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>((grid->row_rank%3) +2, 32, mmio::MajorDim::ROWS);
 
     // MPI_ALL_PRINT(
     //     fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
@@ -518,27 +518,34 @@ int main(int argc, char ** argv) {
     int input_check = 1, global_check;
     if ((grid->col_rank % 2) == 0) input_check = (input_check && check_mod_pattern(A_map, mask_size, 0, 2));
     if ((grid->col_rank % 2) == 1) input_check = (input_check && check_mod_pattern(A_map, mask_size, 1, 2));
-    if ((grid->row_rank % 2) == 0) input_check = (input_check && check_mod_pattern(B_map, mask_size, 2, 3));
-    if ((grid->row_rank % 2) == 1) input_check = (input_check && check_mod_pattern(B_map, mask_size, 1, 3));
+    if ((grid->row_rank % 3) == 0) input_check = (input_check && check_mod_pattern(B_map, mask_size, 2, 3));
+    if ((grid->row_rank % 3) == 1) input_check = (input_check && check_mod_pattern(B_map, mask_size, 1, 3));
+    if ((grid->row_rank % 3) == 2) input_check = (input_check && check_mod_pattern(B_map, mask_size, 0, 3));
     MPI_Allreduce(&input_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
     if (world_rank==0) { if(global_check) fprintf(stdout, "Input check passed\n"); else fprintf(stderr, "ERROR on input check\n"); }
 
     int output_check = 1;
     if ((grid->col_rank % 2) == 0) {
-        output_check = (output_check && check_mod_pattern(h_col_filters.data()            , mask_size, 2, 6));
-        output_check = (output_check && check_mod_pattern(h_col_filters.data() + mask_size, mask_size, 4, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data()              , mask_size, 2, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() +   mask_size, mask_size, 4, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() + 2*mask_size, mask_size, 0, 6));
     }
     if ((grid->col_rank % 2) == 1) {
-        output_check = (output_check && check_mod_pattern(h_col_filters.data()            , mask_size, 5, 6));
-        output_check = (output_check && check_mod_pattern(h_col_filters.data() + mask_size, mask_size, 1, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data()              , mask_size, 5, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() +   mask_size, mask_size, 1, 6));
+        output_check = (output_check && check_mod_pattern(h_col_filters.data() + 2*mask_size, mask_size, 3, 6));
     }
-    if ((grid->row_rank % 2) == 0) {
+    if ((grid->row_rank % 3) == 0) {
         output_check = (output_check && check_mod_pattern(h_row_filters.data()            , mask_size, 2, 6));
         output_check = (output_check && check_mod_pattern(h_row_filters.data() + mask_size, mask_size, 5, 6));
     }
-    if ((grid->row_rank % 2) == 1) {
+    if ((grid->row_rank % 3) == 1) {
         output_check = (output_check && check_mod_pattern(h_row_filters.data()            , mask_size, 4, 6));
         output_check = (output_check && check_mod_pattern(h_row_filters.data() + mask_size, mask_size, 1, 6));
+    }
+    if ((grid->row_rank % 3) == 2) {
+        output_check = (output_check && check_mod_pattern(h_row_filters.data()            , mask_size, 0, 6));
+        output_check = (output_check && check_mod_pattern(h_row_filters.data() + mask_size, mask_size, 3, 6));
     }
 
     MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
