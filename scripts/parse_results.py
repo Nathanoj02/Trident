@@ -99,12 +99,12 @@ def parse_stdout(job: sbm.Job) -> List[Dict[str, Dict[str, str]]]:
 
 
 def main():
-  failed_jobs = sbm.jobs_list(status=[sbm.Status.FAILED], from_active=True, from_archived=True)
+  failed_jobs = sbm.jobs_list(status=[sbm.Status.FAILED], from_active=True, from_archived=False)
   if failed_jobs:
     print("WARNING: some jobs have failed!")
     pprint.pprint(failed_jobs)
     
-  jobs = sbm.jobs_list(status=[sbm.Status.COMPLETED], from_active=True, from_archived=True)
+  jobs = sbm.jobs_list(status=[sbm.Status.COMPLETED], from_active=True, from_archived=False)
   dfs = []
 
   for job in jobs:
@@ -135,6 +135,7 @@ def main():
     df = runs_to_dataframe(runs)
     df['cluster'] = job.cluster_name
     df['program'] = program
+    df['matrix'] = Path(args['matA']).stem
     df['nodes'] = job_config.nodes
     df['gpus'] = args['G']
     df['cpus_per_task'] = args['cpus-per-task']
