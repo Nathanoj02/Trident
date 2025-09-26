@@ -3,6 +3,7 @@
 #include <MatrixMarket_Tpetra.hpp>
 #include <TpetraExt_MatrixMatrix.hpp>
 #include <ccutils/timers.h>
+#include "unistd.h"
 
 // Return a pointer (RCP is like std::shared_ptr) to an output stream.
 // It prints on Process 0 of the given MPI communicator, but ignores
@@ -110,6 +111,13 @@ int main(int narg, char *arg[]) {
         {
             TIMER_PRINT_LAST(spgemm);
         }
+        sleep(2);
+    }
+
+    if (world_rank==0) 
+    {
+        printf("Done spgemm\n");
+        TIMER_PRINT(spgemm);
     }
 
     //out << "Matrix C=AxB:" << std::endl;

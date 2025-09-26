@@ -99,10 +99,12 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--spcomm"))
         {
             config->spcomm = true;
+            inc = 1;
         }
         else if (!strcmp(argname, "--Acsc"))
         {
             config->Acsc = true;
+            inc = 1;
         }
         else if (!strcmp(argname, "--impl"))
         {

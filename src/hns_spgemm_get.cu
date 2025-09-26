@@ -11,6 +11,8 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_TIMER_DEF(comp_time)
 #endif
 
+    CPU_TIMER_DEF(spgemm);
+
 
     // Asserts
     assert(kwd_A.mmio_csx->majordim == mmio::MajorDim::ROWS);
@@ -87,6 +89,7 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
+    CPU_TIMER_START(spgemm);
     for (int iter=0; iter<n_iters; iter++)
     {
 
@@ -165,6 +168,8 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_FREE_SAFE(B_remote.col_idx);
     CUDA_FREE_SAFE(B_remote.row_ptr);
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    CPU_TIMER_STOP(spgemm);
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(KC_local);
@@ -173,6 +178,13 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_local<<std::endl;
+    }
+
+
+    if (grid->global_rank==0)
+    {
+        TIMER_PRINT_LAST(spgemm);
+        TIMER_PRINT(spgemm);
     }
 
     return out;

@@ -21,7 +21,7 @@ FLAGS = {"run_spgemm": [["--impl get"],
 
 PGRIDS = {1: ["1x1"],
           4: ["4x4", "2x2"],
-          16: ["8x1", "4x4"]
+          16: ["8x8", "4x4"]
           }
 
 EXECUTABLES = ["run_spgemm", "trilinos_spgemm"]

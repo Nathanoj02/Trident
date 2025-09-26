@@ -103,7 +103,6 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
-        // NOTE: strcmp(a,b) return 0 if a == b, meaning that if a==b than 'if(strcmp(a,b))' is false
         if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
             if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
             MPI_Barrier(MPI_COMM_WORLD);
@@ -169,7 +168,6 @@ int main(int argc, char ** argv)
 
 
         mmio::CSX<int32_t, float> *dist_C;
-        CPU_TIMER_DEF(spgemm);
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<10; i++) 
         {
@@ -177,8 +175,6 @@ int main(int argc, char ** argv)
             fflush(stdout);
             sleep(0.2);
             MPI_Barrier(MPI_COMM_WORLD);
-            CPU_TIMER_START(spgemm);
-
             if (!strcmp(config->impl, "main"))
             {
                 dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
@@ -189,16 +185,9 @@ int main(int argc, char ** argv)
             }
 
             MPI_Barrier(MPI_COMM_WORLD);
-            CPU_TIMER_STOP(spgemm);
-            if (world_rank==0)
-            {
-                TIMER_PRINT_LAST(spgemm);
-            }
             delete dist_C;
-        }
-        if (world_rank==0) {
-            printf("Done spgemm\n");
-            TIMER_PRINT(spgemm);
+            fflush(stdout);
+            sleep(2);
         }
     }
 

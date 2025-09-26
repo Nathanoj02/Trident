@@ -115,8 +115,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_TIMER_DEF(A_conversion)
 #endif
 
+    CPU_TIMER_DEF(spgemm);
+
 
     // Main loop
+    CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
 
@@ -254,6 +257,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     A_comm_thread.join();
     B_comm_thread.join();
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    CPU_TIMER_STOP(spgemm);
 
 #if DEBUG_MAIN
     fprintf(stdout, "Main loop complete for rank %d\n", grid->global_rank);
@@ -271,6 +276,12 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     CUSPARSE_CHECK(cusparseDestroy(handle));
+
+    if (grid->global_rank==0)
+    {
+        TIMER_PRINT_LAST(spgemm);
+        TIMER_PRINT(spgemm);
+    }
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
