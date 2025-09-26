@@ -325,9 +325,9 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(int seed, int n, mmio::MajorDim layout, b
 
 }
 
-int check_mod_pattern(const int8_t* mask, int n, int k, int m) {
+int check_mod_pattern(const BMASK_TYPE* mask, int n, int k, int m) {
     for (int byte_idx = 0; byte_idx < n; ++byte_idx) {
-        int8_t expected = 0;
+        BMASK_TYPE expected = 0;
         // Build expected pattern for this byte
         for (int bit = 0; bit < 8; ++bit) {
             int global_bit = byte_idx * 8 + bit;
@@ -381,22 +381,22 @@ int main(int argc, char ** argv) {
         thrust::device_vector<int> B_colptr{0, 0, 1, 2, 2, 3, 4, 4, 5};
 
         // Apply the same function to both
-        int8_t *result_test = SpaComm::gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
+        BMASK_TYPE *result_test = SpaComm::gen_bitmask(thrust::raw_pointer_cast(test_vector.data()), test_vector.size()-1, MASK_SIZE);
         // return(0); // MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
-        int8_t *resultA     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
-        int8_t *resultB     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
+        BMASK_TYPE *resultA     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(A_rowptr.data()), A_rowptr.size()-1, MASK_SIZE);
+        BMASK_TYPE *resultB     = SpaComm::gen_bitmask(thrust::raw_pointer_cast(B_colptr.data()), B_colptr.size()-1, MASK_SIZE);
 
         int num_segments_test = ((test_vector.size()-1)%MASK_SIZE == 0) ? ((test_vector.size()-1)/MASK_SIZE) : (((test_vector.size()-1)/MASK_SIZE)+1);
         int num_segments_A    = ((A_rowptr.size()-1)%MASK_SIZE == 0) ? ((A_rowptr.size()-1)/MASK_SIZE) : (((A_rowptr.size()-1)/MASK_SIZE)+1);
         int num_segments_B    = ((B_colptr.size()-1)%MASK_SIZE == 0) ? ((B_colptr.size()-1)/MASK_SIZE) : (((B_colptr.size()-1)/MASK_SIZE)+1);
-        std::vector<int8_t> h_test(num_segments_test);
-        std::vector<int8_t> h_resultA(num_segments_A);
-        std::vector<int8_t> h_resultB(num_segments_B);
+        std::vector<BMASK_TYPE> h_test(num_segments_test);
+        std::vector<BMASK_TYPE> h_resultA(num_segments_A);
+        std::vector<BMASK_TYPE> h_resultB(num_segments_B);
 
-        CHECK_CUDA(cudaMemcpy(h_test.data(),    result_test, sizeof(int8_t) * num_segments_test, cudaMemcpyDeviceToHost));
-        CHECK_CUDA(cudaMemcpy(h_resultA.data(), resultA,     sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost));
-        CHECK_CUDA(cudaMemcpy(h_resultB.data(), resultB,     sizeof(int8_t) * num_segments_B, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_test.data(),    result_test, sizeof(BMASK_TYPE) * num_segments_test, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_resultA.data(), resultA,     sizeof(BMASK_TYPE) * num_segments_A, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(h_resultB.data(), resultB,     sizeof(BMASK_TYPE) * num_segments_B, cudaMemcpyDeviceToHost));
 
         std::cout << "Result test: ";
         for (auto v : h_test) std::cout << static_cast<int>(v) << " ";
@@ -407,11 +407,11 @@ int main(int argc, char ** argv) {
         std::cout << std::endl;
 
         ASSERT(num_segments_A == num_segments_B, "For the intersection num_segments_A == num_segments_B");
-        int8_t *intersection = SpaComm::intersect_bitmasks(resultA, resultB, num_segments_A);
+        BMASK_TYPE *intersection = SpaComm::intersect_bitmasks(resultA, resultB, num_segments_A);
         // return(0); // DEBUG
 
-        std::vector<int8_t> h_intersection(num_segments_A);
-        cudaMemcpy(h_intersection.data(), intersection, sizeof(int8_t) * num_segments_A, cudaMemcpyDeviceToHost);
+        std::vector<BMASK_TYPE> h_intersection(num_segments_A);
+        cudaMemcpy(h_intersection.data(), intersection, sizeof(BMASK_TYPE) * num_segments_A, cudaMemcpyDeviceToHost);
 
         std::cout << "Intersection: ";
         for (auto v : h_intersection) std::cout << static_cast<int>(v) << " ";
@@ -469,21 +469,21 @@ int main(int argc, char ** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     fflush(stdout);
 
-    int8_t *col_filters, *row_filters;
+    BMASK_TYPE *col_filters, *row_filters;
     SpaComm::spcomm_2D(A_csx, B_csx, grid, &col_filters, &row_filters);
 
     int k = A_csx->ncols; // We know  A_csx->ncols == B_csx->nrows
     int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
     int filter_size = mask_size * grid->row_size ;
 
-    std::vector<int8_t> h_col_filters(filter_size);
-    std::vector<int8_t> h_row_filters(filter_size);
+    std::vector<BMASK_TYPE> h_col_filters(filter_size);
+    std::vector<BMASK_TYPE> h_row_filters(filter_size);
 
-    CHECK_CUDA(cudaMemcpy(h_col_filters.data(), col_filters, sizeof(int8_t) * filter_size, cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(h_row_filters.data(), row_filters, sizeof(int8_t) * filter_size, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_col_filters.data(), col_filters, sizeof(BMASK_TYPE) * filter_size, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_row_filters.data(), row_filters, sizeof(BMASK_TYPE) * filter_size, cudaMemcpyDeviceToHost));
 
-    int8_t *A_map = SpaComm::gen_bitmask(A_csx->ptr_vec, A_csx->ncols, MASK_SIZE);
-    int8_t *B_map = SpaComm::gen_bitmask(B_csx->ptr_vec, B_csx->nrows, MASK_SIZE);
+    BMASK_TYPE *A_map = SpaComm::gen_bitmask(A_csx->ptr_vec, A_csx->ncols, MASK_SIZE);
+    BMASK_TYPE *B_map = SpaComm::gen_bitmask(B_csx->ptr_vec, B_csx->nrows, MASK_SIZE);
 
     move2host(&A_map, mask_size);
     move2host(&B_map, mask_size);
