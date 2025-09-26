@@ -71,8 +71,10 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     );
 
     // Allocate temp storage
-    thrust::device_vector<std::uint8_t> temp_storage(temp_storage_bytes);
-    d_temp_storage = thrust::raw_pointer_cast(temp_storage.data());
+    // thrust::device_vector<std::uint8_t> temp_storage(temp_storage_bytes);
+    // d_temp_storage = thrust::raw_pointer_cast(temp_storage.data());
+
+    CUDA_CHECK(cudaMalloc(&d_temp_storage, sizeof(uint8_t)*(2*temp_storage_bytes+1))); // 2 to be sure it is enought
 
     // Run reduction
     cub::DeviceSegmentedReduce::Reduce(
@@ -81,7 +83,9 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
-/*
+
+    CUDA_CHECK(cudaFree(d_temp_storage));
+
     int8_t* result_bytes;
     cudaMalloc(&result_bytes, sizeof(int8_t) * num_segments);
 
@@ -95,8 +99,6 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
 
 
     return result_bytes;
-    */
-    return(nullptr);
 }
 
 
