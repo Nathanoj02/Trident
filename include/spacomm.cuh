@@ -89,14 +89,23 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     int8_t* result_bytes;
     cudaMalloc(&result_bytes, sizeof(int8_t) * num_segments);
 
-    thrust::transform(
-        result_int, result_int + num_segments,
-        thrust::device_pointer_cast(result_bytes),
-        [] __device__ (int v) { return static_cast<int8_t>(v); }
-    );
-
-    cudaFree(result_int);
-
+// --------------------------
+// NOTE: I don't know why but the device cast not works, if someone is able to fix it I will offer him/her/it a beer
+    // thrust::transform(
+    //     result_int, result_int + num_segments,
+    //     thrust::device_pointer_cast(result_bytes),
+    //     [] __device__ (int v) { return static_cast<int8_t>(v); }
+    // );
+// >>> test bug fix >>>>
+    int    *h_result_int   = (int*)   malloc(sizeof(int)    * num_segments);
+    int8_t *h_result_bytes = (int8_t*)malloc(sizeof(int8_t) * num_segments);
+    CUDA_CHECK(cudaMemcpy(h_result_int, result_int, sizeof(int)*num_segments, cudaMemcpyDeviceToHost));
+    for (int i=0; i<num_segments; i++) h_result_bytes[i] = static_cast<int8_t>(h_result_int[i]);
+    CUDA_CHECK(cudaMemcpy(result_bytes, h_result_bytes, sizeof(int8_t)*num_segments, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaFree(result_int));
+    free(h_result_bytes);
+    free(h_result_int);
+// --------------------------
 
     return result_bytes;
 }
@@ -158,7 +167,7 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
     int8_t *A_map = SpaComm::gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
     int8_t *B_map = SpaComm::gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
-/*
+
     // ---------- Ghatering all the required maps ----------
     int8_t *recv_A_maps;
     CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(int8_t)*mask_size*(grid->row_size)) );
@@ -171,7 +180,7 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
     int8_t *all_intersections = SpaComm::intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
-
+/*
     // ---------- Alltoall data sisplacement back ----------
     // *col_filters = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));
     CUDA_CHECK( cudaMalloc(col_filters, sizeof(int8_t)*mask_size*(grid->row_size)) );
