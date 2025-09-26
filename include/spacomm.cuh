@@ -81,7 +81,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
-
+/*
     int8_t* result_bytes;
     cudaMalloc(&result_bytes, sizeof(int8_t) * num_segments);
 
@@ -95,6 +95,8 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
 
 
     return result_bytes;
+    */
+    return(nullptr);
 }
 
 
