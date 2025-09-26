@@ -65,7 +65,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     size_t temp_storage_bytes = 0;
     cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
-        presult.begin(), thrust::raw_pointer_cast(result),
+        presult.begin(), result,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
@@ -77,7 +77,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     // Run reduction
     cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
-        presult.begin(), thrust::raw_pointer_cast(result),
+        presult.begin(), result,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
