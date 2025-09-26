@@ -13,7 +13,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
 
-    IT ptrsize = (csx->majordim == mmio::ROWS) ? (csx->nrows) : (csx->ncols) ;
+    IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
     while (true)
     {
         // Wait until someone tells me to send them a tile
@@ -26,8 +26,15 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         }
 
         mmio::CSX<IT, VT> *csxtosend = nullptr;
+        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         if (spacomm != nullptr) {
+                fprintf(stdout, "[%d, %c] pre-compression: %d x %d with %d nnz\n", rank, desc, csx->nrows, csx->ncols, csx->nnz);
+                fflush(stdout);
+
                 csxtosend = spacomm->Compress(csx, target);
+
+                fprintf(stdout, "[%d, %c] post-compression: %d x %d with %d nnz\n", rank, desc, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
+                fflush(stdout);
         } else {
                 csxtosend = csx;
         }
@@ -37,6 +44,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         if (spacomm != nullptr) {
                 mmio::CSX_destroy(&csxtosend);
+                fprintf(stdout, "[%d, %c] csxtosend destroyed successfully\n", rank, desc);
         }
 
 #if DEBUG_MAIN

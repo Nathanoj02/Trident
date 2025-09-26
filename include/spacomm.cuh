@@ -11,6 +11,10 @@
 
 #include <cub/cub.cuh>
 
+// #define DEBUG_SPCOMM
+// #define DEBUG_COMPRESSION
+// #define DEBUG_PTR_COMPRESS
+
 namespace SpaComm
 {
 
@@ -204,8 +208,6 @@ T* intersect_bytemasks(const T* a, const T* b, int n) {
 
     return d_out; // caller must cudaFree()
 }
-
-// #define DEBUG_SPCOMM
 
 template<typename IT, typename VT>
 void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
@@ -438,10 +440,10 @@ struct KeepFlagByIndex
 
 struct MaskedTransform
 {
-    const int* c; // bitmask
+    const BMASK_TYPE* c; // bitmask
 
     __host__ __device__
-    MaskedTransform(const int* c_) : c(c_) {}
+    MaskedTransform(const BMASK_TYPE* c_) : c(c_) {}
 
     __device__ __forceinline__
     int operator()(const thrust::tuple<int,int>& t) const {
@@ -515,48 +517,65 @@ int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, BMASK_TYPE* mask, V
 template<typename IT>
 IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask) {
 
+#ifdef DEBUG_PTR_COMPRESS
+    print_d_arr(raw_ptr, m, "input ptr: ");
+#endif
+
     rowptrs_to_rownnz<IT>(raw_ptr, m-1); // The function require the number of rows/cols, not the real vecsize
 
-    int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
-    thrust::device_vector<IT> d_mask(mask, mask + mask_size);
-    thrust::device_vector<IT> d_row(raw_ptr, raw_ptr + m);
+#ifdef DEBUG_PTR_COMPRESS
+    print_d_arr(raw_ptr, m, "rownnz ptr: ");
+#endif
 
-#ifdef DEBUG
-    thrust::host_vector<IT> h_row = d_row;
+    int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
+    thrust::device_vector<BMASK_TYPE> d_mask(mask, mask + mask_size);
+    // thrust::device_vector<IT> d_row(raw_ptr, raw_ptr + m);
+    thrust::device_ptr<IT> thrust_ptr = thrust::device_pointer_cast(raw_ptr);
+
+
+#ifdef DEBUG_PTR_COMPRESS
+    std::vector<IT> h_row(m);
+    cudaMemcpy(h_row.data(), raw_ptr, m * sizeof(IT), cudaMemcpyDeviceToHost);
+
     std::cout << "Nnz ptr_vec: ";
     for (int x : h_row) std::cout << x << " ";
     std::cout << "\n";
+    fflush(stdout);
 #endif
 
     auto counting = thrust::make_counting_iterator<int>(0);
-    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, d_row.begin()+1));
+    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, thrust_ptr+1));
 
     thrust::transform(
         zipped, zipped + (m-1),
-        d_row.begin()+1,
+        thrust_ptr+1,
         MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
     );
 
-#ifdef DEBUG
-    h_row = d_row; // Update the host mirror
+#ifdef DEBUG_PTR_COMPRESS
+    cudaMemcpy(h_row.data(), raw_ptr, m * sizeof(IT), cudaMemcpyDeviceToHost);
+
     std::cout << "Masked ptr_vec: ";
     for (int x : h_row) std::cout << x << " ";
     std::cout << "\n";
+    fflush(stdout);
 #endif
 
-    raw_ptr = thrust::raw_pointer_cast(d_row.data());
+    // raw_ptr = thrust::raw_pointer_cast(d_row.data());
     rownnz_to_rowptrs<int>(raw_ptr, m-1); // The function require the number of rows/cols, not the real vecsize
 
-#ifdef DEBUG
-    h_row = d_row; // Update the host mirror
+#ifdef DEBUG_PTR_COMPRESS
+    cudaMemcpy(h_row.data(), raw_ptr, m * sizeof(IT), cudaMemcpyDeviceToHost);
+
     std::cout << "New ptr_vec: ";
     for (int x : h_row) std::cout << x << " ";
     std::cout << "\n";
+    fflush(stdout);
 #endif
 
     IT *output;
-    cudaMalloc(&output, sizeof(IT)*m);
-    cudaMemcpy(output, raw_ptr, m*sizeof(IT), cudaMemcpyDeviceToDevice);
+    CUDA_CHECK(cudaMalloc(&output, sizeof(IT)*m));
+    CUDA_CHECK(cudaMemcpy(output, raw_ptr, m*sizeof(IT), cudaMemcpyDeviceToDevice));
     return(output);
 }
 
@@ -579,16 +598,6 @@ struct SpaCommHandler
         int cdim = dist_A.mmio_csx->ncols;
         mask_len = ((cdim%MASK_SIZE)==0) ? (cdim/MASK_SIZE) : ((cdim/MASK_SIZE)+1) ;
         spcomm_2D(dist_A.mmio_csx, dist_B.mmio_csx, grid, &A_column_filters, &B_rows_filters);
-
-        // ----- debug -----
-        /*{
-            size_t size = (mask_len)*(dist_A.partitioning->grid->row_size);
-            BMASK_TYPE* hcolmaps = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-            CUDA_CHECK(cudaMemcpy(hcolmaps, A_column_filters, size, cudaMemcpyDeviceToHost));
-            SpaComm::printBit_left2right(hcolmaps, size, stdout);
-            free(hcolmaps);
-        }*/
-        // -----------------
 
     }
 
@@ -618,6 +627,13 @@ struct SpaCommHandler
                 &new_idx
         );
 
+#ifdef DEBUG_COMPRESSION
+        if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
+            print_d_arr(M->idx_vec, M->nnz,       "Old idx: ");
+            print_d_arr(new_idx,    num_selected, "New idx: ");
+        }
+#endif
+
         // Compute compressed value vector
         VT* new_val;
         int num_selected_val = select_entries<VT, IT>(
@@ -627,6 +643,13 @@ struct SpaCommHandler
                 &new_val
         );
 
+#ifdef DEBUG_COMPRESSION
+        if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
+            print_d_arr(M->val,  M->nnz,           "Old val: ");
+            print_d_arr(new_val, num_selected_val, "New val: ");
+        }
+#endif
+
         // Check
         if (num_selected != num_selected_val) {
             fprintf(stderr, "Error: num_selected_val (%d) differ from num_selected (%d)!\n", num_selected_val, num_selected);
@@ -634,7 +657,17 @@ struct SpaCommHandler
         }
 
         // Compute compressed pointer vector
-        int *new_row = select_ptrs(M->ptr_vec, ptr_size, mask);
+        IT *new_row;
+        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*ptr_size));
+        CUDA_CHECK(cudaMemcpy(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice));
+        new_row = select_ptrs(new_row, ptr_size, mask); // Changes are done in place
+
+#ifdef DEBUG_COMPRESSION
+        if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
+            print_d_arr(M->ptr_vec, ptr_size, "Old ptr: ");
+            print_d_arr(new_row,    ptr_size, "New ptr: ");
+        }
+#endif
 
         // Wrapping results in the output csx
         mmio::CSX<IT,VT> *output = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
