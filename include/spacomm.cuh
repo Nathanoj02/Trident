@@ -592,11 +592,10 @@ struct SpaCommHandler
 
     }
 
-    mmio::CSX<IT,VT>* Compress (KWrapDMat<IT, VT>& dist_M, int iteration_number) {
+    mmio::CSX<IT,VT>* Compress (mmio::CSX<IT,VT> *M, int iteration_number) {
 
         ASSERT(iteration_number < grid->row_comm, "ERROR: provided an invalid iteration number");
 
-        mmio::CSX<IT,VT> *M = dist_M->mmio_csx;
         mmio::MajorDim layout = M->majordim;
 
         // Set-up parameeters according to A or B operand

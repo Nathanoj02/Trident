@@ -7,7 +7,7 @@ int here_iteration = 0;
 //#endif
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -25,8 +25,19 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
             return;
         }
 
+        mmio::CSX<IT, VT> *csxtosend = nullptr;
+        if (spacomm != nullptr) {
+                csxtosend = spacomm->Compress(csx, target);
+        } else {
+                csxtosend = csx;
+        }
+
         // Put tile on remote process
-        holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
+        holder.put_tile(csxtosend->val, csxtosend->idx_vec, csxtosend->ptr_vec, csxtosend->nnz, ptrsize, target);
+
+        if (spacomm != nullptr) {
+                mmio::CSX_destroy(&csxtosend);
+        }
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -94,9 +105,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     // Launch comm threads
     std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx);
+                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx, spcomm);
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx);
+                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
