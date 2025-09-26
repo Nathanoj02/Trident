@@ -12,7 +12,7 @@
 #include <cub/cub.cuh>
 
 // #define DEBUG_SPCOMM
-// #define DEBUG_COMPRESSION
+#define DEBUG_COMPRESSION
 // #define DEBUG_PTR_COMPRESS
 
 namespace SpaComm
@@ -210,7 +210,7 @@ T* intersect_bytemasks(const T* a, const T* b, int n) {
 }
 
 template<typename IT, typename VT>
-void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
+int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
                 BMASK_TYPE** col_filters, BMASK_TYPE** row_filters) {
     ASSERT(Acsc->majordim==mmio::MajorDim::COLS, "A must be a CSC");
     ASSERT(Bcsr->majordim==mmio::MajorDim::ROWS, "B must be a CSR");
@@ -304,6 +304,8 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     CUDA_CHECK(cudaFree(recv_B_maps));
     CUDA_CHECK(cudaFree(A_map));
     CUDA_CHECK(cudaFree(B_map));
+
+    return(mask_size);
 }
 
 template<typename IT, typename VT>
@@ -602,25 +604,20 @@ template <typename IT, typename VT>
 struct SpaCommHandler
 {
 
-    SpaCommHandler(KWrapDMat<IT, VT>& dist_A, KWrapDMat<IT, VT>& dist_B)
+    SpaCommHandler(mmio::CSX<IT,VT>* csx_A, mmio::CSX<IT,VT>* csx_B, dmmio::ProcessGrid* grid)
     {
 
-        grid = dist_A.partitioning->grid;
-        assert(grid->row_size == grid->col_size);
-        int grid_dim = grid->row_size;
+        ASSERT(grid->row_size == grid->col_size, "Process grid must be squared");
+        ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
 
-        ASSERT(dist_A.mmio_csx->ncols == dist_B.mmio_csx->nrows, "A cols must be equal to B rows");
-
-        int cdim = dist_A.mmio_csx->ncols;
-        mask_len = ((cdim%MASK_SIZE)==0) ? (cdim/MASK_SIZE) : ((cdim/MASK_SIZE)+1) ;
-        spcomm_2D(dist_A.mmio_csx, dist_B.mmio_csx, grid, &A_column_filters, &B_rows_filters);
+        nfilters = grid->row_size;
+        mask_len = spcomm_2D(csx_A, csx_B, grid, &A_column_filters, &B_rows_filters);
 
     }
 
     mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number) {
 
-        ASSERT(iteration_number < grid->row_size, "ERROR: provided an invalid iteration number");
-
+        ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;
 
         // Set-up parameeters according to A or B operand
@@ -633,6 +630,21 @@ struct SpaCommHandler
             ptr_size = M->ncols+1;
             mask = A_column_filters + mask_len*iteration_number;
         }
+
+#ifdef DEBUG_COMPRESSION
+        fprintf(stdout, "Each mask has size %d, current mask: %p\n", mask_len, mask);
+        fflush(stdout);
+        char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
+        BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_len);
+        CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * mask_len, cudaMemcpyDeviceToHost));
+        MPI_ALL_PRINT(
+            fprintf(fp, "Entered in compression with iterid %d\n", iteration_number);
+            fprintf(fp, "Matrix %c has mask: ", matchar);
+            SpaComm::printBit_left2right(h_mask, mask_len, fp);
+            fprintf(fp, "\n");
+        )
+        free(h_mask);
+#endif
 
         // Compute compressed index vector
         IT* new_idx;
@@ -722,6 +734,7 @@ struct SpaCommHandler
     BMASK_TYPE* B_rows_filters;   // Filters to be applied to B(i,j) matrix before than send to Process (k,j)
 
     IT mask_len;  // This is the len of every single mask (i.e. A-B common dimension / MASK_SIZE)
+    IT nfilters;  // This is the number of filters in each filter collection (i.e. A_column_filters, B_column_filters)
 
 };
 

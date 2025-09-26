@@ -345,6 +345,54 @@ int check_mod_pattern(const BMASK_TYPE* mask, int n, int k, int m) {
 
 #define NGPU_PER_NODE 4
 
+/* Here I am generating the matrices in the way that:
+     *                     B:
+     *                     ----------------------
+     *                     | 2%3  | 1%3  | 0%3  |
+     *                     ----------------------
+     *                     | 2%3  | 1%3  | 0%3  |
+     *                     ----------------------
+     *                        ||    ||
+     * A:                     \/    \/
+     * ---------------     ----------------------
+     * | even | even | --> | 2%6  | 4%6  | 0%6  |
+     * ---------------     ----------------------
+     * | odd  | odd  | --> | 5%6  | 1%6  | 3%6  |
+     * ---------------     ----------------------
+     *
+     */
+
+    int expectedA_fn(int col_rank, int iter) {
+        int col_mod  = col_rank % 2;
+        int iter_mod =     iter % 3;
+
+        if (col_mod == 0) {
+            if (iter_mod==0) return(2);
+            if (iter_mod==1) return(4);
+            if (iter_mod==2) return(0);
+        } else {
+            if (iter_mod==0) return(5);
+            if (iter_mod==1) return(1);
+            if (iter_mod==2) return(3);
+        }
+    }
+
+    int expectedB_fn(int row_rank, int iter) {
+        int row_mod = row_rank % 3;
+        int iter_mod =    iter % 2;
+
+        if (row_mod == 0) {
+            if (iter_mod==0) return(2);
+            if (iter_mod==1) return(5);
+        } else if (row_mod == 1) {
+            if (iter_mod==0) return(4);
+            if (iter_mod==1) return(1);
+        } else {
+            if (iter_mod==0) return(0);
+            if (iter_mod==1) return(3);
+        }
+    }
+
 int main(int argc, char ** argv) {
 
     MPI_Init(&argc, &argv);
@@ -370,7 +418,7 @@ int main(int argc, char ** argv) {
 
     // MPI_Abort(MPI_COMM_WORLD, 1); // Debug
 
-    int skip = config->spcomm; // I use spcomm as flag for skip the first experiments
+    int skip = config->Acsc; // I use spcomm as flag for skip the first experiments
     if (skip) goto parallel_exps;
     // ----------------------------------------------------------------------------------------------------
 
@@ -427,6 +475,9 @@ int main(int argc, char ** argv) {
 
     // ----------------------------------------------------------------------------------------------------
     parallel_exps:
+    skip = config->spcomm;
+    if (skip) goto simulated_spgemm;
+    {
     if (world_rank==0) std::cout << "-------------------- Parallel part --------------------" << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -450,6 +501,7 @@ int main(int argc, char ** argv) {
      * ---------------     ----------------------
      *
      */
+
 
     mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>((grid->col_rank%2)   , 16, mmio::MajorDim::COLS);
     mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>((grid->row_rank%3) +2, 16, mmio::MajorDim::ROWS);
@@ -550,6 +602,102 @@ int main(int argc, char ** argv) {
 
     MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
     if (world_rank==0) { if(global_check) fprintf(stdout, "Output check passed\n"); else fprintf(stderr, "ERROR on output check\n"); }
+    }
+
+    simulated_spgemm:
+    {
+        if (world_rank==0) std::cout << "-------------------- Simulation part --------------------" << std::endl; fflush(stdout);
+        // Simulated inputs
+        mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>((grid->col_rank%2)   , 16, mmio::MajorDim::COLS);
+        mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>((grid->row_rank%3) +2, 16, mmio::MajorDim::ROWS);
+        moveCSX2device(A_csx);
+        moveCSX2device(B_csx);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+
+        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
+        for (int i=0; i<5; i++)
+        {
+
+            int common_grid_size = grid->row_size; // This must be equal to kwd_B->...->col_size
+            const int n_iters = common_grid_size;
+
+            // Indices of tiles to fetch in the first iteration from each communicator
+            int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stragger left
+            int rowBtoGet = (grid->col_rank + grid->row_rank) % common_grid_size; // Stragger down
+
+            // Sparsity pattern communication
+            if (world_rank==0) std::cout << "Start of Sparsity pattern communication... " << std::endl; fflush(stdout);
+            SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(A_csx, B_csx, grid);
+            MPI_Barrier(MPI_COMM_WORLD);
+            if (world_rank==0) std::cout << "End of Sparsity pattern communication" << std::endl; fflush(stdout);
+
+            // ----- Check correctness -----
+            int mask_size   = spcomm_data->mask_len;
+            int filter_size = mask_size * grid->row_size ;
+            std::vector<BMASK_TYPE> h_col_filters(filter_size);
+            std::vector<BMASK_TYPE> h_row_filters(filter_size);
+            CHECK_CUDA(cudaMemcpy(h_col_filters.data(), spcomm_data->A_column_filters, sizeof(BMASK_TYPE) * filter_size, cudaMemcpyDeviceToHost));
+            CHECK_CUDA(cudaMemcpy(h_row_filters.data(), spcomm_data->B_rows_filters, sizeof(BMASK_TYPE) * filter_size, cudaMemcpyDeviceToHost));
+
+            int output_check = 1, global_check;
+            for (int k=0; k<common_grid_size; k++) {
+                BMASK_TYPE *Afilter = h_col_filters.data() + (k*mask_size);
+                BMASK_TYPE *Bfilter = h_row_filters.data() + (k*mask_size);
+                int expectedA = expectedA_fn(grid->col_rank, k);
+                int expectedB = expectedB_fn(grid->row_rank, k);
+                int checkA    = check_mod_pattern(Afilter, mask_size, expectedA, 6);
+                int checkB    = check_mod_pattern(Bfilter, mask_size, expectedB, 6);
+/*
+                MPI_ALL_PRINT(
+                    fprintf(fp, "Filters %d: (%d,%d)\n", k, checkA, checkB);
+                    SpaComm::printBit_left2right(Afilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedA);
+                    SpaComm::printBit_left2right(Bfilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedB);
+                )
+*/
+                output_check = (output_check && checkA);
+                output_check = (output_check && checkB);
+            }
+            MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+            if (world_rank==0) { if(global_check) fprintf(stdout, "Check passed\n"); else fprintf(stderr, "ERROR on check\n"); }
+            // ------------------------------
+
+            // Main loop
+            for (int iter = 0; iter < n_iters; iter++)
+            {
+
+                if (grid->global_rank == 0)
+                {
+                    std::cout<<"Iteration "<<iter<<std::endl;
+                }
+
+                // fprintf(stdout, "[%d] colAtoGet: %d, rowBtoGet: %d\n", grid->global_rank, colAtoGet, rowBtoGet); fflush(stdout);
+                sleep(1);
+                MPI_Barrier(MPI_COMM_WORLD);
+
+                if (world_rank==0) std::cout << "Compressing A... " << std::endl; fflush(stdout);
+                mmio::CSX<int32_t, float> *csxtosendA = spcomm_data->Compress(A_csx, iter);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if (world_rank==0) std::cout << "A compressed" << std::endl; fflush(stdout);
+
+                if (world_rank==0) std::cout << "Compressing B... " << std::endl; fflush(stdout);
+                mmio::CSX<int32_t, float> *csxtosendB = spcomm_data->Compress(B_csx, iter);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if (world_rank==0) std::cout << "B compressed" << std::endl; fflush(stdout);
+
+                if (world_rank==0) std::cout << "Freeing compressed tiles... " << std::endl; fflush(stdout);
+                CSX_destroy_device(&csxtosendA);
+                CSX_destroy_device(&csxtosendB);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if (world_rank==0) std::cout << "Tiles freed" << std::endl; fflush(stdout);
+
+                // Round shift
+                colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
+                rowBtoGet = (rowBtoGet + 1) % common_grid_size; // ShiftDown
+            }
+        }
+        if (world_rank==0) printf("Done spgemm\n");
+    }
 
     return 0;
 }

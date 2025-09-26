@@ -173,7 +173,7 @@ int main(int argc, char ** argv)
         // Puting this inside the loop produce craches on the start of second iteration; we don't know why
         SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
         if (config->spcomm) {
-            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_A.partitioning->grid);
         } else {
             spcomm_data = nullptr;
         }
