@@ -164,35 +164,37 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-
-
         mmio::CSX<int32_t, float> *dist_C;
         CPU_TIMER_DEF(spgemm);
         CPU_TIMER_DEF(spacomm);
+
+        CPU_TIMER_START(spacomm);
+
+        // Puting this inside the loop produce craches on the start of second iteration; we don't know why
+        SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
+        if (config->spcomm) {
+            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+        } else {
+            spcomm_data = nullptr;
+        }
+        // >>>>>>>>>> TEST >>>>>>>>>>
+        // BMASK_TYPE *A_column_filters = nullptr, *B_rows_filters = nullptr;
+        // if (config->spcomm) {
+        //     SpaComm::spcomm_2D(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
+        //     // SpaComm::spcomm_2D_bytemask(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
+        // }
+
+        CPU_TIMER_STOP(spacomm);
+        if (world_rank==0)
+        {
+            TIMER_PRINT(spacomm);
+        }
+
+        CPU_TIMER_START(spgemm);
+
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<50; i++) 
         {
-            CPU_TIMER_START(spacomm);
-
-            SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
-            // if (config->spcomm) {
-            //     spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
-            // } else {
-            //     spcomm_data = nullptr;
-            // }
-            // >>>>>>>>>> TEST >>>>>>>>>>
-            BMASK_TYPE *A_column_filters = nullptr, *B_rows_filters = nullptr;
-            if (config->spcomm) {
-                SpaComm::spcomm_2D(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
-            }
-
-            CPU_TIMER_STOP(spacomm);
-            if (world_rank==0)
-            {
-                TIMER_PRINT(spacomm);
-            }
-
-            CPU_TIMER_START(spgemm);
 
             if (!strcmp(config->impl, "main"))
             {
