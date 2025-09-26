@@ -12,6 +12,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    int nsend = 0;
+
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
     while (true)
@@ -28,12 +30,16 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         mmio::CSX<IT, VT> *csxtosend = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         if (spacomm != nullptr) {
-                fprintf(stdout, "[%d, %c] pre-compression: %d x %d with %d nnz\n", rank, desc, csx->nrows, csx->ncols, csx->nnz);
+                fprintf(stdout, "[%d, %c, %d] pre-compression: %d x %d with %d nnz, (val,idx,ptr): (%p,%p,%p), \n",
+                        rank, desc, nsend,
+                        csx->nrows, csx->ncols, csx->nnz,
+                        csx->val, csx->idx_vec, csx->ptr_vec
+                );
                 fflush(stdout);
 
                 csxtosend = spacomm->Compress(csx, target);
 
-                fprintf(stdout, "[%d, %c] post-compression: %d x %d with %d nnz\n", rank, desc, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
+                fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
                 fflush(stdout);
         } else {
                 csxtosend = csx;
@@ -43,9 +49,11 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         holder.put_tile(csxtosend->val, csxtosend->idx_vec, csxtosend->ptr_vec, csxtosend->nnz, ptrsize, target);
 
         if (spacomm != nullptr) {
-                mmio::CSX_destroy(&csxtosend);
-                fprintf(stdout, "[%d, %c] csxtosend destroyed successfully\n", rank, desc);
+                CSX_destroy_device(&csxtosend);
+                fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
         }
+
+        nsend++;
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);

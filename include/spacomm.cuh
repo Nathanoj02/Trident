@@ -457,7 +457,7 @@ struct MaskedTransform
 
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
-int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, BMASK_TYPE* mask, VT **output) {
+int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output) {
 
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
@@ -496,7 +496,7 @@ int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, BMASK_TYPE* mask, V
 
     // Move num_selected on host
     int num_selected;
-    cudaMemcpy(&num_selected, d_num_selected, sizeof(int), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&num_selected, d_num_selected, sizeof(int), cudaMemcpyDeviceToHost));
 
 #ifdef DEBUG
     VT* h_out = (VT*)malloc(sizeof(VT)*num_selected);
@@ -508,7 +508,7 @@ int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, BMASK_TYPE* mask, V
     free(h_out);
 #endif
 
-    cudaFree(d_temp_storage);
+    CUDA_CHECK(cudaFree(d_temp_storage));
 
     *output = d_out;
     return(num_selected);
@@ -601,7 +601,7 @@ struct SpaCommHandler
 
     }
 
-    mmio::CSX<IT,VT>* Compress (mmio::CSX<IT,VT> *M, int iteration_number) {
+    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number) {
 
         ASSERT(iteration_number < grid->row_size, "ERROR: provided an invalid iteration number");
 
@@ -652,7 +652,11 @@ struct SpaCommHandler
 
         // Check
         if (num_selected != num_selected_val) {
-            fprintf(stderr, "Error: num_selected_val (%d) differ from num_selected (%d)!\n", num_selected_val, num_selected);
+            int rank;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            fprintf(stderr, "Error rank %d iteration_number %d: num_selected_val (%d) differ from num_selected (%d)!\n",
+                    rank, iteration_number, num_selected_val, num_selected);
+            print_d_arr(M->val,  M->nnz, "Old val: ");
             MPI_Abort(grid->world_comm, __LINE__);
         }
 

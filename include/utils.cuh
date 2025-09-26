@@ -305,3 +305,24 @@ void par_print(const char * str, Args... args)
     sleep(1);
     MPI_Barrier(MPI_COMM_WORLD);
 }
+
+
+template<typename IT, typename VT>
+void CSX_destroy_device(mmio::CSX<IT, VT> **csx) {
+if (*csx != NULL) {
+    if ((*csx)->ptr_vec != NULL) {
+    cudaFree((*csx)->ptr_vec);
+    (*csx)->ptr_vec = NULL;
+    }
+    if ((*csx)->idx_vec != NULL) {
+    cudaFree((*csx)->idx_vec);
+    (*csx)->idx_vec = NULL;
+    }
+    if ((*csx)->val != NULL) {
+    cudaFree((*csx)->val);
+    (*csx)->val = NULL;
+    }
+    free(*csx);
+    *csx = NULL;
+}
+}
