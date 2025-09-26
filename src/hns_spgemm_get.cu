@@ -184,7 +184,6 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     if (grid->global_rank==0)
     {
         TIMER_PRINT_LAST(spgemm);
-        TIMER_PRINT(spgemm);
     }
 
     return out;
