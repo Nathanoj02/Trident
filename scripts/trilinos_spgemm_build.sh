@@ -6,7 +6,7 @@ source scripts/variables.sh
 
 cd comparison
 
-if [[ -L "ccutils" ]]; then
+if [[ -d "ccutils" ]]; then
   echo "Found symbolic link to ccutils"
 else
   ln -s  ccutils

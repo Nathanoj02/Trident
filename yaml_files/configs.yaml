@@ -39,8 +39,8 @@ perlmutter:
   scheduler: slurm
 
   default_conf:
-    account: m4341_g
-    constraint: "gpu"
+    account: m4646_g
+    constraint: gpu
     qos: regular
     time: "00:10:00"
     modules: 
@@ -48,18 +48,17 @@ perlmutter:
       - "craype-accel-nvidia80"
       - "craype-hugepages2G"
       - "cray-pmi/6.1.15"
+      - "cray-mpich/8.1.30"
 
   configs:
     - name: "1_nodes__{cpus_per_task}_cpus-per-task__mpi-async"
       nodes: 1
-      ntasks: 4
       gpus: 4
       cpus_per_task: "{cpus_per_task}"
       env:
         - "MPICH_ASYNC_PROGRESS=1"
     - name: "1_nodes__{cpus_per_task}_cpus-per-task"
       nodes: 1
-      ntasks: 4
       gpus: 4
       cpus_per_task: "{cpus_per_task}"
       env:
@@ -67,14 +66,12 @@ perlmutter:
 
     - name: "4_nodes__{cpus_per_task}_cpus-per-task__mpi-async"
       nodes: 4
-      ntasks: 16
       gpus: 16
       cpus_per_task: "{cpus_per_task}"
       env:
         - "MPICH_ASYNC_PROGRESS=1"
     - name: "4_nodes__{cpus_per_task}_cpus-per-task"
       nodes: 4
-      ntasks: 16
       gpus: 16
       cpus_per_task: "{cpus_per_task}"
       env:
@@ -82,14 +79,12 @@ perlmutter:
 
     - name: "16_nodes__{cpus_per_task}_cpus-per-task__mpi-async"
       nodes: 16
-      ntasks: 64
       gpus: 64
       cpus_per_task: "{cpus_per_task}"
       env:
         - "MPICH_ASYNC_PROGRESS=1"
     - name: "16_nodes__{cpus_per_task}_cpus-per-task"
       nodes: 16
-      ntasks: 64
       gpus: 64
       cpus_per_task: "{cpus_per_task}"
       env:

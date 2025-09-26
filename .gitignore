@@ -2,5 +2,10 @@
 .kdev4/
 HnS-SpGEMM.kdev4
 
+comparison/ccutils/
+comparison/build/
+comparison/build_*/
 build/
+build_*/
 results/
+SbatchMan/

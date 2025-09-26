@@ -11,7 +11,8 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
 set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
 
-add_subdirectory(ccutils)
+get_filename_component(CCUTILS_DIR "${CMAKE_SOURCE_DIR}/ccutils" REALPATH)
+add_subdirectory(${CCUTILS_DIR})
 
 message("\nFound Trilinos!  Here are the details: ")
 message("   Trilinos_DIR = ${Trilinos_DIR}")
