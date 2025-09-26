@@ -193,7 +193,7 @@ int main(int argc, char ** argv)
         CPU_TIMER_START(spgemm);
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<50; i++) 
+        for (int i=0; i<2; i++)
         {
 
             if (!strcmp(config->impl, "main"))

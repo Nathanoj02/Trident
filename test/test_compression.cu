@@ -155,7 +155,7 @@ int tmp_test1 () {
     thrust::device_vector<float> d_val  = h_val;
     thrust::device_vector<int>   d_col  = h_col;
     thrust::device_vector<int>   d_row  = h_row;
-    thrust::device_vector<int>   d_mask = h_mask;
+    thrust::device_vector<BMASK_TYPE>   d_mask = h_mask;
     // return(0); // DEBUG
 
     int* new_col;

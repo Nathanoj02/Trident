@@ -40,7 +40,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
                 csxtosend = spacomm->Compress(csx, target);
 
                 fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
-                fflush(stdout);
+                // fflush(stdout);
         } else {
                 csxtosend = csx;
         }
@@ -50,7 +50,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         if (spacomm != nullptr) {
                 CSX_destroy_device(&csxtosend);
-                fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
+                // fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
         }
 
         nsend++;

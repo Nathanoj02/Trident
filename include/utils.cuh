@@ -311,15 +311,15 @@ template<typename IT, typename VT>
 void CSX_destroy_device(mmio::CSX<IT, VT> **csx) {
 if (*csx != NULL) {
     if ((*csx)->ptr_vec != NULL) {
-    cudaFree((*csx)->ptr_vec);
+    CUDA_CHECK(cudaFree((*csx)->ptr_vec));
     (*csx)->ptr_vec = NULL;
     }
     if ((*csx)->idx_vec != NULL) {
-    cudaFree((*csx)->idx_vec);
+    CUDA_CHECK(cudaFree((*csx)->idx_vec));
     (*csx)->idx_vec = NULL;
     }
     if ((*csx)->val != NULL) {
-    cudaFree((*csx)->val);
+    CUDA_CHECK(cudaFree((*csx)->val));
     (*csx)->val = NULL;
     }
     free(*csx);

@@ -67,26 +67,26 @@ BMASK_TYPE* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     // Temporary storage requirements
     void* d_temp_storage      = nullptr;
     size_t temp_storage_bytes = 0;
-    cub::DeviceSegmentedReduce::Reduce(
+    CUDA_CHECK(cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
         presult.begin(), result_int,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
-    );
+    ));
 
     // Allocate temp storage
     // thrust::device_vector<std::uint8_t> temp_storage(temp_storage_bytes);
     // d_temp_storage = thrust::raw_pointer_cast(temp_storage.data());
 
-    CUDA_CHECK(cudaMalloc(&d_temp_storage, sizeof(uint8_t)*(2*temp_storage_bytes+1))); // 2 to be sure it is enought
+    CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes));
 
     // Run reduction
-    cub::DeviceSegmentedReduce::Reduce(
+    CUDA_CHECK(cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
         presult.begin(), result_int,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
-    );
+    ));
 
     CUDA_CHECK(cudaFree(d_temp_storage));
 
@@ -455,44 +455,59 @@ struct MaskedTransform
     }
 };
 
+#define EXPLICIT_FLAGS
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
 int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output) {
 
+#ifndef EXPLICIT_FLAGS
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
         counting,
         KeepFlagByIndex(ptr_vec, m, mask)
     );
+#else
+    thrust::device_vector<unsigned char> d_flags(n);
+
+    // counting iterator + transform -> flags
+    auto counting = thrust::make_counting_iterator<int>(0);
+    // KeepFlagByIndex must be __host__ __device__ and must accept device pointers
+    thrust::transform(
+        counting, counting + n,
+        d_flags.begin(),
+        KeepFlagByIndex(ptr_vec, m, mask) // must be device-callable and ptr_vec/mask must be device pointers
+    );
+    auto flags_it = thrust::raw_pointer_cast(d_flags.data());
+#endif
 
     VT  *d_out;
     int *d_num_selected;
-    cudaMalloc(&d_out, sizeof(VT)*n);
-    cudaMalloc(&d_num_selected, sizeof(int));
+    CUDA_CHECK(cudaMalloc(&d_out, sizeof(VT)*n));
+    CUDA_CHECK(cudaMalloc(&d_num_selected, sizeof(int)));
 
     // Temp storage
     void* d_temp_storage = nullptr;
     size_t temp_storage_bytes = 0;
 
-    cub::DeviceSelect::Flagged(
+    CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
         input_vec, // values
         flags_it,                             // lazy flags
         d_out,
         d_num_selected,
         n
-    );
+    ));
 
-    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    if (temp_storage_bytes>0) { CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes)); }
 
-    cub::DeviceSelect::Flagged(
+    CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
         input_vec, // values
         flags_it,                             // lazy flags
         d_out,
         d_num_selected,
         n
-    );
+    ));
 
     // Move num_selected on host
     int num_selected;
@@ -509,6 +524,7 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
 #endif
 
     CUDA_CHECK(cudaFree(d_temp_storage));
+    CUDA_CHECK(cudaFree(d_num_selected));
 
     *output = d_out;
     return(num_selected);
@@ -656,7 +672,12 @@ struct SpaCommHandler
             MPI_Comm_rank(MPI_COMM_WORLD, &rank);
             fprintf(stderr, "Error rank %d iteration_number %d: num_selected_val (%d) differ from num_selected (%d)!\n",
                     rank, iteration_number, num_selected_val, num_selected);
-            print_d_arr(M->val,  M->nnz, "Old val: ");
+            fprintf(stderr, "M->nnz: %d, M->val: %p, M->idx: %p", M->nnz, M->val, M->idx_vec);
+
+            BMASK_TYPE *tmp;
+            CUDA_CHECK(cudaMalloc(&tmp, sizeof(BMASK_TYPE)*mask_len));
+            CUDA_CHECK(cudaMemcpy(tmp, mask, sizeof(BMASK_TYPE)*mask_len, cudaMemcpyDeviceToHost));
+            SpaComm::printBit_left2right(tmp, mask_len, stderr);
             MPI_Abort(grid->world_comm, __LINE__);
         }
 
