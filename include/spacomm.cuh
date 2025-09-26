@@ -171,11 +171,11 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     // ---------- Ghatering all the required maps ----------
     BMASK_TYPE *recv_A_maps;
     CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
-    MPI_Allgather(A_map, mask_size, MPI_INT8_T, recv_A_maps, mask_size, MPI_INT8_T, grid->row_comm);
+    MPI_Allgather(A_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_A_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
 
     BMASK_TYPE *recv_B_maps;
     CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
-    MPI_Allgather(B_map, mask_size, MPI_INT8_T, recv_B_maps, mask_size, MPI_INT8_T, grid->col_comm);
+    MPI_Allgather(B_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_B_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
 
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
@@ -184,11 +184,11 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     // ---------- Alltoall data sisplacement back ----------
     // *col_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->row_size));
     CUDA_CHECK( cudaMalloc(col_filters, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
-    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, *col_filters, mask_size, MPI_INT8_T, grid->row_comm);
+    MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *col_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
 
     // *row_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->col_size));
     CUDA_CHECK( cudaMalloc(row_filters, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
-    MPI_Alltoall(all_intersections, mask_size, MPI_INT8_T, *row_filters, mask_size, MPI_INT8_T, grid->col_comm);
+    MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *row_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
 
 #ifdef DEBUG_SPCOMM
     {
