@@ -142,14 +142,12 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
     int8_t *A_map = SpaComm::gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
     int8_t *B_map = SpaComm::gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
-
+/*
     // ---------- Ghatering all the required maps ----------
-    // int8_t *recv_A_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->row_size));
     int8_t *recv_A_maps;
     CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(int8_t)*mask_size*(grid->row_size)) );
     MPI_Allgather(A_map, mask_size, MPI_INT8_T, recv_A_maps, mask_size, MPI_INT8_T, grid->row_comm);
 
-    // int8_t *recv_B_maps = (int8_t*)malloc(sizeof(int8_t)*mask_size*(grid->col_size));
     int8_t *recv_B_maps;
     CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(int8_t)*mask_size*(grid->col_size)) );
     MPI_Allgather(B_map, mask_size, MPI_INT8_T, recv_B_maps, mask_size, MPI_INT8_T, grid->col_comm);
@@ -224,6 +222,7 @@ void spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGr
     CUDA_CHECK(cudaFree(recv_B_maps));
     CUDA_CHECK(cudaFree(A_map));
     CUDA_CHECK(cudaFree(B_map));
+    */
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -404,6 +403,16 @@ struct SpaCommHandler
         int cdim = dist_A.mmio_csx->ncols;
         mask_len = ((cdim%MASK_SIZE)==0) ? (cdim/MASK_SIZE) : ((cdim/MASK_SIZE)+1) ;
         spcomm_2D(dist_A.mmio_csx, dist_B.mmio_csx, grid, &A_column_filters, &B_rows_filters);
+
+        // ----- debug -----
+        /*{
+            size_t size = (mask_len)*(dist_A.partitioning->grid->row_size);
+            int8_t* hcolmaps = (int8_t*)malloc(sizeof(int8_t)*size);
+            CUDA_CHECK(cudaMemcpy(hcolmaps, A_column_filters, size, cudaMemcpyDeviceToHost));
+            SpaComm::printBit_left2right(hcolmaps, size, stdout);
+            free(hcolmaps);
+        }*/
+        // -----------------
 
     }
 

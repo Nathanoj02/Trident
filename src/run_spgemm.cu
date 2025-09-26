@@ -177,6 +177,17 @@ int main(int argc, char ** argv)
             SpaComm::SpaCommHandler<int32_t, float> *spcomm_data;
             if (config->spcomm) {
                 spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+
+
+                // ----- debug -----
+                /*{
+                    size_t size = (spcomm_data->mask_len)*(wrapped_A.partitioning->grid->row_size);
+                    int8_t* hcolmaps = (int8_t*)malloc(sizeof(int8_t)*size);
+                    cudaMemcpy(hcolmaps, spcomm_data->A_column_filters, size, cudaMemcpyDeviceToHost);
+                    SpaComm::printBit_left2right(hcolmaps, size, stdout);
+                    free(hcolmaps);
+                }*/
+                // -----------------
             } else {
                 spcomm_data = nullptr;
             }
@@ -186,7 +197,7 @@ int main(int argc, char ** argv)
             {
                 TIMER_PRINT(spacomm);
             }
-
+/*
             CPU_TIMER_START(spgemm);
 
             if (!strcmp(config->impl, "main"))
@@ -204,6 +215,7 @@ int main(int argc, char ** argv)
                 TIMER_PRINT(spgemm);
             }
             delete dist_C;
+*/
         }
         if (world_rank==0) printf("Done spgemm\n");
     }
