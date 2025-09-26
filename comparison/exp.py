@@ -96,12 +96,12 @@ def make_scripts(matrix):
     for node in NODES:
         gpus = 4 * node
         header = f"""#!/usr/bin/bash
-        #SBATCH -N {node}
-        #SBATCH -G {gpus}
-        #SBATCH -A m4646
-        #SBATCH -t 00:20:00
-        #SBATCH -C gpu
-        #SBATCH -q regular\n
+#SBATCH -N {node}
+#SBATCH -G {gpus}
+#SBATCH -A m4646_g
+#SBATCH -t 00:20:00
+#SBATCH -C gpu
+#SBATCH --qos regular\n
 
         """
         for ex in EXECUTABLES:
@@ -156,10 +156,11 @@ def submit_scripts(args):
     print(matrices)
     script_dir = "scripts"
     for matrix in matrices:
-        path = os.join(script_dir, matrix)
+        m = matrix.split("/")[-1]
+        path = os.path.join(script_dir, m)
         for script in os.listdir(path):
-            path = os.join(path, script)
-            os.system(f"sbatch {path}")
+            pathnew = os.path.join(path, script)
+            os.system(f"sbatch {pathnew}")
 
 
 
