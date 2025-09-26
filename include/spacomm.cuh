@@ -23,7 +23,7 @@ namespace SpaComm
 template<typename IT>
 int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     // Each entry is a byte that might hold one bit
-    thrust::device_vector<int8_t> presult(n);
+    thrust::device_vector<int> presult(n);
 
     // Mark positions: 1 << (i % mask_size) if row is non-empty
     thrust::transform(
@@ -33,7 +33,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
         [=] __device__(int i) {
             IT a = ptr_d[i];
             IT b = ptr_d[i + 1];
-            int8_t c = 0;
+            int c = 0;
             if (a != b) {
                 c = 1 << (i % mask_size);
             }
@@ -48,8 +48,8 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     int num_segments  = (n + mask_size - 1) / mask_size;
 
     // Allocate result array (one byte per segment)
-    int8_t *result;
-    CUDA_CHECK(cudaMalloc(&result, sizeof(int8_t) * num_segments));
+    int *result_int;
+    CUDA_CHECK(cudaMalloc(&result_int, sizeof(int) * num_segments));
 
     // Segment offsets
     thrust::host_vector<int> h_offsets(num_segments + 1);
@@ -65,7 +65,7 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     size_t temp_storage_bytes = 0;
     cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
-        presult.begin(), result,
+        presult.begin(), result_int,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
@@ -77,12 +77,24 @@ int8_t* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     // Run reduction
     cub::DeviceSegmentedReduce::Reduce(
         d_temp_storage, temp_storage_bytes,
-        presult.begin(), result,
+        presult.begin(), result_int,
         num_segments, d_offsets.data().get(), d_offsets.data().get() + 1,
         op, initial_value
     );
 
-    return result;
+    int8_t* result_bytes;
+    cudaMalloc(&result_bytes, sizeof(int8_t) * num_segments);
+
+    thrust::transform(
+        result_int, result_int + num_segments,
+        thrust::device_pointer_cast(result_bytes),
+        [] __device__ (int v) { return static_cast<int8_t>(v); }
+    );
+
+    cudaFree(result_int);
+
+
+    return result_bytes;
 }
 
 
