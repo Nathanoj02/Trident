@@ -42,7 +42,7 @@ perlmutter:
     account: m4646_g
     constraint: gpu
     qos: regular
-    time: "00:10:00"
+    time: "00:30:00"
     modules: 
       - "cudatoolkit/12.9"
       - "craype-accel-nvidia80"

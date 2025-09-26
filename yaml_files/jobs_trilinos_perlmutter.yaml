@@ -1,0 +1,29 @@
+variables:
+  mtx: '/global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/matrices_list_mtx.txt'
+  # mtx:
+  #   - /global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/Belcastro/mouse_gene/mouse_gene.mtx
+  #   - /global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/GHS_psdef/ldoor/ldoor.mtx
+  async_mpi: ['']
+
+# preprocess: "mtx=\"{mtx}\"; matC_flag=''; fname=$(basename \"$mtx\"); if [ ! -f \"/global/cfs/cdirs/m4646/hnsspgemm/trilinos_matC/$fname\" ]; then matC_flag=\"--matC=/global/cfs/cdirs/m4646/hnsspgemm/trilinos_matC/$fname\"; fi"
+command: "srun -n {np} -G {np} --gpu-bind=single:1 --cpus-per-task=1 --tasks-per-node 4 ./comparison/build_trilinos/trilinos_spgemm --matA={mtx} --matB={mtx}"
+#  ${matC_flag}"
+
+jobs:
+  - config: "1_nodes__1_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "Trilinos-SpGEMM"
+        variables:
+          np: [4]
+
+  - config: "4_nodes__1_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "Trilinos-SpGEMM"
+        variables:
+          np: [16]
+
+  - config: "16_nodes__1_cpus-per-task{async_mpi}"
+    config_jobs:
+      - tag: "Trilinos-SpGEMM"
+        variables:
+          np: [64]
