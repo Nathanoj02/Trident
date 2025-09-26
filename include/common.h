@@ -49,8 +49,8 @@
 #include <KokkosSparse_spgemm.hpp>
 #include <KokkosSparse_spadd.hpp>
 
-#define BMASK_TYPE uint32_t
-#define MASK_SIZE 8   // set to 32 in production
+#define BMASK_TYPE int8_t
+#define MASK_SIZE 8   // set to 8 in production
 
 extern FILE * logfile;
 
