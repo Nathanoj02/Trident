@@ -409,10 +409,10 @@ struct KeepFlagByIndex
 {
     const int* s;
     int m;
-    const int* c;
+    const BMASK_TYPE* c;
 
     __host__ __device__
-    KeepFlagByIndex(const int* s_, int m_, const int* c_)
+    KeepFlagByIndex(const int* s_, int m_, const BMASK_TYPE* c_)
         : s(s_), m(m_), c(c_) {}
 
     __device__ __forceinline__
@@ -427,7 +427,7 @@ struct KeepFlagByIndex
     }
 
     __device__ __forceinline__
-    int operator()(int pos) const {
+    int operator()(int pos) const{
         int seg = locate_segment_by_pos(pos);
         if (seg < 0) return 0; // skip if out of range
         int word = seg / MASK_SIZE;
@@ -455,7 +455,7 @@ struct MaskedTransform
 
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
-int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, PT* mask, VT **output) {
+int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, BMASK_TYPE* mask, VT **output) {
 
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
@@ -513,7 +513,7 @@ int select_entries(VT* input_vec, int n, PT* ptr_vec, int m, PT* mask, VT **outp
 }
 
 template<typename IT>
-IT* select_ptrs(IT* raw_ptr, int m, IT* mask) {
+IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask) {
 
     rowptrs_to_rownnz<IT>(raw_ptr, m-1); // The function require the number of rows/cols, not the real vecsize
 
@@ -594,7 +594,7 @@ struct SpaCommHandler
 
     mmio::CSX<IT,VT>* Compress (mmio::CSX<IT,VT> *M, int iteration_number) {
 
-        ASSERT(iteration_number < grid->row_comm, "ERROR: provided an invalid iteration number");
+        ASSERT(iteration_number < grid->row_size, "ERROR: provided an invalid iteration number");
 
         mmio::MajorDim layout = M->majordim;
 
