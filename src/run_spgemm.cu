@@ -174,11 +174,16 @@ int main(int argc, char ** argv)
         {
             CPU_TIMER_START(spacomm);
 
-            SpaComm::SpaCommHandler<int32_t, float> *spcomm_data;
+            SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
+            // if (config->spcomm) {
+            //     spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
+            // } else {
+            //     spcomm_data = nullptr;
+            // }
+            // >>>>>>>>>> TEST >>>>>>>>>>
+            BMASK_TYPE *A_column_filters = nullptr, *B_rows_filters = nullptr;
             if (config->spcomm) {
-                spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A, wrapped_B);
-            } else {
-                spcomm_data = nullptr;
+                SpaComm::spcomm_2D(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
             }
 
             CPU_TIMER_STOP(spacomm);

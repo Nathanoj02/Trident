@@ -451,8 +451,8 @@ int main(int argc, char ** argv) {
      *
      */
 
-    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>((grid->col_rank%2)   , 32, mmio::MajorDim::COLS);
-    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>((grid->row_rank%3) +2, 32, mmio::MajorDim::ROWS);
+    mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>((grid->col_rank%2)   , 16, mmio::MajorDim::COLS);
+    mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>((grid->row_rank%3) +2, 16, mmio::MajorDim::ROWS);
 
     // MPI_ALL_PRINT(
     //     fprintf(fp, "global_rank: %d, row_rank: %d, col_rank: %d, node_rank: %d\n",
