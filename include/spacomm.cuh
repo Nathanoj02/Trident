@@ -460,7 +460,7 @@ struct MaskedTransform
 #define EXPLICIT_FLAGS
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
-int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output) {
+int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output, cudaStream_t stream = 0) {
 
 #ifndef EXPLICIT_FLAGS
     auto counting = thrust::make_counting_iterator<int>(0);
@@ -533,7 +533,7 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
 }
 
 template<typename IT>
-IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask) {
+IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
 
 #ifdef DEBUG_PTR_COMPRESS
     print_d_arr(raw_ptr, m, "input ptr: ");
@@ -616,7 +616,7 @@ struct SpaCommHandler
 
     }
 
-    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number) {
+    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number, cudaStream_t stream = 0) {
 
         ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;

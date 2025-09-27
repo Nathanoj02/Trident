@@ -6,14 +6,20 @@ MPIDataTypeCache mpidtc; //fix linker error
 int here_iteration = 0;
 //#endif
 
+// #define DEBUG_THREAD_COMPRESSION
+
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+#ifdef DEBUG_THREAD_COMPRESSION
     int nsend = 0;
-
+#endif
+    cudaStream_t stream;
+    CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
+    CUDA_CHECK(cudaStreamCreate(&stream));
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
     while (true)
@@ -30,17 +36,21 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         mmio::CSX<IT, VT> *csxtosend = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         if (spacomm != nullptr) {
+#ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] pre-compression: %d x %d with %d nnz, (val,idx,ptr): (%p,%p,%p), \n",
                         rank, desc, nsend,
                         csx->nrows, csx->ncols, csx->nnz,
                         csx->val, csx->idx_vec, csx->ptr_vec
                 );
                 fflush(stdout);
+#endif
 
                 csxtosend = spacomm->Compress(csx, target);
 
+#ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
                 // fflush(stdout);
+#endif
         } else {
                 csxtosend = csx;
         }
@@ -50,10 +60,14 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         if (spacomm != nullptr) {
                 CSX_destroy_device(&csxtosend);
-                // fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
+#ifdef DEBUG_THREAD_COMPRESSION
+                fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
+#endif
         }
 
+#ifdef DEBUG_THREAD_COMPRESSION
         nsend++;
+#endif
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -119,11 +133,14 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
 
+    int dev_id; // To be sure each thread on the same process is assigned to the same GPU
+    CUDA_CHECK(cudaGetDevice(&dev_id));
+
     // Launch comm threads
     std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx, spcomm);
+                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx, spcomm, dev_id);
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm);
+                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm, dev_id);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));

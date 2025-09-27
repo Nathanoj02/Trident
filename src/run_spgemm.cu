@@ -177,12 +177,6 @@ int main(int argc, char ** argv)
         } else {
             spcomm_data = nullptr;
         }
-        // >>>>>>>>>> TEST >>>>>>>>>>
-        // BMASK_TYPE *A_column_filters = nullptr, *B_rows_filters = nullptr;
-        // if (config->spcomm) {
-        //     SpaComm::spcomm_2D(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
-        //     // SpaComm::spcomm_2D_bytemask(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_B.partitioning->grid, &A_column_filters, &B_rows_filters);
-        // }
 
         CPU_TIMER_STOP(spacomm);
         if (world_rank==0)
@@ -193,7 +187,7 @@ int main(int argc, char ** argv)
         CPU_TIMER_START(spgemm);
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<2; i++)
+        for (int i=0; i<15; i++)
         {
 
             if (!strcmp(config->impl, "main"))
