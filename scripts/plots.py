@@ -11,6 +11,7 @@ PROGRAM_COLORS = {
     "hns_get": "#1f77b4",  # blue
     "hns_main": "#ff7f0e",  # orange
     "trilinos": "#2ca02c",  # green
+    # TODO add other programs 
 }
 
 TIMER_PATTERNS = {
@@ -18,11 +19,17 @@ TIMER_PATTERNS = {
     "comp_time": "",
     "data_proc_A": "\\\\",
     "data_proc_B": "..",
+    "internode_comm": "o",
+    "intranode_comm": "+",
+    # available: | - x O . *
 }
 
 GRID_LINESTYLE = {
-    "2x2x1": "--",
+    "2x2x1": "-",
     "4x4x2": ":",
+    "4x4x4": "-.",
+    "8x8x4": "--",
+    # TODO add other grids 
 }
 
 DEFAULT_COLOR = "#999999"
@@ -163,8 +170,8 @@ def plot_rank_breakdown(df: pd.DataFrame, save_prefix="results/rank_breakdown/ra
 
 def plot_strong_scaling(df: pd.DataFrame, save_prefix="results/strong_scaling/strong_scaling"):
     """Strong scaling line plot: total runtime vs number of GPUs (nodes), per matrix."""
-    df_parts = df[df["timer"] != "global_timer"]
-    df_parts["program_and_grid"] = df_parts["program"] + ' (' + df_parts["grid"] + ')'
+    df_parts = df[df["timer"] != "global_timer"].copy()
+    df_parts.loc[:, "program_and_grid"] = df_parts["program"] + ' (' + df_parts["grid"] + ')'
 
     for matrix, df_mat in df_parts.groupby("matrix"):
         agg = (

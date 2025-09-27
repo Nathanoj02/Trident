@@ -79,7 +79,8 @@ def parse_stdout(job: sbm.Job) -> List[Dict[str, Dict[str, str]]]:
         if not runs[run_i].get(rank): runs[run_i][rank] = {}
         runs[run_i][rank][timer_name] = timer_data
       elif line.startswith('<Timer>[spgemm]'):
-        runs[run_i]['global_timer'] = line.split(' ')[-1]
+        parts = line.split(' ')
+        runs[run_i]['global_timer'] = parts[-1] if re.match(r'^-?\d+(?:\.\d+)$', parts[-1]) else parts[-2]
         
     # Parsing Trilinos stdout
     elif 'trilinos' in job.tag.lower():
@@ -99,12 +100,12 @@ def parse_stdout(job: sbm.Job) -> List[Dict[str, Dict[str, str]]]:
 
 
 def main():
-  failed_jobs = sbm.jobs_list(status=[sbm.Status.FAILED], from_active=True, from_archived=False)
+  failed_jobs = sbm.jobs_list(status=[sbm.Status.FAILED], from_active=True, from_archived=True)
   if failed_jobs:
     print("WARNING: some jobs have failed!")
     pprint.pprint(failed_jobs)
     
-  jobs = sbm.jobs_list(status=[sbm.Status.COMPLETED], from_active=True, from_archived=False)
+  jobs = sbm.jobs_list(status=[sbm.Status.COMPLETED], from_active=True, from_archived=True)
   dfs = []
 
   for job in jobs:
@@ -117,20 +118,20 @@ def main():
     if not job_config:
       raise Exception(f'Could not find config of job: {job}')
     
-    print(job)
-    pprint.pprint(runs)
-    print('-'*50)
+    # print(job)
+    # pprint.pprint(runs)
+    # print('-'*50)
     
     mpi_async = False
     for env_v in (job_config.env if job_config.env else []):
-      if env_v.lower().startswith('MPICH_ASYNC_PROGRESS') and env_v.split('=') == '1':
+      if env_v.upper().startswith('MPICH_ASYNC_PROGRESS') and env_v.split('=')[-1] == '1':
         mpi_async = True
         
     program = Path(program[0]).stem
     if 'trilinos' in program.lower():
       program = 'trilinos'
     elif 'run_spgemm' in program.lower():
-      program = 'hns' # TODO add variant
+      program = f'hns_{args["impl"]}{"_Acsc" if args.get('Acsc') else ""}'
       
     df = runs_to_dataframe(runs)
     df['cluster'] = job.cluster_name
@@ -140,7 +141,7 @@ def main():
     df['gpus'] = args['G']
     df['cpus_per_task'] = args['cpus-per-task']
     df['mpi_async'] = mpi_async
-    df['grid'] = 'TODO' if 'hns' in program else '-'
+    df['grid'] = args['2D-pgrid'] if 'hns' in program else '-'
     print(df)
     dfs.append(df)
     
