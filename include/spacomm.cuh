@@ -12,7 +12,7 @@
 #include <cub/cub.cuh>
 
 // #define DEBUG_SPCOMM
-#define DEBUG_COMPRESSION
+// #define DEBUG_COMPRESSION
 // #define DEBUG_PTR_COMPRESS
 
 namespace SpaComm
@@ -633,8 +633,6 @@ struct SpaCommHandler
         }
 
 #ifdef DEBUG_COMPRESSION
-        fprintf(stdout, "Each mask has size %d, current mask: %p\n", mask_len, mask);
-        fflush(stdout);
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
         BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_len);
         CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * mask_len, cudaMemcpyDeviceToHost));

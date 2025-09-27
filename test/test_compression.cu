@@ -648,13 +648,14 @@ int main(int argc, char ** argv) {
                 int expectedB = expectedB_fn(grid->row_rank, k);
                 int checkA    = check_mod_pattern(Afilter, mask_size, expectedA, 6);
                 int checkB    = check_mod_pattern(Bfilter, mask_size, expectedB, 6);
-/*
-                MPI_ALL_PRINT(
-                    fprintf(fp, "Filters %d: (%d,%d)\n", k, checkA, checkB);
-                    SpaComm::printBit_left2right(Afilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedA);
-                    SpaComm::printBit_left2right(Bfilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedB);
-                )
-*/
+
+                if (!strcmp(config->impl, "spcomm") || !strcmp(config->impl, "all")) {
+                    MPI_ALL_PRINT(
+                        fprintf(fp, "Filters %d: (%d,%d)\n", k, checkA, checkB);
+                        SpaComm::printBit_left2right(Afilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedA);
+                        SpaComm::printBit_left2right(Bfilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedB);
+                    )
+                }
                 output_check = (output_check && checkA);
                 output_check = (output_check && checkB);
             }
@@ -685,9 +686,38 @@ int main(int argc, char ** argv) {
                 MPI_Barrier(MPI_COMM_WORLD);
                 if (world_rank==0) std::cout << "B compressed" << std::endl; fflush(stdout);
 
+                int expectedA = expectedA_fn(grid->col_rank, iter);
+                int expectedB = expectedB_fn(grid->row_rank, iter);
+                BMASK_TYPE *A_map = SpaComm::gen_bitmask(csxtosendA->ptr_vec, csxtosendA->ncols, MASK_SIZE);
+                BMASK_TYPE *B_map = SpaComm::gen_bitmask(csxtosendB->ptr_vec, csxtosendB->nrows, MASK_SIZE);
+                move2host(&A_map, mask_size);
+                move2host(&B_map, mask_size);
+                int checkA = check_mod_pattern(A_map, mask_size, expectedA, 6);
+                int checkB = check_mod_pattern(B_map, mask_size, expectedB, 6);
+                output_check = (output_check && checkA);
+                output_check = (output_check && checkB);
+
+                if (!strcmp(config->impl, "compression") || !strcmp(config->impl, "all")) {
+                    moveCSX2host(csxtosendA);
+                    moveCSX2host(csxtosendB);
+                    MPI_ALL_PRINT(
+                        fprintf(fp, "Expected A: %d (mod 6) --> check %d\n", expectedA, checkA);
+                        mmio::utils::CSX_print_as_dense(csxtosendA, "Filtered A", fp);
+                        fprintf(fp, "Expected B: %d (mod 6) --> check %d\n", expectedB, checkB);
+                        mmio::utils::CSX_print_as_dense(csxtosendB, "Filtered B", fp);
+                    )
+                }
+
                 if (world_rank==0) std::cout << "Freeing compressed tiles... " << std::endl; fflush(stdout);
-                CSX_destroy_device(&csxtosendA);
-                CSX_destroy_device(&csxtosendB);
+
+                if (!strcmp(config->impl, "compression") || !strcmp(config->impl, "all")) {
+                // >>> I moved them to the host >>>
+                    mmio::CSX_destroy(&csxtosendA);
+                    mmio::CSX_destroy(&csxtosendB);
+                } else {
+                    CSX_destroy_device(&csxtosendA);
+                    CSX_destroy_device(&csxtosendB);
+                }
                 MPI_Barrier(MPI_COMM_WORLD);
                 if (world_rank==0) std::cout << "Tiles freed" << std::endl; fflush(stdout);
 
@@ -695,6 +725,8 @@ int main(int argc, char ** argv) {
                 colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
                 rowBtoGet = (rowBtoGet + 1) % common_grid_size; // ShiftDown
             }
+            MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+            if (world_rank==0) { if(global_check) fprintf(stdout, "Check passed\n"); else fprintf(stderr, "ERROR on check\n"); }
         }
         if (world_rank==0) printf("Done spgemm\n");
     }
