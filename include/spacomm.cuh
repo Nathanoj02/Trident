@@ -604,14 +604,15 @@ template <typename IT, typename VT>
 struct SpaCommHandler
 {
 
-    SpaCommHandler(mmio::CSX<IT,VT>* csx_A, mmio::CSX<IT,VT>* csx_B, dmmio::ProcessGrid* grid)
+    SpaCommHandler(mmio::CSX<IT,VT>* csx_A, mmio::CSX<IT,VT>* csx_B, dmmio::ProcessGrid* input_grid)
     {
 
-        ASSERT(grid->row_size == grid->col_size, "Process grid must be squared");
+        ASSERT(input_grid->row_size == input_grid->col_size, "Process grid must be squared");
         ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
 
-        nfilters = grid->row_size;
-        mask_len = spcomm_2D(csx_A, csx_B, grid, &A_column_filters, &B_rows_filters);
+        grid     = input_grid;
+        nfilters = input_grid->row_size;
+        mask_len = spcomm_2D(csx_A, csx_B, input_grid, &A_column_filters, &B_rows_filters);
 
     }
 
