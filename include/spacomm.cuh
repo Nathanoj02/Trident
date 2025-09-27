@@ -5,6 +5,7 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
+#include <thrust/system/cuda/execution_policy.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <cub/device/device_segmented_reduce.cuh>
 #include <cub/device/device_adjacent_difference.cuh>
@@ -457,7 +458,7 @@ struct MaskedTransform
     }
 };
 
-#define EXPLICIT_FLAGS
+// #define EXPLICIT_FLAGS
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
 int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output, cudaStream_t stream = 0) {
@@ -497,7 +498,8 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
         flags_it,                             // lazy flags
         d_out,
         d_num_selected,
-        n
+        n,
+        stream
     ));
 
     if (temp_storage_bytes>0) { CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes)); }
@@ -508,7 +510,8 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
         flags_it,                             // lazy flags
         d_out,
         d_num_selected,
-        n
+        n,
+        stream
     ));
 
     // Move num_selected on host
@@ -562,9 +565,10 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
 #endif
 
     auto counting = thrust::make_counting_iterator<int>(0);
-    auto zipped = thrust::make_zip_iterator(thrust::make_tuple(counting, thrust_ptr+1));
+    auto zipped   = thrust::make_zip_iterator(thrust::make_tuple(counting, thrust_ptr+1));
 
     thrust::transform(
+        thrust::cuda::par.on(stream),
         zipped, zipped + (m-1),
         thrust_ptr+1,
         MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
@@ -651,7 +655,8 @@ struct SpaCommHandler
                 M->idx_vec, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
-                &new_idx
+                &new_idx,
+                stream
         );
 
 #ifdef DEBUG_COMPRESSION
@@ -667,7 +672,8 @@ struct SpaCommHandler
                 M->val, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
-                &new_val
+                &new_val,
+                stream
         );
 
 #ifdef DEBUG_COMPRESSION
@@ -696,7 +702,7 @@ struct SpaCommHandler
         IT *new_row;
         CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*ptr_size));
         CUDA_CHECK(cudaMemcpy(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice));
-        new_row = select_ptrs(new_row, ptr_size, mask); // Changes are done in place
+        new_row = select_ptrs(new_row, ptr_size, mask, stream); // Changes are done in place
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {

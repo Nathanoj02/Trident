@@ -45,7 +45,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
                 fflush(stdout);
 #endif
 
-                csxtosend = spacomm->Compress(csx, target);
+                csxtosend = spacomm->Compress(csx, target, stream);
 
 #ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
