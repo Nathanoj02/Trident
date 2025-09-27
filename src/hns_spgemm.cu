@@ -119,10 +119,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
-    CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
-
+        CPU_TIMER_START(spgemm);
         if (grid->global_rank == 0)
         {
             std::cout<<"Iteration "<<iter<<std::endl;
@@ -242,10 +241,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #ifdef DETAILED_TIMERS
     char tmpstr[100];
     sprintf(tmpstr, "[process %d]", grid->global_rank);
-    ccutils_timers::print_stats(__timer_vals_internode_comm, "internode_comm", tmpstr);  // TMP FIX
-    ccutils_timers::print_stats(__timer_vals_intranode_comm, "intranode_comm", tmpstr);  // TMP FIX
-    ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
-    ccutils_timers::print_stats(__timer_vals_A_conversion, "A_conversion", tmpstr);  // TMP FIX
+    TIMER_PRINT_WPREFIX_STR(internode_comm, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
     fflush(stdout);
 #endif
 
