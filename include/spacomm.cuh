@@ -501,6 +501,7 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
         n,
         stream
     ));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     if (temp_storage_bytes>0) { CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes)); }
 
@@ -513,6 +514,7 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
         n,
         stream
     ));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // Move num_selected on host
     int num_selected;
@@ -573,6 +575,7 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
         thrust_ptr+1,
         MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
     );
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
 #ifdef DEBUG_PTR_COMPRESS
     cudaMemcpy(h_row.data(), raw_ptr, m * sizeof(IT), cudaMemcpyDeviceToHost);
@@ -595,10 +598,11 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
     fflush(stdout);
 #endif
 
-    IT *output;
-    CUDA_CHECK(cudaMalloc(&output, sizeof(IT)*m));
-    CUDA_CHECK(cudaMemcpy(output, raw_ptr, m*sizeof(IT), cudaMemcpyDeviceToDevice));
-    return(output);
+    // IT *output;
+    // CUDA_CHECK(cudaMalloc(&output, sizeof(IT)*m));
+    // CUDA_CHECK(cudaMemcpy(output, raw_ptr, m*sizeof(IT), cudaMemcpyDeviceToDevice));
+    // return(output);
+    return(raw_ptr);
 }
 
 template <typename IT, typename VT>

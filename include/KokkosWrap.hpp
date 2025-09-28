@@ -317,22 +317,28 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
 
+        // Create KokkosKernelHandle
+        using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
+            KokkosKernels::default_size_type, KIT, VT,
+            Kokkos::DefaultExecutionSpace,
+            typename Kokkos::DefaultExecutionSpace::memory_space,
+            typename Kokkos::DefaultExecutionSpace::memory_space>;
+
         using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
         csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        // KernelHandle kh;
+        // csr_matrix_type product;
+        // kh.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_CUSPARSE); // or SPGEMM_KK_SPEED, SPGEMM_CUSPARSE, etc.
+        // KokkosSparse::spgemm_symbolic(kh, A.storage, false, B.storage, false, product);
+        // KokkosSparse::spgemm_numeric(kh, A.storage, false, B.storage, false, product);
+        // kh.destroy_spgemm_handle();
 
         if (C.initialized == false) {
             C.storage = product;
             C.initialized = true;
         } else {
             csr_matrix_type accumulator;
-
-            // Create KokkosKernelHandle
-            using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
-                KokkosKernels::default_size_type, KIT, VT,
-                Kokkos::DefaultExecutionSpace,
-                typename Kokkos::DefaultExecutionSpace::memory_space,
-                typename Kokkos::DefaultExecutionSpace::memory_space>;
-
 
             KernelHandle kh;
             kh.create_spadd_handle(false);

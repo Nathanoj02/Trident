@@ -53,6 +53,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
                 CUDA_TIMER_START(compression_time, stream)
                 csxtosend = spacomm->Compress(csx, target, stream);
                 CUDA_TIMER_STOP(compression_time)
+                CUDA_CHECK(cudaStreamSynchronize(stream));
 
                 double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
                 fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, csxtosend->nnz, comp_rate);
