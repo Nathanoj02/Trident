@@ -1,11 +1,19 @@
 #include "hns_spgemm_get.cuh"
 #include "tile_window.cuh"
-
-
+#include <ccutils/cuda/cuda_timers.h>
 
 template <typename IT, typename VT>
 mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B)
 {
+#ifdef DETAILED_TIMERS
+    CUDA_TIMER_DEF(internode_comm)
+    CUDA_TIMER_DEF(intranode_comm)
+    CUDA_TIMER_DEF(comp_time)
+#endif
+
+    CPU_TIMER_DEF(spgemm);
+
+
     // Asserts
     assert(kwd_A.mmio_csx->majordim == mmio::MajorDim::ROWS);
 
@@ -81,6 +89,7 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
+    CPU_TIMER_START(spgemm);
     for (int iter=0; iter<n_iters; iter++)
     {
 
@@ -89,9 +98,15 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(internode_comm)
+#endif
         // Get remote tiles
         A_win.get_tile(&A_remote, A_tile_nnz[colAtoGet], colAtoGet, grid->row_comm);
         B_win.get_tile(&B_remote, B_tile_nnz[rowBtoGet], rowBtoGet, grid->col_comm);
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(internode_comm)
+#endif
 
 
 #if DEBUG_GET
@@ -106,12 +121,24 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         KWrapLMat<IT, VT> KA_remote(&A_remote);
 
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(intranode_comm)
+#endif
         // Allgather B
         KWrapLMat<IT, VT> KB_node(B_win.node_allgather_mmiocsr(&B_remote, B_remote.nrows, B_remote.ncols, B_tile_nnz[rowBtoGet], grid)); 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(intranode_comm)
+#endif
 
 
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_START_DEFAULT(comp_time)
+#endif
         // Local multiply-accumulate
         KWrapLMat<IT, VT>::sp_mma(KA_remote, KB_node, KC_local);
+#ifdef DETAILED_TIMERS
+        CUDA_TIMER_STOP(comp_time)
+#endif
 
 
         colAtoGet = (colAtoGet + 1) % n_iters; // ShiftLeft
@@ -120,6 +147,15 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // Cleanup
         KB_node.freeBuffers();
+
+#ifdef DETAILED_TIMERS
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", grid->global_rank);
+    ccutils_timers::print_stats(__timer_vals_internode_comm, "internode_comm", tmpstr);  // TMP FIX
+    ccutils_timers::print_stats(__timer_vals_intranode_comm, "intranode_comm", tmpstr);  // TMP FIX
+    ccutils_timers::print_stats(__timer_vals_comp_time, "comp_time", tmpstr);  // TMP FIX
+    fflush(stdout);
+#endif
     }
 
 
@@ -132,6 +168,8 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_FREE_SAFE(B_remote.col_idx);
     CUDA_FREE_SAFE(B_remote.row_ptr);
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    CPU_TIMER_STOP(spgemm);
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(KC_local);
@@ -140,6 +178,12 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_local<<std::endl;
+    }
+
+
+    if (grid->global_rank==0)
+    {
+        TIMER_PRINT_LAST(spgemm);
     }
 
     return out;

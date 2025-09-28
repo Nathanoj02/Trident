@@ -6,7 +6,7 @@ project(HnS_SpGEMM LANGUAGES CXX CUDA)
 
 
 # FIND CUDATOOLKIT
-find_package(CUDAToolkit REQUIRED)
+find_package(CUDAToolkit REQUIRED COMPONENTS cusparse)
 message(STATUS "Found CUDA: " ${CUDAToolkit_VERSION})
 message(STATUS "CUDA include: " ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
@@ -26,6 +26,8 @@ include_directories(include)
 
 
 # DMMIO SETUP
+set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
+set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
 set(DMMIO_TOOLS ON CACHE BOOL "Enable dmmio tools")
 set(DMMIO_ENABLE_MPI ON CACHE BOOL "Enable MPI support in dmmio")
 add_subdirectory(distributed_mmio)
@@ -33,8 +35,6 @@ add_subdirectory(distributed_mmio)
 
 # CCUTILS SETUP
 if(NOT TARGET ccutils)
-    set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
-    set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
     add_subdirectory(ccutils)
 endif()
 
@@ -61,13 +61,26 @@ set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC -O3")
 add_library(hns_spgemm
             src/hns_spgemm.cu
             src/hns_spgemm_get.cu)
-target_link_libraries(hns_spgemm PUBLIC MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
+target_link_libraries(hns_spgemm PUBLIC
+                        MPI::MPI_CXX 
+                        dmmio 
+                        ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                        KokkosKernels::kokkoskernels Kokkos::kokkos
+                        Threads::Threads
+                        CUDA::cusparse)
 
 
 # MACRO FOR ADDING TESTS
 macro(add_test name)
     add_executable(${name} test/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
+    target_link_libraries(${name} PRIVATE 
+                            MPI::MPI_CXX 
+                            dmmio 
+                            ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
+                            hns_spgemm 
+                            KokkosKernels::kokkoskernels Kokkos::kokkos 
+                            Threads::Threads 
+                            CUDA::cusparse)
 endmacro()
 
 
@@ -80,7 +93,14 @@ add_test(test_cuda_mpi)
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
     add_executable(${name} src/${name}.cu)
-    target_link_libraries(${name} PRIVATE MPI::MPI_CXX dmmio ccutils::ccutils ccutils::ccutils_mpi hns_spgemm KokkosKernels::kokkoskernels Kokkos::kokkos Threads::Threads CUDA::cusparse)
+    target_link_libraries(${name} PRIVATE 
+                            MPI::MPI_CXX 
+                            dmmio 
+                            ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
+                            hns_spgemm 
+                            KokkosKernels::kokkoskernels Kokkos::kokkos 
+                            Threads::Threads 
+                            CUDA::cusparse)
     target_compile_options(${name} PRIVATE -O3 -Wall)
 endmacro()
 
@@ -89,23 +109,3 @@ endmacro()
 add_src(run_spgemm)
 add_src(scratch)
 
-
-# (Optional) Baselines
-option(ENABLE_TRILINOS "Enables Trilinos" OFF)
-
-if(ENABLE_TRILINOS)
-    message("Trilinos has been enabled!")
-    find_package(Trilinos REQUIRED COMPONENTS Teuchos Tpetra)
-    message("\nFound Trilinos!  Here are the details: ")
-    message("   Trilinos_DIR = ${Trilinos_DIR}")
-    message("   Trilinos_VERSION = ${Trilinos_VERSION}")
-    message("   Trilinos_PACKAGE_LIST = ${Trilinos_PACKAGE_LIST}")
-    message("   Trilinos_LIBRARIES = ${Trilinos_LIBRARIES}")
-    message("   Trilinos_INCLUDE_DIRS = ${Trilinos_INCLUDE_DIRS}")
-    message("   Trilinos_TPL_LIST = ${Trilinos_TPL_LIST}")
-    message("   Trilinos_TPL_LIBRARIES = ${Trilinos_TPL_LIBRARIES}")
-    message("   Trilinos_BUILD_SHARED_LIBS = ${Trilinos_BUILD_SHARED_LIBS}")
-    message("End of Trilinos details\n")
-    add_executable(trilinos_spgemm ${CMAKE_CURRENT_SOURCE_DIR}/baselines/trilinos/trilinos_spgemm.cpp)
-    target_link_libraries(TrilinosSpGEMM Trilinos::all_selected_libs)
-endif()

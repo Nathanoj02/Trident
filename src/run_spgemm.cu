@@ -46,8 +46,10 @@ int main(int argc, char ** argv)
         std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
     }
 
+#ifdef LOGFILE
     std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
     FILE * logfile = fopen(logname.c_str(), "w");
+#endif
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
@@ -101,7 +103,6 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
-        // NOTE: strcmp(a,b) return 0 if a == b, meaning that if a==b than 'if(strcmp(a,b))' is false
         if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
             if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
             MPI_Barrier(MPI_COMM_WORLD);
@@ -165,6 +166,7 @@ int main(int argc, char ** argv)
         MPI_Barrier(MPI_COMM_WORLD);
 
         mmio::CSX<int32_t, float> *dist_C;
+
         CPU_TIMER_DEF(spgemm);
         CPU_TIMER_DEF(spacomm);
 
@@ -187,9 +189,12 @@ int main(int argc, char ** argv)
         CPU_TIMER_START(spgemm);
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<15; i++)
+        for (int i=0; i<10; i++) 
         {
-
+            if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
+            fflush(stdout);
+            sleep(0.2);
+            MPI_Barrier(MPI_COMM_WORLD);
             if (!strcmp(config->impl, "main"))
             {
                 dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, spcomm_data);
@@ -199,20 +204,19 @@ int main(int argc, char ** argv)
                 dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
             }
 
-            CPU_TIMER_STOP(spgemm);
-            if (world_rank==0)
-            {
-                TIMER_PRINT(spgemm);
-            }
+            MPI_Barrier(MPI_COMM_WORLD);
             delete dist_C;
+            fflush(stdout);
+            sleep(2);
         }
-        if (world_rank==0) printf("Done spgemm\n");
     }
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
+#ifdef LOGFILE
     fclose(logfile);
+#endif
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

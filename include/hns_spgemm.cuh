@@ -10,7 +10,7 @@
 #include "spacomm.cuh"
 
 #define DEBUG_MAIN 0
-//#define DETAILED_TIMERS
+#define DETAILED_TIMERS
 //#define VERBOSE
 
 
