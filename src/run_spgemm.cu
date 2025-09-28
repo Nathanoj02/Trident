@@ -114,6 +114,14 @@ int main(int argc, char ** argv)
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
 
+#ifndef SKIP_SPGEMM
+        if(config->skip_spgemm) {
+            if (world_rank == 0) fprintf(stderr, "WARNING: --skip-spgemm is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
+        }
+#else
+        if (world_rank == 0) fprintf(stderr, "WARNING: -DSKIP_SPGEMM is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
+#endif
+
         // TODO
         if ( config->spcomm && nprocpergroup > 1) {
             if (world_rank == 0) fprintf(stderr, "Error: on 3D grids, --spcomm is not supported yet\n");
@@ -197,7 +205,7 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             if (!strcmp(config->impl, "main"))
             {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, spcomm_data);
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, spcomm_data, config->skip_spgemm);
             }
             else if (!strcmp(config->impl, "get"))
             {

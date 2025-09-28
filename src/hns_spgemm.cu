@@ -93,7 +93,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
 template <typename IT, typename VT>
 mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B,
-                                   SpaComm::SpaCommHandler<IT, VT> *spcomm)
+                                   SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
@@ -271,7 +271,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
         // This perform C_local += A_remote * B_node
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
+#ifndef SKIP_SPGEMM
+        if (!skipspgemm)
+                KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
+#endif
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comp_time)
@@ -290,20 +293,20 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
         }
 
+#ifdef DETAILED_TIMERS
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", grid->global_rank);
+        TIMER_PRINT_WPREFIX_STR(internode_comm, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
+        fflush(stdout);
+#endif
+
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
-
-#ifdef DETAILED_TIMERS
-    char tmpstr[100];
-    sprintf(tmpstr, "[process %d]", grid->global_rank);
-    TIMER_PRINT_WPREFIX_STR(internode_comm, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
-    fflush(stdout);
-#endif
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
@@ -344,4 +347,4 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     return out;
 }
 
-template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, SpaComm::SpaCommHandler<int32_t, float> *spcomm);
+template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);

@@ -16,6 +16,7 @@ COUNTER_DEF(0);
 struct config
 {
     const char * impl;
+    bool skip_spgemm;
     bool spcomm;
     bool Acsc;
 
@@ -69,6 +70,7 @@ char* extract_matrix_name(const char* filepath)
 
 void parse_args(int argc, char ** argv, Config * config)
 {
+    config->skip_spgemm = false;
     config->spcomm = false;
     config->Acsc = false;
     config->impl = "none";
@@ -104,6 +106,11 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--Acsc"))
         {
             config->Acsc = true;
+            inc = 1;
+        }
+        else if (!strcmp(argname, "--skip-spgemm"))
+        {
+            config->skip_spgemm = true;
             inc = 1;
         }
         else if (!strcmp(argname, "--impl"))
