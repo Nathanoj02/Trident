@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include <ccutils/timers.h>
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -21,6 +22,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
     CUDA_CHECK(cudaStreamCreate(&stream));
 
+    CUDA_TIMER_DEF(compression_time)
+
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
     while (true)
     {
@@ -35,6 +38,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         mmio::CSX<IT, VT> *csxtosend = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        char tmpstr[20];
+        sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
         if (spacomm != nullptr) {
 #ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] pre-compression: %d x %d with %d nnz, (val,idx,ptr): (%p,%p,%p), \n",
@@ -45,7 +50,13 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
                 fflush(stdout);
 #endif
 
+                CUDA_TIMER_START(compression_time, stream)
                 csxtosend = spacomm->Compress(csx, target, stream);
+                CUDA_TIMER_STOP(compression_time)
+
+                double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
+                fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, csxtosend->nnz, comp_rate);
+                ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr);
 
 #ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
