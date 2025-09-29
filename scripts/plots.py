@@ -8,17 +8,16 @@ import os
 
 # === STYLE CONFIGURATION ===
 PROGRAM_COLORS = {
-    "hns_get": "#1f77b4",  # blue
-    "hns_main": "#ff7f0e",  # orange
-    "trilinos": "#2ca02c",  # green
+    "hns_get": "#f24e4e",  
+    "hns_main": "#03fc0f",  
+    "trilinos": "#03a1fc",  
     # TODO add other programs 
 }
 
 TIMER_PATTERNS = {
     "comm_wait": "//",
     "comp_time": "",
-    "data_proc_A": "\\\\",
-    "data_proc_B": "..",
+    "A_conversion": "\\\\",
     "internode_comm": "o",
     "intranode_comm": "+",
     # available: | - x O . *
@@ -44,6 +43,89 @@ def load_data(csv_paths):
     df = pd.concat(dfs, ignore_index=True)
     return df
 
+def plot_runtime_comparison(df: pd.DataFrame, save_prefix='results/comparison/comparison'):
+    import numpy as np
+    import os
+
+    for matrix, df_mat in df.groupby("matrix"):
+        df_parts = df_mat[(df_mat["timer"] == "global_timer") & (df_mat["run"] != 0)]
+        print(df_parts)
+
+        print(df_parts)
+
+        agg = (
+            df_parts.groupby(["nodes", "program", "grid", "timer"], as_index=False)["avg"]
+            .mean()
+        )
+
+        print(agg)
+
+
+        pivot = agg.pivot_table(
+            index=["nodes", "program", "grid"], columns="timer", values="avg", fill_value=0
+        )
+
+
+        timers = list(pivot.columns)
+        nodes = sorted(pivot.index.get_level_values("nodes").unique())
+        combos = list(pivot.index.droplevel("nodes").unique())
+        n_combos = len(combos)
+        if n_combos == 0:
+            continue
+
+        bar_width = 0.8 / n_combos
+        x_base = np.arange(len(nodes))
+        offsets = (np.arange(n_combos) - (n_combos - 1) / 2.0) * bar_width
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plt.yscale("log", base=2)
+        for j, node in enumerate(nodes):
+            for k, (program, grid) in enumerate(sorted(combos)):
+                idx = (node, program, grid)
+                if idx not in pivot.index:
+                    continue
+                vals = pivot.loc[idx, timers]
+                bottom = 0.0
+                x = x_base[j] + offsets[k]
+                color = PROGRAM_COLORS.get(program, DEFAULT_COLOR)
+                for timer in timers:
+                    height = float(vals[timer])
+                    hatch = TIMER_PATTERNS.get(timer, DEFAULT_PATTERN)
+                    ax.bar(x, height, bar_width * 0.95, bottom=bottom,
+                           color=color, hatch=hatch, edgecolor="black")
+                    bottom += height
+                total = float(vals.sum())
+                ax.text(x, total * 1.02, str(grid), ha="center", va="bottom", fontsize=8)
+
+        ax.set_xticks(x_base)
+        ax.set_xticklabels(nodes)
+        ax.set_xlabel("Nodes")
+        ax.set_ylabel("Runtime [ms]")
+        ax.set_title(f"Runtime Breakdown and Comparison\nMatrix={matrix}")
+
+        programs = sorted({p for p, g in combos})
+        program_patches = [
+            mpatches.Patch(facecolor=PROGRAM_COLORS.get(p, DEFAULT_COLOR), label=p)
+            for p in programs
+        ]
+        timer_patches = [
+            mpatches.Patch(facecolor="white", edgecolor="black",
+                           hatch=TIMER_PATTERNS.get(t, DEFAULT_PATTERN), label=t)
+            for t in timers
+        ]
+        legend1 = ax.legend(handles=program_patches, title="Programs",
+                            bbox_to_anchor=(1.05, 1), loc="upper left")
+        legend2 = ax.legend(handles=timer_patches, title="Timers",
+                            bbox_to_anchor=(1.05, 0.5), loc="upper left")
+        ax.add_artist(legend1)
+
+        plt.tight_layout()
+        plt.grid(True, alpha=0.3, axis='y')
+        savepath = f"{save_prefix}_{matrix}.png"
+        os.makedirs(os.path.dirname(savepath), exist_ok=True)
+        plt.savefig(savepath)
+        plt.close(fig)
+
 
 def plot_runtime_breakdown_comparison(df: pd.DataFrame, save_prefix='results/breakdown_comparison/breakdown_comparison'):
     """Runtime breakdown by nodes and programs (stacked barplot), comparing 'grid' per program.
@@ -54,15 +136,22 @@ def plot_runtime_breakdown_comparison(df: pd.DataFrame, save_prefix='results/bre
 
     for matrix, df_mat in df.groupby("matrix"):
         df_parts = df_mat[df_mat["timer"] != "global_timer"]
+        #df_parts = df_mat[df_mat["timer"] == "global_timer"]
+
+        print(df_parts)
 
         agg = (
             df_parts.groupby(["nodes", "program", "grid", "timer"], as_index=False)["avg"]
             .mean()
         )
 
+        print(agg)
+
+
         pivot = agg.pivot_table(
             index=["nodes", "program", "grid"], columns="timer", values="avg", fill_value=0
         )
+
 
         timers = list(pivot.columns)
         nodes = sorted(pivot.index.get_level_values("nodes").unique())
@@ -77,7 +166,7 @@ def plot_runtime_breakdown_comparison(df: pd.DataFrame, save_prefix='results/bre
 
         fig, ax = plt.subplots(figsize=(10, 6))
         for j, node in enumerate(nodes):
-            for k, (program, grid) in enumerate(combos):
+            for k, (program, grid) in enumerate(sorted(combos)):
                 idx = (node, program, grid)
                 if idx not in pivot.index:
                     continue
@@ -214,9 +303,10 @@ def main():
 
     df = load_data(args.csv_files)
 
+    plot_runtime_comparison(df)
     plot_runtime_breakdown_comparison(df)
-    plot_rank_breakdown(df)
-    plot_strong_scaling(df)
+    #plot_rank_breakdown(df)
+    #plot_strong_scaling(df)
 
 
 if __name__ == "__main__":
