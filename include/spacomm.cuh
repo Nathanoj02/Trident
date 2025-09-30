@@ -410,28 +410,43 @@ void spcomm_2D_bytemask (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::
 //                              Funtions to perform the data compression
 // ----------------------------------------------------------------------------------------------
 
+#define KOKKOS_TEST
+
+template<typename T>
 struct KeepFlagByIndex
 {
-    const int* s;
+    const T* s;
     int m;
     const BMASK_TYPE* c;
 
+#ifdef KOKKOS_TEST
+    KOKKOS_INLINE_FUNCTION
+#else
     __host__ __device__
-    KeepFlagByIndex(const int* s_, int m_, const BMASK_TYPE* c_)
+#endif
+    KeepFlagByIndex(const T* s_, int m_, const BMASK_TYPE* c_)
         : s(s_), m(m_), c(c_) {}
 
+#ifdef KOKKOS_TEST
+    KOKKOS_INLINE_FUNCTION
+#else
     __device__ __forceinline__
+#endif
     int locate_segment_by_pos(int pos) const {
         int low = 0, high = m;
         while (low < high) {
             int mid = (low + high) >> 1;
-            if (s[mid] <= pos) low = mid + 1;
+            if (s[mid] <= static_cast<T>(pos)) low = mid + 1;
             else high = mid;
         }
         return low - 1;
     }
 
+#ifdef KOKKOS_TEST
+    KOKKOS_INLINE_FUNCTION
+#else
     __device__ __forceinline__
+#endif
     int operator()(int pos) const{
         int seg = locate_segment_by_pos(pos);
         if (seg < 0) return 0; // skip if out of range
@@ -440,6 +455,28 @@ struct KeepFlagByIndex
         return ((c[word] >> bit) & 1) ? 1 : 0;
     }
 };
+
+#ifdef KOKKOS_TEST
+    template <typename PT>
+Kokkos::View<unsigned char*> compute_flags_kokkos(
+    int n,
+    const PT* ptr_vec,
+    int m,
+    const BMASK_TYPE* mask)
+{
+    Kokkos::View<unsigned char*> d_flags("flags", n);
+
+    KeepFlagByIndex<PT> functor(ptr_vec, m, mask);
+
+    Kokkos::parallel_for("ComputeFlags", n, KOKKOS_LAMBDA(int i) {
+        d_flags(i) = static_cast<unsigned char>(functor(i));
+    });
+
+    Kokkos::fence(); // ensure flags are ready
+
+    return d_flags;
+}
+#endif
 
 struct MaskedTransform
 {
@@ -471,6 +508,9 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
         KeepFlagByIndex(ptr_vec, m, mask)
     );
 #else
+#ifdef KOKKOS_TEST
+    auto d_flags = compute_flags_kokkos(n, ptr_vec, m, mask);
+#else
     thrust::device_vector<unsigned char> d_flags(n);
 
     auto counting = thrust::make_counting_iterator<int>(0);
@@ -478,10 +518,11 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     	thrust::cuda::par.on(stream),
     	counting, counting + n,
     	d_flags.begin(),
-    	KeepFlagByIndex(ptr_vec, m, mask)
+    	KeepFlagByIndex<PT>(ptr_vec, m, mask)
     );
 
     unsigned char* d_flags_ptr = thrust::raw_pointer_cast(d_flags.data());
+#endif
 #endif
 
     VT  *d_out;
@@ -499,7 +540,11 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
         input_vec,    // values
-        d_flags_ptr,  // explicit flag vector
+#ifdef KOKKOS_TEST
+	d_flags.data(),
+#else
+	d_flags_ptr,  // explicit flag vector
+#endif
         d_out,
         d_num_selected,
         n,
@@ -516,7 +561,11 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
         input_vec,    // values
+#ifdef KOKKOS_TEST
+        d_flags.data(),
+#else
         d_flags_ptr,  // explicit flag vector
+#endif
         d_out,
         d_num_selected,
         n,
@@ -678,7 +727,7 @@ struct SpaCommHandler
         )
         free(h_mask);
 #endif
-/*
+
         // Compute compressed index vector
         IT* new_idx;
         int num_selected = select_entries<IT, IT>(
@@ -727,11 +776,11 @@ struct SpaCommHandler
             SpaComm::printBit_left2right(tmp, mask_len, stderr);
             MPI_Abort(grid->world_comm, __LINE__);
         }
-*/
+/*
 	VT *new_val; IT *new_idx; int num_selected = M->nnz;
 	CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(M->nnz))); // Just to debug
 	CUDA_CHECK(cudaMalloc(&new_val, sizeof(IT)*(M->nnz))); // Just to debug
-
+*/
         // Compute compressed pointer vector
         IT *new_row;
         CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*ptr_size));
