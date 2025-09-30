@@ -669,7 +669,7 @@ struct SpaCommHandler
         )
         free(h_mask);
 #endif
-
+/*
         // Compute compressed index vector
         IT* new_idx;
         int num_selected = select_entries<IT, IT>(
@@ -718,6 +718,10 @@ struct SpaCommHandler
             SpaComm::printBit_left2right(tmp, mask_len, stderr);
             MPI_Abort(grid->world_comm, __LINE__);
         }
+*/
+	VT *new_val; IT *new_idx; int num_selected = M->nnz;
+	CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(M->nnz))); // Just to debug
+	CUDA_CHECK(cudaMalloc(&new_val, sizeof(IT)*(M->nnz))); // Just to debug
 
         // Compute compressed pointer vector
         IT *new_row;

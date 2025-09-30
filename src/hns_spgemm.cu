@@ -68,7 +68,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         }
 
         // Put tile on remote process
-        holder.put_tile(csxtosend->val, csxtosend->idx_vec, csxtosend->ptr_vec, csxtosend->nnz, ptrsize, target);
+        holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
 
         if (spacomm != nullptr) {
                 CSX_destroy_device(&csxtosend);
@@ -197,6 +197,27 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
+	// ----- Just for test -----
+	/*
+	cudaStream_t stream;
+	CUDA_TIMER_DEF(compression_time)
+    	CUDA_CHECK(cudaStreamCreate(&stream));
+	mmio::CSX<IT, VT> *csx = kwd_B.mmio_csx, *csxtosend = nullptr;
+	int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
+	char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        char tmpstr2[20];
+        sprintf(tmpstr2, "[p %d, t %d, m %c]", rank, target, desc);
+	CUDA_TIMER_START(compression_time, stream)
+        csxtosend = spcomm->Compress(csx, target, stream);
+        CUDA_TIMER_STOP(compression_time)
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
+        fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr2, csx->nnz, csxtosend->nnz, comp_rate);
+        ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr2);
+	CSX_destroy_device(&csxtosend);
+	*/
+	// --------------------------
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(internode_comm)
