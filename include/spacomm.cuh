@@ -264,7 +264,7 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
 //                              Funtions to perform the data compression
 // ----------------------------------------------------------------------------------------------
 
-#define KOKKOS_TEST
+// #define KOKKOS_TEST
 
 template<typename T>
 struct KeepFlagByIndex
@@ -312,24 +312,24 @@ struct KeepFlagByIndex
 
 #ifdef KOKKOS_TEST
     template <typename PT>
-Kokkos::View<unsigned char*> compute_flags_kokkos(
-    int n,
-    const PT* ptr_vec,
-    int m,
-    const BMASK_TYPE* mask)
-{
-    Kokkos::View<unsigned char*> d_flags("flags", n);
+    Kokkos::View<unsigned char*> compute_flags_kokkos(
+        int n,
+        const PT* ptr_vec,
+        int m,
+        const BMASK_TYPE* mask)
+    {
+        Kokkos::View<unsigned char*> d_flags("flags", n);
 
-    KeepFlagByIndex<PT> functor(ptr_vec, m, mask);
+        KeepFlagByIndex<PT> functor(ptr_vec, m, mask);
 
-    Kokkos::parallel_for("ComputeFlags", n, KOKKOS_LAMBDA(int i) {
-        d_flags(i) = static_cast<unsigned char>(functor(i));
-    });
+        Kokkos::parallel_for("ComputeFlags", n, KOKKOS_LAMBDA(int i) {
+            d_flags(i) = static_cast<unsigned char>(functor(i));
+        });
 
-    Kokkos::fence(); // ensure flags are ready
+        Kokkos::fence(); // ensure flags are ready
 
-    return d_flags;
-}
+        return d_flags;
+    }
 #endif
 
 #define EXPLICIT_FLAGS
@@ -361,6 +361,12 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     unsigned char* d_flags_ptr = thrust::raw_pointer_cast(d_flags.data());
 #endif
 #endif
+
+    // -------------- Just as test --------------
+    // unsigned char* d_flags_ptr;
+    // CUDA_CHECK(cudaMalloc(&d_flags_ptr, sizeof(unsigned char)*n));
+    // CUDA_CHECK(cudaMemset(d_flags_ptr, 1U, sizeof(unsigned char)*n));
+    // ------------------------------------------
 
     VT  *d_out;
     int *d_num_selected;
@@ -426,7 +432,14 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
 #endif
 
     if (temp_storage_bytes>0) { CUDA_CHECK(cudaFree(d_temp_storage)); }
+
     CUDA_CHECK(cudaFree(d_num_selected));
+
+    // -------------- Just as test --------------
+    // CUDA_CHECK(cudaFree(d_flags_ptr)); // This is for the previous test
+    // int num_selected = n;
+    // CUDA_CHECK(cudaMemset(d_out, 1U, sizeof(VT)*n));
+    // ------------------------------------------
 
     *output = d_out;
     return(num_selected);
