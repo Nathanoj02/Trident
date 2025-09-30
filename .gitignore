@@ -11,5 +11,8 @@ build_*/
 results/
 SbatchMan/
 
+kokkos/
+kokkos-kernels/
+
 *.out
 *.bmtx

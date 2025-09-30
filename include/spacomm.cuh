@@ -458,12 +458,13 @@ struct MaskedTransform
     }
 };
 
-// #define EXPLICIT_FLAGS
+#define EXPLICIT_FLAGS
 
 template<typename VT, typename PT> // Vector type (usually int if idx or float if val) and ptr type
 int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output, cudaStream_t stream = 0) {
 
 #ifndef EXPLICIT_FLAGS
+    // This not work, we have to use cub if. Find how to implement it (if we want a lazy iterator)
     auto counting = thrust::make_counting_iterator<int>(0);
     auto flags_it = thrust::make_transform_iterator(
         counting,
@@ -472,15 +473,15 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
 #else
     thrust::device_vector<unsigned char> d_flags(n);
 
-    // counting iterator + transform -> flags
     auto counting = thrust::make_counting_iterator<int>(0);
-    // KeepFlagByIndex must be __host__ __device__ and must accept device pointers
     thrust::transform(
-        counting, counting + n,
-        d_flags.begin(),
-        KeepFlagByIndex(ptr_vec, m, mask) // must be device-callable and ptr_vec/mask must be device pointers
+    	thrust::cuda::par.on(stream),
+    	counting, counting + n,
+    	d_flags.begin(),
+    	KeepFlagByIndex(ptr_vec, m, mask)
     );
-    auto flags_it = thrust::raw_pointer_cast(d_flags.data());
+
+    unsigned char* d_flags_ptr = thrust::raw_pointer_cast(d_flags.data());
 #endif
 
     VT  *d_out;
@@ -492,29 +493,37 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     void* d_temp_storage = nullptr;
     size_t temp_storage_bytes = 0;
 
+#ifndef EXPLICIT_FLAGS
+    // TODO: put here a 'cub::DeviceSelect::If' to use a lazy iterator
+#else
     CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
-        input_vec, // values
-        flags_it,                             // lazy flags
+        input_vec,    // values
+        d_flags_ptr,  // explicit flag vector
         d_out,
         d_num_selected,
         n,
         stream
     ));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+#endif
 
     if (temp_storage_bytes>0) { CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes)); }
 
+#ifndef EXPLICIT_FLAGS
+    // TODO: put here a 'cub::DeviceSelect::If' to use a lazy iterator
+#else
     CUDA_CHECK(cub::DeviceSelect::Flagged(
         d_temp_storage, temp_storage_bytes,
-        input_vec, // values
-        flags_it,                             // lazy flags
+        input_vec,    // values
+        d_flags_ptr,  // explicit flag vector
         d_out,
         d_num_selected,
         n,
         stream
     ));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+#endif
 
     // Move num_selected on host
     int num_selected;
@@ -530,7 +539,7 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     free(h_out);
 #endif
 
-    CUDA_CHECK(cudaFree(d_temp_storage));
+    if (temp_storage_bytes>0) { CUDA_CHECK(cudaFree(d_temp_storage)); }
     CUDA_CHECK(cudaFree(d_num_selected));
 
     *output = d_out;
