@@ -620,7 +620,24 @@ struct SpaCommHandler
 
         grid     = input_grid;
         nfilters = input_grid->row_size;
+#ifndef DEBUGBITMASKGENERATION
         mask_len = spcomm_2D(csx_A, csx_B, input_grid, &A_column_filters, &B_rows_filters);
+#else
+        if (grid->global_rank == 0) fprintf(stderr, "DEBUG ONLY MODE: sparsity patter communication is not performed, filters are filled with 1s.\n");
+        srand(8);
+        int k = csx_A->ncols;
+        int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
+        CUDA_CHECK(cudaMalloc(&A_column_filters, sizeof(BMASK_TYPE)*nfilters*mask_len));
+        CUDA_CHECK(cudaMalloc(&B_rows_filters, sizeof(BMASK_TYPE)*nfilters*mask_len));
+        BMASK_TYPE *tmp = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*nfilters*mask_len);
+        k = 0U;
+        for (int i=0; i<MASK_SIZE; i++) k = (k | 1 << i);        // Uncomment this for an all 1 Mask, comment for an all 0 mask
+        for (int i=0; i<nfilters*mask_len; i++) tmp[i] = rand(); // k; // Use rand() for a random mask
+        CUDA_CHECK(cudaMemcpy(A_column_filters, tmp, sizeof(BMASK_TYPE)*nfilters*mask_len, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(B_rows_filters, tmp, sizeof(BMASK_TYPE)*nfilters*mask_len, cudaMemcpyHostToDevice));
+        free(tmp);
+#endif
+	// ---------------------------------------------------------------------------------
 
     }
 

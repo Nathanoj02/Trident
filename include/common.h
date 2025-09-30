@@ -52,6 +52,7 @@
 #define BMASK_TYPE uint8_t
 #define MASK_SIZE 8   // set to 8 in production
 // #define SKIP_SPGEMM // To debug compression
+// #define DEBUGBITMASKGENERATION
 
 extern FILE * logfile;
 

@@ -1,6 +1,7 @@
 .vscode
 .kdev4/
 HnS-SpGEMM.kdev4
+.venv/
 
 comparison/ccutils/
 comparison/build/
@@ -9,3 +10,6 @@ build/
 build_*/
 results/
 SbatchMan/
+
+*.out
+*.bmtx
