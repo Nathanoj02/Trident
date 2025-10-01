@@ -10,7 +10,7 @@ int here_iteration = 0;
 // #define DEBUG_THREAD_COMPRESSION
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -35,8 +35,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         {
             return;
         }
-/*
-        mmio::CSX<IT, VT> *csxtosend = nullptr;
+
+        mmio::CSX<IT, VT> *compressed = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         char tmpstr[20];
         sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
@@ -51,32 +51,31 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
                 CUDA_TIMER_START(compression_time, stream)
-                csxtosend = spacomm->Compress(csx, target, stream);
+                compressed = spacomm->Compress(csx, target, stream);
                 CUDA_TIMER_STOP(compression_time)
                 CUDA_CHECK(cudaStreamSynchronize(stream));
 
-                double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
-                fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, csxtosend->nnz, comp_rate);
+                double comp_rate = ((double)compressed->nnz) / ((double) csx->nnz);
+                fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, compressed->nnz, comp_rate);
                 ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr);
 
 #ifdef DEBUG_THREAD_COMPRESSION
-                fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, csxtosend->nrows, csxtosend->ncols, csxtosend->nnz);
+                fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, compressed->nrows, compressed->ncols, compressed->nnz);
                 // fflush(stdout);
 #endif
-        } else {
-                csxtosend = csx;
         }
-*/
+
         // Put tile on remote process
-        holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
-/*
+	const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
+        holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target);
+
         if (spacomm != nullptr) {
-                CSX_destroy_device(&csxtosend);
+                CSX_destroy_device(&compressed);
 #ifdef DEBUG_THREAD_COMPRESSION
-                fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
+                fprintf(stdout, "[%d, %c, %d] compressed csx destroyed successfully\n", rank, desc, nsend);
 #endif
         }
-*/
+
 #ifdef DEBUG_THREAD_COMPRESSION
         nsend++;
 #endif
@@ -97,22 +96,44 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 {
     // ------------------ Test compression on an independent buffer ------------------
     mmio::CSX<IT,VT> *bku_B = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
-    bku_B->majordim = kwd_B.mmio_csx->majordim;
-    bku_B->nnz      = kwd_B.mmio_csx->nnz;
-    bku_B->nrows    = kwd_B.mmio_csx->nrows;
-    bku_B->ncols    = kwd_B.mmio_csx->ncols;
+    {
+        bku_B->majordim = kwd_B.mmio_csx->majordim;
+        bku_B->nnz      = kwd_B.mmio_csx->nnz;
+        bku_B->nrows    = kwd_B.mmio_csx->nrows;
+        bku_B->ncols    = kwd_B.mmio_csx->ncols;
 
-    VT *new_val;
-    IT *new_row, *new_idx;
-    CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(bku_B->nrows +1)));
-    CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_B->nnz)));
-    CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_B->nnz)));
-    CUDA_CHECK(cudaMemcpy(new_row, kwd_B.mmio_csx->ptr_vec, sizeof(IT)*(bku_B->nrows +1), cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(new_idx, kwd_B.mmio_csx->idx_vec, sizeof(IT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(new_val, kwd_B.mmio_csx->val,     sizeof(VT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
-    bku_B->val      = new_val;
-    bku_B->ptr_vec  = new_row;
-    bku_B->idx_vec  = new_idx;
+        VT *new_val;
+        IT *new_row, *new_idx;
+        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(bku_B->nrows +1)));
+        CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_B->nnz)));
+        CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_B->nnz)));
+        CUDA_CHECK(cudaMemcpy(new_row, kwd_B.mmio_csx->ptr_vec, sizeof(IT)*(bku_B->nrows +1), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_idx, kwd_B.mmio_csx->idx_vec, sizeof(IT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_val, kwd_B.mmio_csx->val,     sizeof(VT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+        bku_B->val      = new_val;
+        bku_B->ptr_vec  = new_row;
+        bku_B->idx_vec  = new_idx;
+    }
+
+    mmio::CSX<IT,VT> *bku_A = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+    {
+        bku_A->majordim = kwd_A.mmio_csx->majordim;
+        bku_A->nnz      = kwd_A.mmio_csx->nnz;
+        bku_A->nrows    = kwd_A.mmio_csx->nrows;
+        bku_A->ncols    = kwd_A.mmio_csx->ncols;
+
+        VT *new_val;
+        IT *new_row, *new_idx, ptr_size = (bku_A->majordim == mmio::MajorDim::ROWS ) ? (bku_A->nrows +1) : (bku_A->ncols +1) ;
+        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(ptr_size)));
+        CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_A->nnz)));
+        CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_A->nnz)));
+        CUDA_CHECK(cudaMemcpy(new_row, kwd_A.mmio_csx->ptr_vec, sizeof(IT)*(ptr_size),   cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_idx, kwd_A.mmio_csx->idx_vec, sizeof(IT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_val, kwd_A.mmio_csx->val,     sizeof(VT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
+        bku_A->val      = new_val;
+        bku_A->ptr_vec  = new_row;
+        bku_A->idx_vec  = new_idx;
+    }
     // -------------------------------------------------------------------------------
 
     // Process grid info
@@ -173,9 +194,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     // Launch comm threads
     std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx, spcomm, dev_id);
+                            std::ref(A_queue), std::ref(A_holder), /*kwd_A.mmio_csx*/ bku_A, spcomm, dev_id);
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm, dev_id);
+                            std::ref(B_queue), std::ref(B_holder), /*kwd_B.mmio_csx*/ bku_B, spcomm, dev_id);
 
     // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
@@ -222,32 +243,45 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // ----- Just for test -----
 
-        fflush(stdout); fflush(stderr);
-
-
+        // fflush(stdout); fflush(stderr);
+/*
         cudaStream_t stream;
         CUDA_TIMER_DEF(compression_time)
         CUDA_CHECK(cudaStreamCreate(&stream));
         mmio::CSX<IT, VT> *csx = bku_B, *csxtosend = nullptr;
-        CHECK_PTRVEC(csx->ptr_vec, csx->nrows+1)
+        // CHECK_PTRVEC(csx->ptr_vec, csx->nrows+1)
         int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
-        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        char desc = 'B';
         char tmpstr2[20];
         sprintf(tmpstr2, "[p %d, t %d, m %c]", rank, target, desc);
         CUDA_TIMER_START(compression_time, stream)
         csxtosend = spcomm->Compress(csx, target, stream);
         CUDA_TIMER_STOP(compression_time)
         CUDA_CHECK(cudaStreamSynchronize(stream));
-        CHECK_PTRVEC(csxtosend->ptr_vec, csxtosend->nrows+1)
+        // CHECK_PTRVEC(csxtosend->ptr_vec, csxtosend->nrows+1)
 
         double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
         fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr2, csx->nnz, csxtosend->nnz, comp_rate);
         ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr2);
         CSX_destroy_device(&csxtosend);
-        CUDA_CHECK(cudaDeviceSynchronize());
-        fflush(stdout); fflush(stderr);
-        MPI_Barrier(MPI_COMM_WORLD);
 
+        desc = 'A';
+        csx = bku_A;
+        sprintf(tmpstr2, "[p %d, t %d, m %c]", rank, target, desc);
+        CUDA_TIMER_START(compression_time, stream)
+        csxtosend = spcomm->Compress(csx, target, stream);
+        CUDA_TIMER_STOP(compression_time)
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
+        fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr2, csx->nnz, csxtosend->nnz, comp_rate);
+        ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr2);
+        CSX_destroy_device(&csxtosend);
+
+        // CUDA_CHECK(cudaDeviceSynchronize());
+        // fflush(stdout); fflush(stderr);
+        // MPI_Barrier(MPI_COMM_WORLD);
+*/
         // --------------------------
 
         // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
@@ -435,6 +469,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
 
     CSX_destroy_device(&bku_B);
+    CSX_destroy_device(&bku_A);
 
     return out;
 }

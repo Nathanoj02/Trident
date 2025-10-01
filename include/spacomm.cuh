@@ -555,7 +555,7 @@ __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
 template<typename VT, typename PT>
 __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *output, int *selected_vals) {
     int tid = blockDim.x*blockIdx.x + threadIdx.x;
-
+/*
     // ----- Just for debug ----
     
     for (int i=0; i<ITEM_PER_THREAD; i++) {
@@ -568,16 +568,16 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
 	    // if (tmp_bsearch >= m) MAKE_IT_CRASH  // Just to trigger an error
 	    output[access_idx] = 0;
 	}
-	/*
+
 	if (access_idx<m-1) {
 	    if (ptr_vec[access_idx]>ptr_vec[access_idx+1]) MAKE_IT_CRASH
 	}
-	*/
+
     }
     
     int block_aggregate = 0;
     // -------------------------
-/*
+*/
     using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
     __shared__ typename BlockScan::TempStorage temp_storage_scan;
 
@@ -588,8 +588,8 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
             // int row = 1; // Just for debug
             int mask_word = row / MASK_SIZE;
             int mask_bit  = row % MASK_SIZE;
-            // myflags[i] = ((mask[mask_word] >> mask_bit) & 1) ? 1 : 0 ;
-            myflags[i] = 0; // Just for debug
+            myflags[i] = ((mask[mask_word] >> mask_bit) & 1) ? 1 : 0 ;
+            // myflags[i] = 0; // Just for debug
         } else {
             myflags[i] = 0;
         }
@@ -604,7 +604,7 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
             output[block_offset + blockdispl[i]] = input_vec[tid*ITEM_PER_THREAD + i];
         }
     }
-*/
+
     if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
 }
 
@@ -688,8 +688,8 @@ struct SpaCommHandler
         ASSERT(input_grid->row_size == input_grid->col_size, "Process grid must be squared");
         ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
 
-        CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
-        CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
+        // CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
+        // CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
 
         grid     = input_grid;
         nfilters = input_grid->row_size;
@@ -711,8 +711,8 @@ struct SpaCommHandler
         free(tmp);
 #endif
 
-        CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
-        CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
+        // CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
+        // CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
 	// ---------------------------------------------------------------------------------
 
     }
@@ -733,7 +733,7 @@ struct SpaCommHandler
             mask = A_column_filters + mask_len*iteration_number;
         }
 
-        CHECK_PTRVEC(M->ptr_vec, ptr_size)
+        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
 #ifdef DEBUG_COMPRESSION
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
@@ -766,7 +766,7 @@ struct SpaCommHandler
         }
 #endif
 
-        CHECK_PTRVEC(M->ptr_vec, ptr_size)
+        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
         // Compute compressed value vector
         VT* new_val = nullptr;
@@ -786,7 +786,7 @@ struct SpaCommHandler
         }
 #endif
 
-        CHECK_PTRVEC(M->ptr_vec, ptr_size)
+        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
         // Check
         if (num_selected != num_selected_val) {
@@ -813,7 +813,7 @@ struct SpaCommHandler
         CUDA_CHECK(cudaMemcpy(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice));
         new_row = select_ptrs(new_row, ptr_size, mask, stream); // Changes are done in place
 
-        CHECK_PTRVEC(M->ptr_vec, ptr_size)
+        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
