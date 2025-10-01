@@ -536,6 +536,8 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
 
 template <typename IT>
 __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
+    if (static_cast<IT>(pos) >= ptr_vec[size-1]) return(size-1);
+
     int low = 0, high = size;
     while (low < high) {
         int mid = (low + high) >> 1;
@@ -548,10 +550,34 @@ __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
 #define BLOCK_SIZE 1024
 #define ITEM_PER_THREAD 16
 
+#define MAKE_IT_CRASH { int *hats = nullptr; *hats = 12; }
+
 template<typename VT, typename PT>
 __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *output, int *selected_vals) {
     int tid = blockDim.x*blockIdx.x + threadIdx.x;
 
+    // ----- Just for debug ----
+    
+    for (int i=0; i<ITEM_PER_THREAD; i++) {
+     	int access_idx = tid*ITEM_PER_THREAD + i;
+	
+	if (access_idx<n) {
+	    if (access_idx%MASK_SIZE == 0) int mask_word  = mask[i/MASK_SIZE];
+	    int tmp_input   = input_vec[access_idx];
+	    int tmp_bsearch = locate_segment_by_pos(access_idx, m, ptr_vec);
+	    // if (tmp_bsearch >= m) MAKE_IT_CRASH  // Just to trigger an error
+	    output[access_idx] = 0;
+	}
+	
+	if (access_idx<m-1) {
+	    if (ptr_vec[access_idx]>ptr_vec[access_idx+1]) MAKE_IT_CRASH
+	}
+	
+    }
+    
+    int block_aggregate = 0;
+    // -------------------------
+/*
     using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
     __shared__ typename BlockScan::TempStorage temp_storage_scan;
 
@@ -562,8 +588,8 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
             // int row = 1; // Just for debug
             int mask_word = row / MASK_SIZE;
             int mask_bit  = row % MASK_SIZE;
-            myflags[i] = ((mask[mask_word] >> mask_bit) & 1) ? 1 : 0 ;
-            // myflags[i] = 1; // Just for debug
+            // myflags[i] = ((mask[mask_word] >> mask_bit) & 1) ? 1 : 0 ;
+            myflags[i] = 0; // Just for debug
         } else {
             myflags[i] = 0;
         }
@@ -578,7 +604,7 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
             output[block_offset + blockdispl[i]] = input_vec[tid*ITEM_PER_THREAD + i];
         }
     }
-
+*/
     if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
 }
 
@@ -687,7 +713,7 @@ struct SpaCommHandler
 #endif
 
         // Compute compressed index vector
-        IT* new_idx;
+        IT* new_idx = nullptr;
         // int num_selected = select_entries<IT, IT>(
         int num_selected = select_entries_cuda<IT, IT>(
                 M->idx_vec, M->nnz,
@@ -705,7 +731,7 @@ struct SpaCommHandler
 #endif
 
         // Compute compressed value vector
-        VT* new_val;
+        VT* new_val = nullptr;
         // int num_selected_val = select_entries<VT, IT>(
         int num_selected_val = select_entries_cuda<VT, IT>(
                 M->val, M->nnz,
