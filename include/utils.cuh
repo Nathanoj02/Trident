@@ -269,26 +269,61 @@ struct DiffOp2
     }
 };
 
+struct cubTmpBuff {
+    void*  tmp_buffer   = nullptr;
+    size_t current_size = 0;
+
+    // Ensure buffer has at least 'bytes' capacity
+    void* ensure(size_t bytes) {
+        if (bytes > current_size) {
+            if (tmp_buffer) CUDA_CHECK(cudaFree(tmp_buffer));
+            CUDA_CHECK(cudaMalloc(&tmp_buffer, 2 * bytes)); // grow with factor
+            current_size = 2 * bytes;
+        }
+        return tmp_buffer;
+    }
+
+    ~cubTmpBuff() {
+        if (tmp_buffer) {
+            CUDA_CHECK(cudaFree(tmp_buffer));
+        }
+        tmp_buffer = nullptr;
+        current_size = 0;
+    }
+};
+
 template <typename IT>
-void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows) {
+void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, cubTmpBuff *tmp_buff = nullptr) {
     void * d_tmp = NULL;
     size_t tmp_size = 0;
-    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
-    cudaMalloc(&d_tmp, tmp_size);
-    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows);
-    cudaFree(d_tmp);
-    cudaDeviceSynchronize();
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows, stream);
+    if (tmp_buff == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
+    } else {
+        d_tmp = tmp_buff->ensure(tmp_size);
+    }
+    cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows, stream);
+    if (tmp_buff == nullptr) {
+        CUDA_CHECK(cudaFree(d_tmp));
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <typename IT>
-void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows) {
+void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, cubTmpBuff *tmp_buff = nullptr) {
     void * d_tmp = NULL;
     size_t tmp_size = 0;
-    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
-    cudaMalloc(&d_tmp, tmp_size);
-    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{});
-    cudaFree(d_tmp);
-    cudaDeviceSynchronize();
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}, stream);
+    if (tmp_buff == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
+    } else {
+        d_tmp = tmp_buff->ensure(tmp_size);
+    }
+    cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}, stream);
+    if (tmp_buff == nullptr) {
+        CUDA_CHECK(cudaFree(d_tmp));
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 // ------------------------------------------------------------
 

@@ -463,7 +463,7 @@ struct MaskedTransform
 };
 
 template<typename IT>
-IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
+IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0, cubTmpBuff *tmp_buff = nullptr) {
 
 #ifdef DEBUG_PTR_COMPRESS
     print_d_arr(raw_ptr, m, "input ptr: ");
@@ -476,7 +476,8 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
 #endif
 
     int mask_size = (((m-1)%MASK_SIZE)==0) ? ((m-1)/MASK_SIZE) : (((m-1)/MASK_SIZE)+1) ;
-    thrust::device_vector<BMASK_TYPE> d_mask(mask, mask + mask_size);
+    // thrust::device_vector<BMASK_TYPE> d_mask(mask, mask + mask_size);
+    thrust::device_ptr<BMASK_TYPE> d_mask_ptr = thrust::device_pointer_cast(mask);
     // thrust::device_vector<IT> d_row(raw_ptr, raw_ptr + m);
     thrust::device_ptr<IT> thrust_ptr = thrust::device_pointer_cast(raw_ptr);
 
@@ -498,7 +499,7 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
         thrust::cuda::par.on(stream),
         zipped, zipped + (m-1),
         thrust_ptr+1,
-        MaskedTransform(thrust::raw_pointer_cast(d_mask.data()))
+        MaskedTransform(thrust::raw_pointer_cast(d_mask_ptr))
     );
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -534,6 +535,52 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
 //                        Funtions to perform the data compression (raw CUDA)
 // ----------------------------------------------------------------------------------------------
 
+#define BLOCK_SIZE 1024
+#define ITEM_PER_THREAD 16
+
+#define MAKE_IT_CRASH { int *hats = nullptr; *hats = 12; }
+
+template <typename IT, typename VT>
+struct SpaCommBuffers {
+
+    SpaCommBuffers(const mmio::CSX<IT,VT>* to_compress) {
+        int nnz = to_compress->nnz;
+        entries_grid_size = (nnz + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
+        int ptrsize = (to_compress->majordim == mmio::MajorDim::ROWS) ? (to_compress->nrows +1) : (to_compress->ncols +1) ;
+
+        CUDA_CHECK(cudaMallocHost(&host_buffer,    sizeof(int) * entries_grid_size));
+        CUDA_CHECK(cudaMalloc(&selected_per_block, sizeof(int) * entries_grid_size));
+        CUDA_CHECK(cudaMalloc(&IT_partial_results, sizeof(IT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
+        CUDA_CHECK(cudaMalloc(&VT_partial_results, sizeof(VT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
+
+        CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
+        CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
+        CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
+    }
+
+    ~SpaCommBuffers() {
+        CUDA_FREE_SAFE(selected_per_block);
+        CUDA_FREE_SAFE(IT_partial_results);
+        CUDA_FREE_SAFE(VT_partial_results);
+        CUDA_FREE_SAFE(compressed_values);
+        CUDA_FREE_SAFE(compressed_indices);
+        CUDA_FREE_SAFE(compressed_pointers);
+        CUDA_CHECK(cudaFreeHost(host_buffer));
+    }
+
+    int *host_buffer;
+    int entries_grid_size;
+    int *selected_per_block;
+    IT *IT_partial_results;
+    VT *VT_partial_results;
+
+    VT *compressed_values;
+    IT *compressed_indices;
+    IT *compressed_pointers;
+
+    cubTmpBuff tmp_buff;
+};
+
 template <typename IT>
 __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
     if (static_cast<IT>(pos) >= ptr_vec[size-1]) return(size-1);
@@ -547,10 +594,6 @@ __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
     return low - 1;
 }
 
-#define BLOCK_SIZE 1024
-#define ITEM_PER_THREAD 16
-
-#define MAKE_IT_CRASH { int *hats = nullptr; *hats = 12; }
 
 template<typename VT, typename PT>
 __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *output, int *selected_vals) {
@@ -608,22 +651,35 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
     if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
 }
 
-template<typename VT, typename PT>
-int select_entries_cuda(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output,
+// #define DEBUG_SELECT_ENTRIES_CUDA
+
+template<typename ET, typename IT, typename VT>
+int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, const BMASK_TYPE* mask, SpaCommBuffers<IT,VT> *buffs,
     cudaStream_t stream = 0) {
     if (n==0) return(0);
-    int grid_size = (n + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD), *selected_per_block;
 
-    VT *partial_output;
-    CUDA_CHECK(cudaMalloc(&partial_output, sizeof(VT)*grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
+    // ----- Take pointers to the extern buffers -----
+    int grid_size = buffs->entries_grid_size;
+    int *h_selected_per_block = buffs->host_buffer;
+    int *selected_per_block = buffs->selected_per_block;
+    ET *partial_output, *output;
+    if constexpr (std::is_same_v<ET, IT>) {
+        output         = buffs->compressed_indices;
+        partial_output = buffs->IT_partial_results;
+    } else if constexpr (std::is_same_v<ET, VT>) {
+        output         = buffs->compressed_values;
+        partial_output = buffs->VT_partial_results;
+    } else {
+        fprintf(stderr, "Error: unsupported template in %s\n", __func__);
+        exit(__LINE__);
+    }
 
-    CUDA_CHECK(cudaMalloc(&selected_per_block, sizeof(int)*grid_size));
     select_entries_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(input_vec, n, ptr_vec, m, mask, partial_output, selected_per_block);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    std::vector<int> h_selected_per_block(grid_size);
-    CUDA_CHECK(cudaMemcpy(h_selected_per_block.data(), selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpyAsync(h_selected_per_block, selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<int> h_displ(grid_size + 1);
     h_displ[0] = 0;
@@ -632,17 +688,20 @@ int select_entries_cuda(const VT* input_vec, int n, const PT* ptr_vec, int m, co
     }
     int nselected = h_displ[grid_size];
 
-    CUDA_CHECK(cudaMalloc(output, sizeof(VT)*nselected));
+#ifdef DEBUG_SELECT_ENTRIES_CUDA
+    // fprintf(stdout, "h_selected_per_block: ");
+    // for (int i=0; i<grid_size; i++) fprintf(stdout, "%d ", h_selected_per_block[i]);
+    // fprintf(stdout, "\n");
+    fprintf(stdout, "nselected: %d\n", nselected);
+#endif
+
+
     for (int i = 0; i < grid_size; i++) {
         if (h_selected_per_block[i] > 0) {
             int src_base = i * BLOCK_SIZE * ITEM_PER_THREAD;
-            CUDA_CHECK(cudaMemcpy((*output) + h_displ[i], partial_output + src_base, sizeof(VT) * h_selected_per_block[i], cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpyAsync(output + h_displ[i], partial_output + src_base, sizeof(ET) * h_selected_per_block[i], cudaMemcpyDeviceToDevice, stream));
         }
     }
-
-    // cleanup
-    CUDA_CHECK(cudaFree(partial_output));
-    CUDA_CHECK(cudaFree(selected_per_block));
 
     return(nselected);
 }
@@ -688,9 +747,6 @@ struct SpaCommHandler
         ASSERT(input_grid->row_size == input_grid->col_size, "Process grid must be squared");
         ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
 
-        // CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
-        // CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
-
         grid     = input_grid;
         nfilters = input_grid->row_size;
 #ifndef DEBUGBITMASKGENERATION
@@ -711,13 +767,11 @@ struct SpaCommHandler
         free(tmp);
 #endif
 
-        // CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
-        // CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
 	// ---------------------------------------------------------------------------------
 
     }
 
-    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number, cudaStream_t stream = 0) {
+    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number, SpaCommBuffers<IT,VT>* buffs, cudaStream_t stream = 0) {
 
         ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;
@@ -733,8 +787,6 @@ struct SpaCommHandler
             mask = A_column_filters + mask_len*iteration_number;
         }
 
-        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
-
 #ifdef DEBUG_COMPRESSION
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
         BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_len);
@@ -749,13 +801,11 @@ struct SpaCommHandler
 #endif
 
         // Compute compressed index vector
-        IT* new_idx = nullptr;
-        // int num_selected = select_entries<IT, IT>(
         int num_selected = select_entries_cuda<IT, IT>(
                 M->idx_vec, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
-                &new_idx,
+                buffs,
                 stream
         );
 
@@ -766,16 +816,12 @@ struct SpaCommHandler
         }
 #endif
 
-        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
-
         // Compute compressed value vector
-        VT* new_val = nullptr;
-        // int num_selected_val = select_entries<VT, IT>(
         int num_selected_val = select_entries_cuda<VT, IT>(
                 M->val, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
-                &new_val,
+                buffs,
                 stream
         );
 
@@ -785,8 +831,6 @@ struct SpaCommHandler
             print_d_arr(new_val, num_selected_val, "New val: ");
         }
 #endif
-
-        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
         // Check
         if (num_selected != num_selected_val) {
@@ -808,12 +852,9 @@ struct SpaCommHandler
 	CUDA_CHECK(cudaMalloc(&new_val, sizeof(IT)*(M->nnz))); // Just to debug
 */
         // Compute compressed pointer vector
-        IT *new_row;
-        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*ptr_size));
-        CUDA_CHECK(cudaMemcpy(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice));
-        new_row = select_ptrs(new_row, ptr_size, mask, stream); // Changes are done in place
-
-        // CHECK_PTRVEC(M->ptr_vec, ptr_size)
+        IT *new_row = buffs->compressed_pointers;
+        CUDA_CHECK(cudaMemcpyAsync(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice, stream));
+        select_ptrs(new_row, ptr_size, mask, stream, &(buffs->tmp_buff)); // Changes are done in place
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
@@ -828,9 +869,9 @@ struct SpaCommHandler
         output->nnz      = num_selected;
         output->nrows    = M->nrows;
         output->ncols    = M->ncols;
-        output->val      = new_val;
-        output->ptr_vec  = new_row;
-        output->idx_vec  = new_idx;
+        output->val      = buffs->compressed_values;
+        output->ptr_vec  = buffs->compressed_pointers;
+        output->idx_vec  = buffs->compressed_indices;
 
         return(output);
     }

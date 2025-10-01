@@ -22,6 +22,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
     CUDA_CHECK(cudaStreamCreate(&stream));
 
+    SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
+
     CUDA_TIMER_DEF(compression_time)
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
@@ -51,7 +53,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
                 CUDA_TIMER_START(compression_time, stream)
-                compressed = spacomm->Compress(csx, target, stream);
+                compressed = spacomm->Compress(csx, target, compression_buffers, stream);
                 CUDA_TIMER_STOP(compression_time)
                 CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -66,15 +68,18 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         }
 
         // Put tile on remote process
-	const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
+        const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
         holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target);
 
+        /*  NOTE: I no more have to free it, since the buffer where reused by following cycles
+         *     the vectors will be freed when the deconstructor will be called.
         if (spacomm != nullptr) {
                 CSX_destroy_device(&compressed);
 #ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] compressed csx destroyed successfully\n", rank, desc, nsend);
 #endif
         }
+        */
 
 #ifdef DEBUG_THREAD_COMPRESSION
         nsend++;
@@ -86,7 +91,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     }
-
 
 }
 
