@@ -115,31 +115,6 @@ BMASK_TYPE* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     return result_bytes;
 }
 
-template<typename IT>
-BMASK_TYPE* gen_bytemask(const IT* ptr_d, int n) {
-    // Each entry is a byte that might hold one bit
-    thrust::device_vector<BMASK_TYPE> presult(n);
-
-    thrust::transform(
-        thrust::make_counting_iterator<int>(0),
-        thrust::make_counting_iterator<int>(n),
-        presult.begin(),
-        [=] __device__(int i) {
-            IT a = ptr_d[i];
-            IT b = ptr_d[i + 1];
-            BMASK_TYPE c = 0;
-            if (a != b) {
-                c = 1;
-            }
-            return c;
-        });
-
-    BMASK_TYPE *result;
-    CUDA_CHECK(cudaMalloc(&result, sizeof(BMASK_TYPE)*n));
-    CUDA_CHECK(cudaMemcpy(result, thrust::raw_pointer_cast(presult.data()), sizeof(BMASK_TYPE)*n, cudaMemcpyDeviceToDevice));
-
-    return result;
-}
 
 struct BitwiseAnd {
     __device__ __host__ int operator()(const thrust::tuple<int,int>& t) const {
@@ -185,30 +160,6 @@ struct LogicAnd {
         return thrust::get<0>(t) && thrust::get<1>(t);
     }
 };
-
-template<typename T>
-T* intersect_bytemasks(const T* a, const T* b, int n) {
-    // Allocate output buffer on device
-    T* d_out = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_out, sizeof(T) * n));
-
-    // Wrap raw pointers with device_ptr so Thrust can use them
-    auto a_begin = thrust::device_pointer_cast(a);
-    auto b_begin = thrust::device_pointer_cast(b);
-    auto out_begin = thrust::device_pointer_cast(d_out);
-
-    // Zip iterators over both inputs
-    auto zipped_begin = thrust::make_zip_iterator(thrust::make_tuple(a_begin, b_begin));
-    auto zipped_end   = zipped_begin + n;
-
-    // Create transform iterator that applies bitwise AND
-    auto transform_iter = thrust::make_transform_iterator(zipped_begin, LogicAnd());
-
-    // Copy results into d_out
-    thrust::copy(transform_iter, transform_iter + n, out_begin);
-
-    return d_out; // caller must cudaFree()
-}
 
 template<typename IT, typename VT>
 int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
@@ -309,103 +260,6 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     return(mask_size);
 }
 
-template<typename IT, typename VT>
-void spcomm_2D_bytemask (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
-                BMASK_TYPE** col_filters, BMASK_TYPE** row_filters) {
-    ASSERT(Acsc->majordim==mmio::MajorDim::COLS, "A must be a CSC");
-    ASSERT(Bcsr->majordim==mmio::MajorDim::ROWS, "B must be a CSR");
-    ASSERT(Acsc->ncols == Bcsr->nrows, "In 2D mask cols of A must be equal to rows of B");
-    ASSERT(grid->row_size == grid->col_size, "The 2D grid must be a square");
-    ASSERT(grid->node_size == 1, "The spcomm 2D do not support node size > 1");
-    ASSERT((Acsc->ncols % 8) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
-    ASSERT((Bcsr->ncols % 8) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
-
-    int k = Acsc->ncols;
-    int mask_size = k ;
-    BMASK_TYPE *A_map = SpaComm::gen_bytemask(Acsc->ptr_vec, Acsc->ncols);
-    BMASK_TYPE *B_map = SpaComm::gen_bytemask(Bcsr->ptr_vec, Bcsr->nrows);
-
-    // ---------- Ghatering all the required maps ----------
-    BMASK_TYPE *recv_A_maps;
-    CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
-    MPI_Allgather(A_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_A_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
-
-    BMASK_TYPE *recv_B_maps;
-    CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
-    MPI_Allgather(B_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_B_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
-
-    // ---------- Performing the mask intersection ----------
-    // since mapsizes are equal, we can comput all the intersections togheter
-    BMASK_TYPE *all_intersections = SpaComm::intersect_bytemasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
-
-    // ---------- Alltoall data sisplacement back ----------
-    // *col_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->row_size));
-    CUDA_CHECK( cudaMalloc(col_filters, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
-    MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *col_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
-
-    // *row_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->col_size));
-    CUDA_CHECK( cudaMalloc(row_filters, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
-    MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *row_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
-
-#ifdef DEBUG_SPCOMM
-    {
-        int size = mask_size*(grid->row_size);
-        BMASK_TYPE *h_A_map             = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size);
-        BMASK_TYPE *h_B_map             = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size);
-        BMASK_TYPE *h_recv_A_maps       = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-        BMASK_TYPE *h_recv_B_maps       = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-        BMASK_TYPE *h_all_intersections = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-        BMASK_TYPE *h_col_filters       = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-        BMASK_TYPE *h_row_filters       = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*size);
-        CUDA_CHECK(cudaMemcpy(h_A_map,             A_map,             sizeof(BMASK_TYPE)*mask_size, cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_B_map,             B_map,             sizeof(BMASK_TYPE)*mask_size, cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_recv_A_maps,       recv_A_maps,       sizeof(BMASK_TYPE)*size,      cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_recv_B_maps,       recv_B_maps,       sizeof(BMASK_TYPE)*size,      cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_all_intersections, all_intersections, sizeof(BMASK_TYPE)*size,      cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_col_filters,       *col_filters,      sizeof(BMASK_TYPE)*size,      cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemcpy(h_row_filters,       *row_filters,      sizeof(BMASK_TYPE)*size,      cudaMemcpyDeviceToDevice));
-
-        MPI_ALL_PRINT(
-            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "local A_map");
-            printBit_left2right(h_A_map, mask_size, fp);
-            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "local B_map");
-            printBit_left2right(h_B_map, mask_size, fp);
-            fprintf(fp, "\n\n");
-
-            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "recv A bitmasks");
-            printBit_left2right(h_recv_A_maps, size, fp);
-            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "recv B bitmasks");
-            printBit_left2right(h_recv_B_maps, size, fp);
-            fprintf(fp, "\n");
-
-            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_all_intersections");
-            printBit_left2right(h_all_intersections, size, fp);
-            fprintf(fp, "\n\n");
-
-            fprintf(fp, "C[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_col_filters");
-            printBit_left2right(h_col_filters, size, fp);
-            fprintf(fp, "\nC[%d,%d] %20s: ", grid->col_rank, grid->row_rank, "h_row_filters");
-            printBit_left2right(h_row_filters, size, fp);
-            fprintf(fp, "\n");
-        )
-
-        free(h_all_intersections);
-        free(h_recv_A_maps);
-        free(h_recv_B_maps);
-        free(h_col_filters);
-        free(h_row_filters);
-        free(h_A_map);
-        free(h_B_map);
-    }
-#endif
-
-    CUDA_CHECK(cudaFree(all_intersections));
-    CUDA_CHECK(cudaFree(recv_A_maps));
-    CUDA_CHECK(cudaFree(recv_B_maps));
-    CUDA_CHECK(cudaFree(A_map));
-    CUDA_CHECK(cudaFree(B_map));
-}
-
 // ----------------------------------------------------------------------------------------------
 //                              Funtions to perform the data compression
 // ----------------------------------------------------------------------------------------------
@@ -477,23 +331,6 @@ Kokkos::View<unsigned char*> compute_flags_kokkos(
     return d_flags;
 }
 #endif
-
-struct MaskedTransform
-{
-    const BMASK_TYPE* c; // bitmask
-
-    __host__ __device__
-    MaskedTransform(const BMASK_TYPE* c_) : c(c_) {}
-
-    __device__ __forceinline__
-    int operator()(const thrust::tuple<int,int>& t) const {
-        int idx = thrust::get<0>(t);
-        int val = thrust::get<1>(t);
-        int word = idx / MASK_SIZE;
-        int bit  = idx % MASK_SIZE;
-        return ( (c[word] >> bit) & 1 ) ? val : 0;
-    }
-};
 
 #define EXPLICIT_FLAGS
 
@@ -594,6 +431,23 @@ int select_entries(const VT* input_vec, int n, const PT* ptr_vec, int m, const B
     *output = d_out;
     return(num_selected);
 }
+
+struct MaskedTransform
+{
+    const BMASK_TYPE* c; // bitmask
+
+    __host__ __device__
+    MaskedTransform(const BMASK_TYPE* c_) : c(c_) {}
+
+    __device__ __forceinline__
+    int operator()(const thrust::tuple<int,int>& t) const {
+        int idx = thrust::get<0>(t);
+        int val = thrust::get<1>(t);
+        int word = idx / MASK_SIZE;
+        int bit  = idx % MASK_SIZE;
+        return ( (c[word] >> bit) & 1 ) ? val : 0;
+    }
+};
 
 template<typename IT>
 IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
