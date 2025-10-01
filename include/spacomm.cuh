@@ -530,6 +530,97 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0) {
     return(raw_ptr);
 }
 
+// ----------------------------------------------------------------------------------------------
+//                        Funtions to perform the data compression (raw CUDA)
+// ----------------------------------------------------------------------------------------------
+
+template <typename IT>
+__device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
+    int low = 0, high = size;
+    while (low < high) {
+        int mid = (low + high) >> 1;
+        if (ptr_vec[mid] <= static_cast<IT>(pos)) low = mid + 1;
+        else high = mid;
+    }
+    return low - 1;
+}
+
+#define BLOCK_SIZE 1024
+#define ITEM_PER_THREAD 16
+
+template<typename VT, typename PT>
+__global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *output, int *selected_vals) {
+    int tid = blockDim.x*blockIdx.x + threadIdx.x;
+
+    using BlockScan = cub::BlockScan<int, BLOCK_SIZE>;
+    __shared__ typename BlockScan::TempStorage temp_storage_scan;
+
+    int myflags[ITEM_PER_THREAD], blockdispl[ITEM_PER_THREAD];
+    for (int i=0; i < ITEM_PER_THREAD; i++) {
+        if (tid*ITEM_PER_THREAD + i < n) {
+            int row = locate_segment_by_pos(tid*ITEM_PER_THREAD + i, m, ptr_vec);
+            // int row = 1; // Just for debug
+            int mask_word = row / MASK_SIZE;
+            int mask_bit  = row % MASK_SIZE;
+            myflags[i] = ((mask[mask_word] >> mask_bit) & 1) ? 1 : 0 ;
+            // myflags[i] = 1; // Just for debug
+        } else {
+            myflags[i] = 0;
+        }
+    }
+
+    int block_aggregate;
+    BlockScan(temp_storage_scan).ExclusiveSum(myflags, blockdispl, block_aggregate);
+
+    for (int i=0; i<ITEM_PER_THREAD ; i++) {  // I check block_offset + blockdispl[i] already since the structure of myflags[i]
+        if (myflags[i]) {
+            int block_offset = blockIdx.x * BLOCK_SIZE * ITEM_PER_THREAD;
+            output[block_offset + blockdispl[i]] = input_vec[tid*ITEM_PER_THREAD + i];
+        }
+    }
+
+    if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
+}
+
+template<typename VT, typename PT>
+int select_entries_cuda(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT **output,
+    cudaStream_t stream = 0) {
+    if (n==0) return(0);
+    int grid_size = (n + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD), *selected_per_block;
+
+    VT *partial_output;
+    CUDA_CHECK(cudaMalloc(&partial_output, sizeof(VT)*grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
+
+    CUDA_CHECK(cudaMalloc(&selected_per_block, sizeof(int)*grid_size));
+    select_entries_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(input_vec, n, ptr_vec, m, mask, partial_output, selected_per_block);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaGetLastError());
+
+    std::vector<int> h_selected_per_block(grid_size);
+    CUDA_CHECK(cudaMemcpy(h_selected_per_block.data(), selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost));
+
+    std::vector<int> h_displ(grid_size + 1);
+    h_displ[0] = 0;
+    for (int i = 0; i < grid_size; i++) {
+        h_displ[i+1] = h_displ[i] + h_selected_per_block[i];
+    }
+    int nselected = h_displ[grid_size];
+
+    CUDA_CHECK(cudaMalloc(output, sizeof(VT)*nselected));
+    for (int i = 0; i < grid_size; i++) {
+        if (h_selected_per_block[i] > 0) {
+            int src_base = i * BLOCK_SIZE * ITEM_PER_THREAD;
+            CUDA_CHECK(cudaMemcpy((*output) + h_displ[i], partial_output + src_base, sizeof(VT) * h_selected_per_block[i], cudaMemcpyDeviceToDevice));
+        }
+    }
+
+    // cleanup
+    CUDA_CHECK(cudaFree(partial_output));
+    CUDA_CHECK(cudaFree(selected_per_block));
+
+    return(nselected);
+}
+
 template <typename IT, typename VT>
 using KWrapDMat = typename KokkosWrap::DistribuitedMatrix<IT, IT, VT>;
 
@@ -597,7 +688,8 @@ struct SpaCommHandler
 
         // Compute compressed index vector
         IT* new_idx;
-        int num_selected = select_entries<IT, IT>(
+        // int num_selected = select_entries<IT, IT>(
+        int num_selected = select_entries_cuda<IT, IT>(
                 M->idx_vec, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
@@ -614,7 +706,8 @@ struct SpaCommHandler
 
         // Compute compressed value vector
         VT* new_val;
-        int num_selected_val = select_entries<VT, IT>(
+        // int num_selected_val = select_entries<VT, IT>(
+        int num_selected_val = select_entries_cuda<VT, IT>(
                 M->val, M->nnz,
                 M->ptr_vec, ptr_size,
                 mask,
