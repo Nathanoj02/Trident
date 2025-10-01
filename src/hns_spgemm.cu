@@ -95,6 +95,26 @@ template <typename IT, typename VT>
 mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B,
                                    SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
+    // ------------------ Test compression on an independent buffer ------------------
+    mmio::CSX<IT,VT> *bku_B = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+    bku_B->majordim = kwd_B.mmio_csx->majordim;
+    bku_B->nnz      = kwd_B.mmio_csx->nnz;
+    bku_B->nrows    = kwd_B.mmio_csx->nrows;
+    bku_B->ncols    = kwd_B.mmio_csx->ncols;
+
+    VT *new_val;
+    IT *new_row, *new_idx;
+    CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(bku_B->nrows +1)));
+    CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_B->nnz)));
+    CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_B->nnz)));
+    CUDA_CHECK(cudaMemcpy(new_row, kwd_B.mmio_csx->ptr_vec, sizeof(IT)*(bku_B->nrows +1), cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpy(new_idx, kwd_B.mmio_csx->idx_vec, sizeof(IT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpy(new_val, kwd_B.mmio_csx->val,     sizeof(VT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+    bku_B->val      = new_val;
+    bku_B->ptr_vec  = new_row;
+    bku_B->idx_vec  = new_idx;
+    // -------------------------------------------------------------------------------
+
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
     int node_size        = grid->node_size;                     // NOTE: every grid must have the same node size!!
@@ -118,7 +138,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MessageQueue<int> A_queue(n_iters, grid->row_comm);
     MessageQueue<int> B_queue(n_iters, grid->col_comm);
 
-    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+    // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // Get max nnz for A and B tiles (to allocate recv buffers once)
     uint64_t A_max_nnz = (uint64_t)(kwd_A.getLocalNnz()); // have to cast, since MPI_MAX won't work on MPIType<IT>()
@@ -127,13 +147,13 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     uint64_t B_max_nnz = (uint64_t)(kwd_B.getLocalNnz());
     MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
 
-    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+    // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     TileHolder<IT, VT> A_holder(kwd_A.getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
 
-    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+    // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // cusparse handle
     cusparseHandle_t handle;
@@ -157,7 +177,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
                             std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm, dev_id);
 
-    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+    // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
@@ -198,7 +218,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         FLUSH_WAIT(1.0);
 #endif
 
-        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+        // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
         // ----- Just for test -----
 
@@ -208,7 +228,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         cudaStream_t stream;
         CUDA_TIMER_DEF(compression_time)
         CUDA_CHECK(cudaStreamCreate(&stream));
-        mmio::CSX<IT, VT> *csx = kwd_B.mmio_csx, *csxtosend = nullptr;
+        mmio::CSX<IT, VT> *csx = bku_B, *csxtosend = nullptr;
         CHECK_PTRVEC(csx->ptr_vec, csx->nrows+1)
         int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
@@ -230,13 +250,13 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // --------------------------
 
-        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+        // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
         // Tell target I'm ready for tiles of A and B
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
-        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+        // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
         // ----- Just for test -----
 
@@ -413,6 +433,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
+
+    CSX_destroy_device(&bku_B);
 
     return out;
 }
