@@ -568,11 +568,11 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
 	    // if (tmp_bsearch >= m) MAKE_IT_CRASH  // Just to trigger an error
 	    output[access_idx] = 0;
 	}
-	
+	/*
 	if (access_idx<m-1) {
 	    if (ptr_vec[access_idx]>ptr_vec[access_idx+1]) MAKE_IT_CRASH
 	}
-	
+	*/
     }
     
     int block_aggregate = 0;
@@ -647,6 +647,34 @@ int select_entries_cuda(const VT* input_vec, int n, const PT* ptr_vec, int m, co
     return(nselected);
 }
 
+// DEBUG function
+template<typename T>
+__global__ void check_ptr_kernel(T* ptr_vec, int ptr_size, int* check) {
+    int tid = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (tid<ptr_size-1) {
+	    if (ptr_vec[tid]>ptr_vec[tid+1]) atomicAdd(check, 1);
+	}
+}
+
+#define CHECK_PTRVEC(V,S) { \
+    int mygrid = (S + (BLOCK_SIZE-1)) / BLOCK_SIZE, h_check, *check;  \
+    CUDA_CHECK(cudaMalloc(&check, sizeof(int))); \
+    CUDA_CHECK(cudaMemset(check, 0, sizeof(int))); \
+    SpaComm::check_ptr_kernel<<<mygrid, BLOCK_SIZE>>>(V, S, check); \
+    CUDA_CHECK(cudaMemcpy(&h_check, check, sizeof(int), cudaMemcpyDeviceToHost)); \
+    int world_rank; \
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank); \
+    fprintf(stdout, "[%d] ptr_vec check at line %d... ", world_rank, __LINE__); \
+    if (h_check > 0) {  \
+        fprintf(stderr, "[%d] Error: ptr_vec is invalid at line %d\n", world_rank, __LINE__); \
+        MPI_Abort(MPI_COMM_WORLD, __LINE__); \
+    } else { fprintf(stdout, "[%d] check at line %d is fine\n", world_rank, __LINE__); } \
+    CUDA_CHECK(cudaFree(check)); \
+    fflush(stdout); fflush(stderr); \
+    MPI_Barrier(MPI_COMM_WORLD); \
+}
+
 template <typename IT, typename VT>
 using KWrapDMat = typename KokkosWrap::DistribuitedMatrix<IT, IT, VT>;
 
@@ -659,6 +687,9 @@ struct SpaCommHandler
 
         ASSERT(input_grid->row_size == input_grid->col_size, "Process grid must be squared");
         ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
+
+        CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
+        CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
 
         grid     = input_grid;
         nfilters = input_grid->row_size;
@@ -679,6 +710,9 @@ struct SpaCommHandler
         CUDA_CHECK(cudaMemcpy(B_rows_filters, tmp, sizeof(BMASK_TYPE)*nfilters*mask_len, cudaMemcpyHostToDevice));
         free(tmp);
 #endif
+
+        CHECK_PTRVEC(csx_A->ptr_vec, (csx_A->majordim == mmio::MajorDim::ROWS) ? (csx_A->nrows +1) : (csx_A->ncols +1))
+        CHECK_PTRVEC(csx_B->ptr_vec, csx_B->nrows +1)
 	// ---------------------------------------------------------------------------------
 
     }
@@ -698,6 +732,8 @@ struct SpaCommHandler
             ptr_size = M->ncols+1;
             mask = A_column_filters + mask_len*iteration_number;
         }
+
+        CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
 #ifdef DEBUG_COMPRESSION
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
@@ -730,6 +766,8 @@ struct SpaCommHandler
         }
 #endif
 
+        CHECK_PTRVEC(M->ptr_vec, ptr_size)
+
         // Compute compressed value vector
         VT* new_val = nullptr;
         // int num_selected_val = select_entries<VT, IT>(
@@ -747,6 +785,8 @@ struct SpaCommHandler
             print_d_arr(new_val, num_selected_val, "New val: ");
         }
 #endif
+
+        CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
         // Check
         if (num_selected != num_selected_val) {
@@ -772,6 +812,8 @@ struct SpaCommHandler
         CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*ptr_size));
         CUDA_CHECK(cudaMemcpy(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice));
         new_row = select_ptrs(new_row, ptr_size, mask, stream); // Changes are done in place
+
+        CHECK_PTRVEC(M->ptr_vec, ptr_size)
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {

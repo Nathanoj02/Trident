@@ -35,7 +35,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         {
             return;
         }
-
+/*
         mmio::CSX<IT, VT> *csxtosend = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         char tmpstr[20];
@@ -66,17 +66,17 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         } else {
                 csxtosend = csx;
         }
-
+*/
         // Put tile on remote process
         holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
-
+/*
         if (spacomm != nullptr) {
                 CSX_destroy_device(&csxtosend);
 #ifdef DEBUG_THREAD_COMPRESSION
                 fprintf(stdout, "[%d, %c, %d] csxtosend destroyed successfully\n", rank, desc, nsend);
 #endif
         }
-
+*/
 #ifdef DEBUG_THREAD_COMPRESSION
         nsend++;
 #endif
@@ -118,6 +118,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MessageQueue<int> A_queue(n_iters, grid->row_comm);
     MessageQueue<int> B_queue(n_iters, grid->col_comm);
 
+    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // Get max nnz for A and B tiles (to allocate recv buffers once)
     uint64_t A_max_nnz = (uint64_t)(kwd_A.getLocalNnz()); // have to cast, since MPI_MAX won't work on MPIType<IT>()
@@ -126,11 +127,13 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     uint64_t B_max_nnz = (uint64_t)(kwd_B.getLocalNnz());
     MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
 
+    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     TileHolder<IT, VT> A_holder(kwd_A.getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
 
+    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
     // cusparse handle
     cusparseHandle_t handle;
@@ -153,6 +156,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
                             std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx, spcomm, dev_id);
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
                             std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx, spcomm, dev_id);
+
+    CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
@@ -193,31 +198,75 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         FLUSH_WAIT(1.0);
 #endif
 
-        // Tell target I'm ready for tiles of A and B
-        A_queue.notify(row_rank, colAtoGet, iter);
-        B_queue.notify(col_rank, rowBtoGet, iter);
+        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
-	// ----- Just for test -----
-	/*
-	cudaStream_t stream;
-	CUDA_TIMER_DEF(compression_time)
-    	CUDA_CHECK(cudaStreamCreate(&stream));
-	mmio::CSX<IT, VT> *csx = kwd_B.mmio_csx, *csxtosend = nullptr;
-	int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
-	char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        // ----- Just for test -----
+
+        fflush(stdout); fflush(stderr);
+
+
+        cudaStream_t stream;
+        CUDA_TIMER_DEF(compression_time)
+        CUDA_CHECK(cudaStreamCreate(&stream));
+        mmio::CSX<IT, VT> *csx = kwd_B.mmio_csx, *csxtosend = nullptr;
+        CHECK_PTRVEC(csx->ptr_vec, csx->nrows+1)
+        int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
+        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         char tmpstr2[20];
         sprintf(tmpstr2, "[p %d, t %d, m %c]", rank, target, desc);
-	CUDA_TIMER_START(compression_time, stream)
+        CUDA_TIMER_START(compression_time, stream)
         csxtosend = spcomm->Compress(csx, target, stream);
         CUDA_TIMER_STOP(compression_time)
         CUDA_CHECK(cudaStreamSynchronize(stream));
+        CHECK_PTRVEC(csxtosend->ptr_vec, csxtosend->nrows+1)
 
         double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
         fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr2, csx->nnz, csxtosend->nnz, comp_rate);
         ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr2);
-	CSX_destroy_device(&csxtosend);
-	*/
-	// --------------------------
+        CSX_destroy_device(&csxtosend);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        fflush(stdout); fflush(stderr);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        // --------------------------
+
+        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+
+        // Tell target I'm ready for tiles of A and B
+        A_queue.notify(row_rank, colAtoGet, iter);
+        B_queue.notify(col_rank, rowBtoGet, iter);
+
+        CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+
+        // ----- Just for test -----
+
+        // fflush(stdout); fflush(stderr);
+        //
+        //
+        // cudaStream_t stream;
+        // CUDA_TIMER_DEF(compression_time)
+        // CUDA_CHECK(cudaStreamCreate(&stream));
+        // mmio::CSX<IT, VT> *csx = kwd_B.mmio_csx, *csxtosend = nullptr;
+        // CHECK_PTRVEC(csx->ptr_vec, csx->nrows+1)
+        // int rank = kwd_B.partitioning->grid->global_rank, target=colAtoGet;
+        // char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        // char tmpstr2[20];
+        // sprintf(tmpstr2, "[p %d, t %d, m %c]", rank, target, desc);
+        // CUDA_TIMER_START(compression_time, stream)
+        // csxtosend = spcomm->Compress(csx, target, stream);
+        // CUDA_TIMER_STOP(compression_time)
+        // CUDA_CHECK(cudaStreamSynchronize(stream));
+        // CHECK_PTRVEC(csxtosend->ptr_vec, csxtosend->nrows+1)
+        //
+        // double comp_rate = ((double)csxtosend->nnz) / ((double) csx->nnz);
+        // fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr2, csx->nnz, csxtosend->nnz, comp_rate);
+        // ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr2);
+        // CSX_destroy_device(&csxtosend);
+        // CUDA_CHECK(cudaDeviceSynchronize());
+        // fflush(stdout); fflush(stderr);
+        // MPI_Barrier(MPI_COMM_WORLD);
+
+        // --------------------------
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(internode_comm)
