@@ -178,6 +178,11 @@ int main(int argc, char ** argv)
         CPU_TIMER_DEF(spgemm);
         CPU_TIMER_DEF(spacomm);
 
+#ifdef NVTX_PROFILING
+        cudaProfilerStart();
+        NVTX_PUSH_RANGE("spcomm",2);
+#endif
+
         CPU_TIMER_START(spacomm);
 
         // Puting this inside the loop produce craches on the start of second iteration; we don't know why
@@ -194,6 +199,10 @@ int main(int argc, char ** argv)
             TIMER_PRINT(spacomm);
         }
 
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
         CPU_TIMER_START(spgemm);
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
@@ -202,6 +211,11 @@ int main(int argc, char ** argv)
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
             fflush(stdout);
             sleep(0.2);
+
+#ifdef NVTX_PROFILING
+            NVTX_PUSH_RANGE("spgemm",1);
+#endif
+
             MPI_Barrier(MPI_COMM_WORLD);
             if (!strcmp(config->impl, "main"))
             {
@@ -216,7 +230,15 @@ int main(int argc, char ** argv)
             delete dist_C;
             fflush(stdout);
             sleep(2);
+
+#ifdef NVTX_PROFILING
+            NVTX_POP_RANGE;
+#endif
         }
+
+#ifdef NVTX_PROFILING
+        cudaProfilerStop();
+#endif
     }
 
     dmmio::DCOO_destroy(&dcoo_A);

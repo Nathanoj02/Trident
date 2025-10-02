@@ -38,6 +38,10 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
             return;
         }
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("compression",2);
+#endif
+
         mmio::CSX<IT, VT> *compressed = nullptr;
         char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
         char tmpstr[20];
@@ -67,10 +71,18 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
         }
 
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+        NVTX_PUSH_RANGE("communication",3);
+#endif
+
         // Put tile on remote process
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
         holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target);
 
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
         /*  NOTE: I no more have to free it, since the buffer where reused by following cycles
          *     the vectors will be freed when the deconstructor will be called.
         if (spacomm != nullptr) {
@@ -326,6 +338,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // --------------------------
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("wait for data",3);
+#endif
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(internode_comm)
 #endif
@@ -337,6 +353,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(internode_comm)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
 #endif
 
 #if DEBUG_MAIN
@@ -351,6 +371,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
                                                             kwd_B.partitioning->group_rows, kwd_B.partitioning->group_cols);
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Intranode-steps",3);
 #endif
 
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
@@ -376,6 +400,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         CUDA_TIMER_STOP(intranode_comm)
 #endif
 
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
 #ifdef VERBOSE
         fprintf(stdout, "rank %d: A_remote (%dx%d) * B_node (%dx%d)\n", grid->global_rank,
                                                             A_remote.storage.numRows(), A_remote.storage.numCols(),
@@ -394,6 +422,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Local SpGEMM",0);
+#endif
+
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(comp_time)
 #endif
@@ -406,6 +439,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comp_time)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
 #endif
 
         // Round shift
