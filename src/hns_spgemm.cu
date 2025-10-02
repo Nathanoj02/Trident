@@ -39,7 +39,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         }
 
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE("compression",2);
+        NVTX_PUSH_RANGE_CUDA("compression",2,stream);
 #endif
 
         mmio::CSX<IT, VT> *compressed = nullptr;
@@ -73,7 +73,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
-        NVTX_PUSH_RANGE("communication",3);
+        NVTX_PUSH_RANGE_CUDA("communication",3,stream);
 #endif
 
         // Put tile on remote process
