@@ -41,6 +41,8 @@
 
 #include "MPIType.h"
 
+#define CUDA_API_PER_THREAD_DEFAULT_STREAM
+
 #include <mpi.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
