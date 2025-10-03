@@ -54,7 +54,7 @@ find_package(Threads REQUIRED)
 
 
 # CUDA FLAGS
-set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -ccbin=CC -O3")
+set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
 
 
 # MAIN HNS_SPGEMM LIBRARY

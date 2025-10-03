@@ -13,7 +13,9 @@ fi
 cd kokkos
 
 cmake -S . -B build \
+  -DCMAKE_C_COMPILER="$CMAKE_C_COMPILER" \
   -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
+  -DCMAKE_CUDA_COMPILER="${CUDA_COMPILER}" \
   -DCMAKE_INSTALL_PREFIX="$Kokkos_PREFIX" \
   -DKokkos_ENABLE_CUDA=ON \
   -DKokkos_ENABLE_CUDA_LAMBDA=ON \
@@ -37,11 +39,14 @@ fi
 cd kokkos-kernels
 
 cmake -S . -B build \
+  -DCMAKE_C_COMPILER="$CMAKE_C_COMPILER" \
   -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
+  -DCMAKE_CUDA_COMPILER="$CUDA_COMPILER" \
   -DCMAKE_INSTALL_PREFIX="$Kokkos_PREFIX" \
   -DKokkos_ROOT="$Kokkos_PREFIX" \
   -DKokkosKernels_ENABLE_TESTS=OFF \
   -DKokkosKernels_ENABLE_EXAMPLES=OFF \
+  -DKokkos_ENABLE_CUDA=ON \
   -DKokkosKernels_ENABLE_CUDA=ON \
   -DKokkosKernels_INST_DOUBLE=OFF \
   -DKokkosKernels_INST_FLOAT=ON \

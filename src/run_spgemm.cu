@@ -136,7 +136,7 @@ int main(int argc, char ** argv)
     std::string B_mtx_path = (std::string) config->matpathB;
     mmio::Matrix_Metadata *meta_B = new mmio::Matrix_Metadata();
     dmmio::DCOO<int32_t, float> *dcoo_B = dmmio::DCOO_read<int32_t, float>(
-        A_mtx_path.c_str(),
+        B_mtx_path.c_str(),
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
@@ -173,7 +173,7 @@ int main(int argc, char ** argv)
         {
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
             fflush(stdout);
-            sleep(0.2);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             MPI_Barrier(MPI_COMM_WORLD);
             if (!strcmp(config->impl, "main"))
             {
@@ -187,7 +187,7 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             delete dist_C;
             fflush(stdout);
-            sleep(2);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 

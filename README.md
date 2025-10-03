@@ -1,17 +1,16 @@
 # Hierarchical and Sparsity-Aware Sparse Matrix-Matrix Multiplication
 
-# Notes
-
-cmake on Perlmutter:
-```
-(CPU partition) cmake -B build -S . -DCMAKE_CXX_COMPILER=$(which g++) -DMPI_CXX_COMPILER=$(which mpicxx) -DKokkos_DIR=/global/homes/l/lpichett/kokkos-4.7.00/install/lib64/cmake/Kokkos/ (put your kokkos install path)
-(GPU partition) cmake -B build -S . -DCMAKE_CXX_COMPILER=$(which CC) -DMPI_CXX_COMPILER=$(which CC) -DKokkos_DIR=/global/homes/l/lpichett/kokkos-4.7.00/install/lib64/cmake/Kokkos/ (put your kokkos install path)
-```
-
 ## Modules
 
-<!-- - **Baldo**: `GCC/12.3.0 CUDA/12.3.2 OpenMpi/4.1.5-CUDA-12.3.2 OpenBLAS/0.3.23-GCC-12.3.0` -->
 - **Perlmutter**: `cmake/3.30.2 cudatoolkit/12.9 craype-hugepages2G cray-pmi/6.1.15`
+- **Leonardo**: `cmake/3.27.9 gcc/12.2.0 cuda/12.2 openmpi/4.1.6--gcc--12.2.0-cuda-12.2 openblas/0.3.26--gcc--12.2.0`
+
+# HnS-SpGEMM
+
+First, install Kokkos:
+```bash
+scripts/kokkos_install.sh
+```
 
 # Baselines
 
