@@ -596,7 +596,7 @@ __device__ int locate_segment_by_pos(int pos, int size, const IT* ptr_vec) {
 
 
 template<typename VT, typename PT>
-__global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *output, int *selected_vals) {
+__global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_vec, int m, const BMASK_TYPE* mask, VT *partial_output, int *selected_vals) {
     int tid = blockDim.x*blockIdx.x + threadIdx.x;
 /*
     // ----- Just for debug ----
@@ -609,7 +609,7 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
 	    int tmp_input   = input_vec[access_idx];
 	    int tmp_bsearch = locate_segment_by_pos(access_idx, m, ptr_vec);
 	    // if (tmp_bsearch >= m) MAKE_IT_CRASH  // Just to trigger an error
-	    output[access_idx] = 0;
+	    partial_output[access_idx] = 0;
 	}
 
 	if (access_idx<m-1) {
@@ -644,11 +644,28 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
     for (int i=0; i<ITEM_PER_THREAD ; i++) {  // I check block_offset + blockdispl[i] already since the structure of myflags[i]
         if (myflags[i]) {
             int block_offset = blockIdx.x * BLOCK_SIZE * ITEM_PER_THREAD;
-            output[block_offset + blockdispl[i]] = input_vec[tid*ITEM_PER_THREAD + i];
+            partial_output[block_offset + blockdispl[i]] = input_vec[tid*ITEM_PER_THREAD + i];
         }
     }
 
     if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
+}
+
+template<typename VT>
+__global__ void compact_select_entries_kernel(const VT* partial_output, int n, const int *selected_vals_psum, int m, int nselected, VT *output) {
+    int tid = blockDim.x*blockIdx.x + threadIdx.x;
+    int chunk_size = blockDim.x * ITEM_PER_THREAD ; // True just because I use the same blockDim of select_entries_kernel
+
+    // ---------- proper vector compact ----------
+    int access_point = tid;
+    for (int i=0; i < ITEM_PER_THREAD; i++) { // full grid coalesent access
+        if (access_point < nselected) {
+            int mydispl_idx = locate_segment_by_pos(access_point, m, selected_vals_psum);
+            int mydispl_val = selected_vals_psum[mydispl_idx];
+            output[access_point] = partial_output[(chunk_size * mydispl_idx) + (access_point - mydispl_val)];
+        }
+        access_point += blockDim.x*gridDim.x;
+    }
 }
 
 // #define DEBUG_SELECT_ENTRIES_CUDA
@@ -681,7 +698,8 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
     CUDA_CHECK(cudaMemcpyAsync(h_selected_per_block, selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    std::vector<int> h_displ(grid_size + 1);
+    // std::vector<int> h_displ(grid_size + 1);
+    int *h_displ = (int*)malloc(sizeof(int)*(grid_size + 1));
     h_displ[0] = 0;
     for (int i = 0; i < grid_size; i++) {
         h_displ[i+1] = h_displ[i] + h_selected_per_block[i];
@@ -695,13 +713,27 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
     fprintf(stdout, "nselected: %d\n", nselected);
 #endif
 
+    if (nselected>0) {
+        // Just because h_selected_per_block was already malloc with cudaMallocHost
+        mempcpy(h_selected_per_block, h_displ, sizeof(int)*(grid_size));
+        free(h_displ);
 
-    for (int i = 0; i < grid_size; i++) {
-        if (h_selected_per_block[i] > 0) {
-            int src_base = i * BLOCK_SIZE * ITEM_PER_THREAD;
-            CUDA_CHECK(cudaMemcpyAsync(output + h_displ[i], partial_output + src_base, sizeof(ET) * h_selected_per_block[i], cudaMemcpyDeviceToDevice, stream));
-        }
+        int *d_displ = selected_per_block;
+        CUDA_CHECK(cudaMemcpyAsync(d_displ, h_selected_per_block, sizeof(int)*grid_size, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        int new_grid_size = (nselected + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
+        compact_select_entries_kernel<<<new_grid_size, BLOCK_SIZE, 0, stream>>>(partial_output, n, d_displ, grid_size, nselected, output);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaStreamSynchronize(stream));
     }
+
+    // for (int i = 0; i < grid_size; i++) {
+    //     if (h_selected_per_block[i] > 0) {
+    //         int src_base = i * BLOCK_SIZE * ITEM_PER_THREAD;
+    //         CUDA_CHECK(cudaMemcpyAsync(output + h_displ[i], partial_output + src_base, sizeof(ET) * h_selected_per_block[i], cudaMemcpyDeviceToDevice, stream));
+    //     }
+    // }
 
     return(nselected);
 }
