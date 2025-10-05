@@ -25,12 +25,36 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
     CUDA_TIMER_DEF(compression_time)
+    CUDA_TIMER_DEF(mpi_put_time)
+#ifdef NVTX_PROFILING
+    int nvtx_color;
+    char compression_str[20], comunication_str[20], nvtx_char;
+    if (csx->majordim == mmio::MajorDim::ROWS) {
+            nvtx_color = 3;
+            nvtx_char  = 'B';
+    } else {
+            nvtx_color = 4;
+            nvtx_char  = 'A';
+    }
+    sprintf(compression_str,  "Compression %c", nvtx_char);
+    sprintf(comunication_str, "Put time %c", nvtx_char);
+#endif
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
+
     while (true)
     {
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA("Waiting_for_work",nvtx_color,stream);
+#endif
+
         // Wait until someone tells me to send them a tile
         int target = queue.wait();
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
@@ -39,7 +63,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         }
 
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE_CUDA("compression",2,stream);
+        NVTX_PUSH_RANGE_CUDA(compression_str,nvtx_color,stream);
 #endif
 
         mmio::CSX<IT, VT> *compressed = nullptr;
@@ -73,7 +97,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
-        NVTX_PUSH_RANGE_CUDA("communication",3,stream);
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
 
         // Put tile on remote process
@@ -339,7 +363,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // --------------------------
 
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE("wait for data",3);
+        NVTX_PUSH_RANGE("wait for data",2);
 #endif
 
 #ifdef DETAILED_TIMERS
@@ -374,7 +398,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE("Intranode-steps",3);
+        NVTX_PUSH_RANGE("A_csc2csr_conversion",1);
 #endif
 
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
@@ -388,6 +412,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(A_conversion)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+        NVTX_PUSH_RANGE("B_allghater",1);
 #endif
 
 #ifdef DETAILED_TIMERS

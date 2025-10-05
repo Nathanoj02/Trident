@@ -180,7 +180,7 @@ int main(int argc, char ** argv)
 
 #ifdef NVTX_PROFILING
         cudaProfilerStart();
-        NVTX_PUSH_RANGE("spcomm",2);
+        NVTX_PUSH_RANGE("spcomm",1);
 #endif
 
         CPU_TIMER_START(spacomm);
@@ -228,12 +228,13 @@ int main(int argc, char ** argv)
 
             MPI_Barrier(MPI_COMM_WORLD);
             delete dist_C;
-            fflush(stdout);
-            sleep(2);
 
 #ifdef NVTX_PROFILING
             NVTX_POP_RANGE;
 #endif
+
+            fflush(stdout);
+            sleep(2);
         }
 
 #ifdef NVTX_PROFILING
