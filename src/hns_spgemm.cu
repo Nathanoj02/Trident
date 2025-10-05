@@ -15,17 +15,14 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-#ifdef DEBUG_THREAD_COMPRESSION
-    int nsend = 0;
-#endif
     cudaStream_t stream;
     CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
     CUDA_CHECK(cudaStreamCreate(&stream));
 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
+    CPU_TIMER_DEF(internode_comm)
     CUDA_TIMER_DEF(compression_time)
-    CUDA_TIMER_DEF(mpi_put_time)
 #ifdef NVTX_PROFILING
     int nvtx_color;
     char compression_str[20], comunication_str[20], nvtx_char;
@@ -46,7 +43,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     {
 
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE_CUDA("Waiting_for_work",nvtx_color,stream);
+        NVTX_PUSH_RANGE_CUDA("Waiting_for_work",6,stream);
 #endif
 
         // Wait until someone tells me to send them a tile
@@ -71,14 +68,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         char tmpstr[20];
         sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
         if (spacomm != nullptr) {
-#ifdef DEBUG_THREAD_COMPRESSION
-                fprintf(stdout, "[%d, %c, %d] pre-compression: %d x %d with %d nnz, (val,idx,ptr): (%p,%p,%p), \n",
-                        rank, desc, nsend,
-                        csx->nrows, csx->ncols, csx->nnz,
-                        csx->val, csx->idx_vec, csx->ptr_vec
-                );
-                fflush(stdout);
-#endif
 
                 CUDA_TIMER_START(compression_time, stream)
                 compressed = spacomm->Compress(csx, target, compression_buffers, stream);
@@ -87,12 +76,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
                 double comp_rate = ((double)compressed->nnz) / ((double) csx->nnz);
                 fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, compressed->nnz, comp_rate);
-                ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr);
+                // ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr);
 
-#ifdef DEBUG_THREAD_COMPRESSION
-                fprintf(stdout, "[%d, %c, %d] post-compression: %d x %d with %d nnz\n", rank, desc, nsend, compressed->nrows, compressed->ncols, compressed->nnz);
-                // fflush(stdout);
-#endif
         }
 
 #ifdef NVTX_PROFILING
@@ -100,26 +85,21 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
 
+        CPU_TIMER_START(internode_comm)
+
         // Put tile on remote process
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
         holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target);
 
+        CPU_TIMER_STOP(internode_comm)
+
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
 #endif
-        /*  NOTE: I no more have to free it, since the buffer where reused by following cycles
-         *     the vectors will be freed when the deconstructor will be called.
-        if (spacomm != nullptr) {
-                CSX_destroy_device(&compressed);
-#ifdef DEBUG_THREAD_COMPRESSION
-                fprintf(stdout, "[%d, %c, %d] compressed csx destroyed successfully\n", rank, desc, nsend);
-#endif
-        }
-        */
 
-#ifdef DEBUG_THREAD_COMPRESSION
-        nsend++;
-#endif
+        // ccutils_timers::print_last_time(__timer_vals_internode_comm, "internode_comm", tmpstr);
+        printf("<%s>[%s] %lf ms, %lf ms\n", tmpstr, "internode_comm(comp+comm)",
+               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, __timer_vals_internode_comm.back());
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -252,7 +232,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
 #ifdef DETAILED_TIMERS
-    CUDA_TIMER_DEF(internode_comm)
+    CPU_TIMER_DEF(wait_for_input)
     CUDA_TIMER_DEF(intranode_comm)
     CUDA_TIMER_DEF(comp_time)
     CUDA_TIMER_DEF(A_conversion)
@@ -367,7 +347,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
 #ifdef DETAILED_TIMERS
-        CUDA_TIMER_START_DEFAULT(internode_comm)
+        CPU_TIMER_START(wait_for_input)
 #endif
 
         // Wait until I've been sent A and B
@@ -376,7 +356,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
 #ifdef DETAILED_TIMERS
-        CUDA_TIMER_STOP(internode_comm)
+        CPU_TIMER_STOP(wait_for_input)
 #endif
 
 #ifdef NVTX_PROFILING
@@ -490,7 +470,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #ifdef DETAILED_TIMERS
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", grid->global_rank);
-        TIMER_PRINT_WPREFIX_STR(internode_comm, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
         TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
         TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
         TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
