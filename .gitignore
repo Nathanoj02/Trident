@@ -9,3 +9,8 @@ build/
 build_*/
 results/
 SbatchMan/
+
+.venv/
+interactive_results/
+interactive_results_2/
+small_matrices/

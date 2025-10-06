@@ -282,7 +282,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     }
 
 
-    mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
+    mmio::CSX<IT, VT> *out = C_local.get_csx(); // KokkosWrap::rawptr_get(C_local);
     return out;
 }
 

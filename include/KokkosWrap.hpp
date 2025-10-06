@@ -30,10 +30,10 @@ namespace KokkosWrap {
     struct DistribuitedMatrix {
         dmmio::Partitioning* partitioning;  // still raw pointer to external partitioning
         // Instead of a raw union, use std::variant for safety
-        std::variant<
-            KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>,
-            KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>
-        > storage;
+        // std::variant<
+        //     KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>,
+        //     KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>
+        // > storage;
 
         mmio::CSX<KIT, VT>* mmio_csx;
 
@@ -69,11 +69,14 @@ namespace KokkosWrap {
         // Conversion
         KokkosCrs csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * mmio_csx);
 
+        // Change access structure
+        mmio::CSX<DIT,VT>* get_csx(void);
+
         // Free memory & decostructor
         void freeBuffers();
         ~LocalMatrix();
     };
-
+/*
     // These two function are exposed temporary for the test_kokkos C matrix
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr);
@@ -83,7 +86,7 @@ namespace KokkosWrap {
 
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr);
-
+*/
     template <typename IT, typename VT>
     struct Triple
     {
@@ -94,7 +97,7 @@ namespace KokkosWrap {
 
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr) {
-        //auto val_view     = kokkos_csr.values;
+        auto val_view     = kokkos_csr.values;
         auto rowmap_view  = kokkos_csr.graph.row_map;
         auto entries_view = kokkos_csr.graph.entries;
 
@@ -182,13 +185,15 @@ namespace KokkosWrap {
 
         // --- Step 2: Decide layout ---
         if (T == MajorDim::ROWS) {
-            auto csr  = coo_to_kokkos_crs(coo);
-            storage   = csr; // keep CSR
-            mmio_csx  = rawptr_get(csr);
+            // auto csr  = coo_to_kokkos_crs(coo);
+            // storage   = csr; // keep CSR
+            // mmio_csx  = rawptr_get(csr);
+            mmio_csx = coo_to_row_csx(coo);
         } else {
-            auto csc  = coo_to_kokkos_ccs(coo);
-            storage   = csc; // store CSC
-            mmio_csx  = rawptr_get(csc);
+            // auto csc  = coo_to_kokkos_ccs(coo);
+            // storage   = csc; // store CSC
+            // mmio_csx  = rawptr_get(csc);
+            mmio_csx = coo_to_col_csx(coo);
         }
 
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -290,6 +295,11 @@ namespace KokkosWrap {
         );
 
         storage = kokkos_csr;
+    }
+
+    template <typename KIT, typename DIT, typename VT>
+    mmio::CSX<DIT,VT>* LocalMatrix<KIT,DIT,VT>::get_csx(void) {
+        return(rawptr_get(storage));
     }
 
 

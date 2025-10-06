@@ -172,7 +172,7 @@ mmio::CSX<IT, VT> * hns_spgemm_get(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CPU_TIMER_STOP(spgemm);
 
 
-    mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(KC_local);
+    mmio::CSX<IT, VT> *out = KC_local.get_csx(); // KokkosWrap::rawptr_get(KC_local);
     int64_t nnz_local = out->nnz;
     MPI_Allreduce(MPI_IN_PLACE, &nnz_local, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
     if (grid->global_rank==0)
