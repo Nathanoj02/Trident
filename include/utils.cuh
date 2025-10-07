@@ -344,20 +344,103 @@ void par_print(const char * str, Args... args)
 
 template<typename IT, typename VT>
 void CSX_destroy_device(mmio::CSX<IT, VT> **csx) {
-if (*csx != NULL) {
-    if ((*csx)->ptr_vec != NULL) {
-    CUDA_CHECK(cudaFree((*csx)->ptr_vec));
-    (*csx)->ptr_vec = NULL;
+    if (*csx != NULL) {
+        if ((*csx)->ptr_vec != NULL) {
+        CUDA_CHECK(cudaFree((*csx)->ptr_vec));
+        (*csx)->ptr_vec = NULL;
+        }
+        if ((*csx)->idx_vec != NULL) {
+        CUDA_CHECK(cudaFree((*csx)->idx_vec));
+        (*csx)->idx_vec = NULL;
+        }
+        if ((*csx)->val != NULL) {
+        CUDA_CHECK(cudaFree((*csx)->val));
+        (*csx)->val = NULL;
+        }
+        free(*csx);
+        *csx = NULL;
     }
-    if ((*csx)->idx_vec != NULL) {
-    CUDA_CHECK(cudaFree((*csx)->idx_vec));
-    (*csx)->idx_vec = NULL;
-    }
-    if ((*csx)->val != NULL) {
-    CUDA_CHECK(cudaFree((*csx)->val));
-    (*csx)->val = NULL;
-    }
-    free(*csx);
-    *csx = NULL;
 }
-}
+
+template<typename IT, typename VT>
+struct CsxBuffers {
+    uint64_t nnz;
+    uint64_t ptr_dim;
+    uint64_t tmp_buf_size;
+    int initialized;
+    VT *d_node_vals;
+    IT *d_node_colinds;
+    IT *d_node_rowptrs;
+    void *d_tmp_buffer;
+
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim) {
+        initialized = 1;
+        tmp_buf_size = 0;
+        d_tmp_buffer = nullptr;
+
+        nnz = input_nnz;
+        ptr_dim = input_ptr_dim;
+        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+    }
+
+    CsxBuffers(void) {
+        initialized    = 0;
+        tmp_buf_size   = 0;
+        d_node_vals    = nullptr;
+        d_node_colinds = nullptr;
+        d_node_rowptrs = nullptr;
+        d_tmp_buffer   = nullptr;
+    }
+
+    void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) {
+        if (!initialized) {
+            new (this) CsxBuffers(input_nnz, input_ptr_dim);
+        } else {
+            if (input_nnz > nnz) {
+                CUDA_CHECK(cudaFree(d_node_vals));
+                CUDA_CHECK(cudaFree(d_node_colinds));
+
+                nnz = input_nnz;
+                CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
+                CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+            }
+            if (input_ptr_dim > ptr_dim) {
+                CUDA_CHECK(cudaFree(d_node_rowptrs));
+
+                ptr_dim = input_ptr_dim;
+                CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+            }
+        }
+    }
+
+    void ensure_tmp(uint64_t required_size) {
+        if (!initialized) {
+            new (this) CsxBuffers();
+        } else {
+            if (required_size > tmp_buf_size) {
+                if (tmp_buf_size>0) {CUDA_CHECK(cudaFree(d_tmp_buffer));}
+
+                tmp_buf_size = 2*required_size;
+                CUDA_CHECK(cudaMalloc(&d_tmp_buffer, tmp_buf_size));
+            }
+        }
+    }
+
+    ~CsxBuffers() {
+        if (initialized) {
+            cudaFree(d_node_colinds);
+            cudaFree(d_node_rowptrs);
+            cudaFree(d_node_vals);
+            initialized = 0;
+            ptr_dim = 0;
+            nnz = 0;
+
+            if (tmp_buf_size>0) {
+                CUDA_CHECK(cudaFree(d_tmp_buffer));
+                tmp_buf_size = 0;
+            }
+        }
+    }
+};
