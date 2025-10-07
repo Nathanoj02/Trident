@@ -9,13 +9,6 @@
     }                                                                \
 } while(0)
 
-
-#define FLUSH_WAIT(s) \
-    do { \
-        fflush(stdout); \
-        sleep(s); \
-    } while(0);
-
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
 typedef struct {
@@ -42,7 +35,7 @@ void print_h_arr(T * h_arr, const uint32_t n, const char * prefix, Args... args)
         std::cout<<h_arr[i]<<',';
     }
     std::cout<<'\n';
-    FLUSH_WAIT(0.5);
+    FLUSH_WAIT(500000);
 }
 
 
@@ -144,7 +137,7 @@ void print_rk0(dmmio::ProcessGrid * grid, const char * msg, Args... args)
         fprintf(stdout, msg, args...);
         fprintf(stdout, "\n");
     }
-    FLUSH_WAIT(0.5);
+    FLUSH_WAIT(500000);
 }
 
 
@@ -161,7 +154,7 @@ void print_rkn(int rank, const char * msg, Args... args)
     fprintf(stdout, "\n" GREEN "Process %d --- " RESET, rank);
     fprintf(stdout, msg, args...);
     fprintf(stdout, "\n");
-    FLUSH_WAIT(0.5);
+    FLUSH_WAIT(500000);
 }
 
 

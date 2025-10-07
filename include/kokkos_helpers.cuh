@@ -62,7 +62,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
     }
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Copied\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     std::sort(triples.begin(), triples.end(), 
         [](auto& t1, auto& t2)
@@ -72,7 +72,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
     );
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Sorted\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //            
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> rowptrs(coo->nrows + 1, 0);
@@ -104,7 +104,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
     std::inclusive_scan(rowptrs.begin() + 1, rowptrs.end(), rowptrs.begin() + 1);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Scanned\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
     IT * d_rowptrs = d2h_copy(rowptrs.data(), coo->nrows + 1);
@@ -112,7 +112,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
     VT * d_vals = d2h_copy(vals.data(), coo->nnz);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("converting\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //CUDA_CHECK(cudaDeviceSynchronize());
 
     // Convert to a kokkos crs matrix
@@ -135,7 +135,7 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
     }
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Copied\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     std::sort(triples.begin(), triples.end(),
         [](auto& t1, auto& t2)
@@ -145,7 +145,7 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
     );
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Sorted\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> rowptrs(coo->nrows + 1, 0);
@@ -177,7 +177,7 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
     std::inclusive_scan(rowptrs.begin() + 1, rowptrs.end(), rowptrs.begin() + 1);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Scanned\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
     // IT * d_rowptrs = d2h_copy(rowptrs.data(), coo->nrows + 1);
@@ -231,7 +231,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     }
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Copied\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     std::sort(triples.begin(), triples.end(),
         [](auto& t1, auto& t2)
@@ -241,7 +241,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     );
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Sorted\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> colptrs(coo->ncols + 1, 0);
@@ -273,7 +273,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     std::inclusive_scan(colptrs.begin() + 1, colptrs.end(), colptrs.begin() + 1);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Scanned\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
     IT * d_colptrs = d2h_copy(colptrs.data(), coo->ncols + 1);
@@ -281,7 +281,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     VT * d_vals = d2h_copy(vals.data(), coo->nnz);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("converting\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //CUDA_CHECK(cudaDeviceSynchronize());
 
     // Convert to a kokkos ccs matrix
@@ -304,7 +304,7 @@ mmio::CSX<IT,VT>* coo_to_col_csx(mmio::COO<IT, VT> * coo)
     }
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Copied\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     std::sort(triples.begin(), triples.end(),
         [](auto& t1, auto& t2)
@@ -314,7 +314,7 @@ mmio::CSX<IT,VT>* coo_to_col_csx(mmio::COO<IT, VT> * coo)
     );
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Sorted\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> colptrs(coo->ncols + 1, 0);
@@ -346,7 +346,7 @@ mmio::CSX<IT,VT>* coo_to_col_csx(mmio::COO<IT, VT> * coo)
     std::inclusive_scan(colptrs.begin() + 1, colptrs.end(), colptrs.begin() + 1);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Scanned\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
     IT * d_colptrs = h2d_copy(colptrs.data(), coo->ncols + 1);
@@ -354,7 +354,7 @@ mmio::CSX<IT,VT>* coo_to_col_csx(mmio::COO<IT, VT> * coo)
     VT * d_vals = h2d_copy(vals.data(), coo->nnz);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("converting\n"));
-    //FLUSH_WAIT(1.0);
+    //FLUSH_WAIT(1000000);
     //CUDA_CHECK(cudaDeviceSynchronize());
 
     // Convert to a kokkos ccs matrix

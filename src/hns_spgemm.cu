@@ -30,7 +30,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
-        FLUSH_WAIT(1.0);
+        FLUSH_WAIT(1000000);
 #endif
 
     }
@@ -133,7 +133,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         fprintf(stdout, "Iteration %d -- Rank %d asking for tile of A from %d and tile of B from %d\n", iter, grid->global_rank,
                 A_owner_global,
                 B_owner_global);
-        FLUSH_WAIT(1.0);
+        FLUSH_WAIT(1000000);
 #endif
 
         // Tell target I'm ready for tiles of A and B
@@ -156,7 +156,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d received tiles for iteration %d\n", grid->global_rank, iter);
-        FLUSH_WAIT(1.0);
+        FLUSH_WAIT(1000000);
 #endif
 
 #ifdef VERBOSE
@@ -250,7 +250,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
-    FLUSH_WAIT(1.0);
+    FLUSH_WAIT(1000000);
 #endif
 
     A_comm_thread.join();
@@ -261,7 +261,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 #if DEBUG_MAIN
     fprintf(stdout, "Main loop complete for rank %d\n", grid->global_rank);
-    FLUSH_WAIT(1.0);
+    FLUSH_WAIT(1000000);
 #endif
 
     MPI_Barrier(MPI_COMM_WORLD);
