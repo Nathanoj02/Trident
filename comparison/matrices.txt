@@ -1,5 +1,0 @@
-vanHeukelum/cage15
-Janna/Long_Coup_dt6
-Schenk/nlpkkt120
-DIMACS10/delaunay_n24
-Dziekonski/dielFilterV3real

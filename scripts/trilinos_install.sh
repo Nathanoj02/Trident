@@ -34,4 +34,4 @@ cmake -B build \
   .
 
 cd build
-make -j16 install
+make -j32 install

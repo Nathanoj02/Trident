@@ -49,6 +49,9 @@ perlmutter:
       - "craype-hugepages2G"
       - "cray-pmi/6.1.15"
       - "cray-mpich/8.1.30"
+    env:
+      - "CRAY_ACCEL_TARGET=nvidia80"
+      - "MPICH_GPU_SUPPORT_ENABLED=1"
 
   configs:
     - name: "1_nodes__{cpus_per_task}_cpus-per-task__mpi-async"
