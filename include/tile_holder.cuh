@@ -140,9 +140,66 @@ struct TileHolder
         return(form_mmiocsx(nrows, ncols, nnz, layout, d_vals_buf, d_inds_buf, d_ptrs_buf));
     }
 
+    struct NodeGatherBuffers {
+        uint64_t nnz;
+        uint64_t ptr_dim;
+        int initialized;
+        VT *d_node_vals;
+        IT *d_node_colinds;
+        IT *d_node_rowptrs;
+
+        NodeGatherBuffers(uint64_t input_nnz, uint64_t input_ptr_dim) {
+            nnz = input_nnz;
+            ptr_dim = input_ptr_dim;
+            initialized = 1;
+            CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
+            CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+            CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+        }
+
+        NodeGatherBuffers(void) {
+            initialized    = 0;
+            d_node_vals    = nullptr;
+            d_node_colinds = nullptr;
+            d_node_rowptrs = nullptr;
+        }
+
+        void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) {
+            if (!initialized) {
+                new (this) NodeGatherBuffers(input_nnz, input_ptr_dim);
+            } else {
+                if (input_nnz > nnz) {
+                    CUDA_CHECK(cudaFree(d_node_vals));
+                    CUDA_CHECK(cudaFree(d_node_colinds));
+
+                    nnz = input_nnz;
+                    CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
+                    CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+                }
+                if (input_ptr_dim > ptr_dim) {
+                    CUDA_CHECK(cudaFree(d_node_rowptrs));
+
+                    ptr_dim = input_ptr_dim;
+                    CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+                }
+            }
+        }
+
+        ~NodeGatherBuffers() {
+            if (initialized) {
+                cudaFree(d_node_colinds);
+                cudaFree(d_node_rowptrs);
+                cudaFree(d_node_vals);
+                initialized = 0;
+                ptr_dim = 0;
+                nnz = 0;
+            }
+        }
+    };
+
 
     int node_allgather(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid,
-                       VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs)
+                       VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs, NodeGatherBuffers* buffers=nullptr)
     {
 
         sync_buffers();
@@ -165,10 +222,18 @@ struct TileHolder
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
 
 
-        CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        if (buffers == nullptr) {
+            CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
+            CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
+            CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        } else {
+            buffers->ensure(total_nnz, total_nrows + 1);
+            *d_node_vals    = buffers->d_node_vals;
+            *d_node_colinds = buffers->d_node_colinds;
+            *d_node_rowptrs = buffers->d_node_rowptrs;
+        }
         CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
+
         
 
         // Allgatherv each buffer
@@ -195,13 +260,13 @@ struct TileHolder
         return(total_nnz);
     }
 
-    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, NodeGatherBuffers* buffers=nullptr)
     {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
         IT * d_node_colinds, * d_node_rowptrs;
-        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
+        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
 
 #ifdef PTR_CHECK
         CHECK_PTR(d_node_vals, here_iteration)
@@ -214,13 +279,13 @@ struct TileHolder
                          d_node_vals, d_node_colinds, d_node_rowptrs);
     }
 
-    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, NodeGatherBuffers* buffers=nullptr)
     {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
         IT * d_node_colinds, * d_node_rowptrs;
-        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
+        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
 
 #ifdef PTR_CHECK
         CHECK_PTR(d_node_vals, here_iteration)

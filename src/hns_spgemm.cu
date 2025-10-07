@@ -193,6 +193,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     TileHolder<IT, VT> A_holder(kwd_A.getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
+    typename TileHolder<IT, VT>::NodeGatherBuffers *gather_buffs = new typename TileHolder<IT, VT>::NodeGatherBuffers(B_max_nnz*1.5, kwd_B.getLocalNrows()*node_size +1);
 
     // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
@@ -403,7 +404,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         CUDA_TIMER_START_DEFAULT(intranode_comm)
 #endif
 
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid, gather_buffs));
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(intranode_comm)
@@ -461,7 +462,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // Cleanup
         // B_node underlying storage must be manually freed because its views are unmanaged
-        B_node.freeBuffers();
+        if (gather_buffs==nullptr) B_node.freeBuffers();
         if (Acsc_flag)
         {
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
