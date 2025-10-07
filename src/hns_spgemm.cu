@@ -115,6 +115,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
                                    SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
     // ------------------ Test compression on an independent buffer ------------------
+#ifdef NVTX_PROFILING
+    NVTX_PUSH_RANGE("Copy for bug fix",2);
+#endif
+
     mmio::CSX<IT,VT> *bku_B = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
     {
         bku_B->majordim = kwd_B.mmio_csx->majordim;
@@ -154,6 +158,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         bku_A->ptr_vec  = new_row;
         bku_A->idx_vec  = new_idx;
     }
+
+#ifdef NVTX_PROFILING
+    NVTX_POP_RANGE;
+#endif
     // -------------------------------------------------------------------------------
 
     // Process grid info

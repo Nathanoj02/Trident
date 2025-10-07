@@ -151,7 +151,7 @@ struct TileHolder
         const int total_nrows = node_size * nrows;
 
         // Convert rowtprs to nnz per row
-        rowptrs_to_rownnz(d_ptrs_buf, nrows);
+        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffer));
 
 
         // Get nnz per tile
@@ -198,7 +198,7 @@ struct TileHolder
 
 
         // Convert rownnz to rowptrs
-        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows);
+        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffer));
 
         return(total_nnz);
     }

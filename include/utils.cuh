@@ -284,7 +284,7 @@ struct cubTmpBuff {
     }
 
     ~cubTmpBuff() {
-        if (tmp_buffer) {
+        if (current_size > 0) {
             CUDA_CHECK(cudaFree(tmp_buffer));
         }
         tmp_buffer = nullptr;
@@ -366,17 +366,14 @@ template<typename IT, typename VT>
 struct CsxBuffers {
     uint64_t nnz;
     uint64_t ptr_dim;
-    uint64_t tmp_buf_size;
     int initialized;
     VT *d_node_vals;
     IT *d_node_colinds;
     IT *d_node_rowptrs;
-    void *d_tmp_buffer;
+    cubTmpBuff tmp_buffer;
 
     CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim) {
         initialized = 1;
-        tmp_buf_size = 0;
-        d_tmp_buffer = nullptr;
 
         nnz = input_nnz;
         ptr_dim = input_ptr_dim;
@@ -387,11 +384,9 @@ struct CsxBuffers {
 
     CsxBuffers(void) {
         initialized    = 0;
-        tmp_buf_size   = 0;
         d_node_vals    = nullptr;
         d_node_colinds = nullptr;
         d_node_rowptrs = nullptr;
-        d_tmp_buffer   = nullptr;
     }
 
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) {
@@ -418,14 +413,8 @@ struct CsxBuffers {
     void ensure_tmp(uint64_t required_size) {
         if (!initialized) {
             new (this) CsxBuffers();
-        } else {
-            if (required_size > tmp_buf_size) {
-                if (tmp_buf_size>0) {CUDA_CHECK(cudaFree(d_tmp_buffer));}
-
-                tmp_buf_size = 2*required_size;
-                CUDA_CHECK(cudaMalloc(&d_tmp_buffer, tmp_buf_size));
-            }
         }
+        tmp_buffer.ensure(required_size);
     }
 
     ~CsxBuffers() {
@@ -437,10 +426,11 @@ struct CsxBuffers {
             ptr_dim = 0;
             nnz = 0;
 
-            if (tmp_buf_size>0) {
-                CUDA_CHECK(cudaFree(d_tmp_buffer));
-                tmp_buf_size = 0;
-            }
+            // No more required since I use a cubTmpBuff
+            // if (tmp_buf_size>0) {
+            //     CUDA_CHECK(cudaFree(d_tmp_buffer));
+            //     tmp_buf_size = 0;
+            // }
         }
     }
 };

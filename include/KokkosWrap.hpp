@@ -411,7 +411,7 @@ namespace KokkosWrap {
             CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
         } else {
             buffers->ensure_tmp(buff_size);
-            d_buff = buffers->d_tmp_buffer;
+            d_buff = buffers->tmp_buffer.tmp_buffer;
         }
         CUSPARSE_CHECK(cusparseCsr2cscEx2(handle,
                                         ncols, nrows,
