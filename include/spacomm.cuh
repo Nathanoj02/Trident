@@ -469,7 +469,7 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0, c
     print_d_arr(raw_ptr, m, "input ptr: ");
 #endif
 
-    rowptrs_to_rownnz<IT>(raw_ptr, m-1); // The function require the number of rows/cols, not the real vecsize
+    rowptrs_to_rownnz<IT>(raw_ptr, m-1, stream, tmp_buff); // The function require the number of rows/cols, not the real vecsize
 
 #ifdef DEBUG_PTR_COMPRESS
     print_d_arr(raw_ptr, m, "rownnz ptr: ");
@@ -513,7 +513,7 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0, c
 #endif
 
     // raw_ptr = thrust::raw_pointer_cast(d_row.data());
-    rownnz_to_rowptrs<int>(raw_ptr, m-1); // The function require the number of rows/cols, not the real vecsize
+    rownnz_to_rowptrs<int>(raw_ptr, m-1, stream, tmp_buff); // The function require the number of rows/cols, not the real vecsize
 
 #ifdef DEBUG_PTR_COMPRESS
     cudaMemcpy(h_row.data(), raw_ptr, m * sizeof(IT), cudaMemcpyDeviceToHost);
