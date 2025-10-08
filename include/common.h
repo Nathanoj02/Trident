@@ -64,5 +64,7 @@
 
 extern FILE * logfile;
 
+// #define P2P_ALLGATHERV // Standard allgatherv seam to stage on the host even when cuda-aware
+// #define DEBUG_P2P_ALLGATHERV
 
 #endif

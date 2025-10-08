@@ -187,6 +187,7 @@ struct TileHolder
 
         // Allgatherv each buffer
 
+#ifndef P2P_ALLGATHERV
         // Values
         MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
@@ -196,7 +197,58 @@ struct TileHolder
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
-        
+#else
+        int tag;
+        MPI_Status  *statuses = (MPI_Status*) malloc(2*(grid->node_size) * sizeof(MPI_Status));
+        MPI_Request *requests = (MPI_Request*)malloc(2*(grid->node_size) * sizeof(MPI_Request));
+        for (int i=0; i<grid->node_size; i++) {
+            if (i!=(grid->node_rank)) {
+                tag = (grid->node_rank) * (grid->node_size) + i;
+                MPI_Isend(d_vals_buf, nnz, MPIType<VT>(), i, tag, grid->node_comm, &(requests[i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+
+                tag = i * (grid->node_size) + (grid->node_rank);
+                MPI_Irecv(d_node_vals + displs[i], node_nnz[i], MPIType<VT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+            } else {
+                // Local communication performed with a D2D copy
+                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
+            }
+        }
+        MPI_Waitall(2*(grid->node_size), requests, statuses);
+        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
+
+        for (int i=0; i<grid->node_size; i++) {
+            if (i!=(grid->node_rank)) {
+                tag = (grid->node_rank) * (grid->node_size) + i;
+                MPI_Isend(d_inds_buf, nnz, MPIType<IT>(), i, tag, grid->node_comm, &(requests[i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+
+                tag = i * (grid->node_size) + (grid->node_rank);
+                MPI_Irecv(d_node_colinds + displs[i], node_nnz[i], MPIType<IT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+            } else {
+                // Local communication performed with a D2D copy
+                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
+            }
+        }
+        MPI_Waitall(2*(grid->node_size), requests, statuses);
+        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
+        free(requests);
+        free(statuses);
+#endif
         // Rowptrs
         MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),
                       (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),
