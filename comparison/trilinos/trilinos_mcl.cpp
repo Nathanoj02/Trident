@@ -2,6 +2,7 @@
 #include <Tpetra_CrsMatrix.hpp>
 #include <MatrixMarket_Tpetra.hpp>
 #include <TpetraExt_MatrixMatrix.hpp>
+#include <Tpetra_MultiVector.hpp>
 
 #include <ccutils/timers.h>
 #include <ccutils/cuda/cuda_utils.hpp>
@@ -16,9 +17,7 @@
 #include "../include/mcl/args.hpp"
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *                          MCL TRILINOS
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 using matrix_t = Tpetra::CrsMatrix<float, int32_t, long long>;
 using graph_t = Tpetra::CrsGraph<int32_t, long long>;
@@ -30,62 +29,74 @@ using Teuchos::rcp;
 using Teuchos::Comm;
 using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
 
-RCP<matrix_t> prune_square(RCP<matrix_t>&& A, const float tol) {
-    const GO nnz = A->getLocalNumEntries();
-    const GO nrows =  A->getRowMap()->getLocalNumElements();
-
-    auto A_loc = A->getLocalMatrixDevice();
-    float * values = d2h_copy(A_loc.values.data(), nnz);
-    int32_t * colinds = d2h_copy(A_loc.graph.entries.data(), nnz);
-    size_t offset = 0;
-    GO pruned_nnz = 0;
+/*
+ * Prune entries with absolute value <= tol.
+ * NOTE: This no longer squares values (inflation is done separately).
+ */
+RCP<matrix_t> prune_small(RCP<matrix_t>&& A, const float tol) {
+    auto rowMap = A->getRowMap();
+    const LO nrows = rowMap->getLocalNumElements();
+    
+    // Single pass: count non-zeros per row while extracting data
     std::vector<size_t> new_rowptrs(nrows, 0);
-    for (LO row = 0; row < nrows; row++) {
+    std::vector<std::vector<LO>> row_colinds(nrows);
+    std::vector<std::vector<SC>> row_values(nrows);
+    
+    // Pre-allocate to avoid reallocations (assume ~same sparsity)
+    for (LO row = 0; row < nrows; ++row) {
         size_t row_nnz = A->getNumEntriesInLocalRow(row);
-
-        size_t count = 0;
-        for (size_t k=0; k<row_nnz; k++) {
-            if (abs(values[k + offset]) > tol) {
-                new_rowptrs[row] += 1;
-            }
-            count++;
-        }
-
-        offset += row_nnz;
-        pruned_nnz += count;
+        row_colinds[row].reserve(row_nnz);
+        row_values[row].reserve(row_nnz);
     }
-
-	RCP<matrix_t> Anew = rcp(new matrix_t(A->getRowMap(), A->getColMap(), Teuchos::ArrayView<size_t>(new_rowptrs)));
-
-    offset = 0;
-    for (LO row = 0; row < nrows; row++) {
-        std::vector<LO> new_colinds;
-        std::vector<SC> new_values;
-        GO global_row = A->getRowMap()->getGlobalElement(row);
-        size_t row_nnz = A->getNumEntriesInLocalRow(row);
-        for (size_t k=0; k<row_nnz; k++) {
-            if (abs(values[k + offset]) > tol) {
-                new_colinds.push_back(colinds[k + offset]);
-                new_values.push_back((values[k + offset] * values[k + offset])); // Square
+    
+    // Single pass through matrix
+    for (LO row = 0; row < nrows; ++row) {
+        size_t numEntries = A->getNumEntriesInLocalRow(row);
+        if (numEntries == 0) continue;
+        
+        typename matrix_t::nonconst_local_inds_host_view_type indices("inds", numEntries);
+        typename matrix_t::nonconst_values_host_view_type values("vals", numEntries);
+        
+        size_t got = 0;
+        A->getLocalRowCopy(row, indices, values, got);
+        
+        for (size_t j = 0; j < got; ++j) {
+            if (std::abs(values(j)) > tol) {
+                row_colinds[row].push_back(indices(j));
+                row_values[row].push_back(values(j));
             }
         }
-
-        //Anew->insertGlobalValues(global_row, new_colinds.size(), new_values.data(), new_colinds.data());
-        Anew->insertLocalValues(row, new_colinds.size(), new_values.data(), new_colinds.data());
-
-        offset += row_nnz;
+        new_rowptrs[row] = row_colinds[row].size();
     }
-    free(colinds);
-    free(values);
-
-    //Anew->fillComplete(A->getColMap(), A->getRowMap());
-    Anew->fillComplete();
-
+    
+    // Create new matrix with proper sizing
+    RCP<matrix_t> Anew = rcp(new matrix_t(
+        A->getRowMap(), 
+        A->getColMap(), 
+        Teuchos::ArrayView<const size_t>(new_rowptrs.data(), new_rowptrs.size())
+    ));
+    
+    // Insert all values (already filtered)
+    for (LO row = 0; row < nrows; ++row) {
+        if (!row_colinds[row].empty()) {
+            Anew->insertLocalValues(
+                row, 
+                row_colinds[row].size(), 
+                row_values[row].data(), 
+                row_colinds[row].data()
+            );
+        }
+    }
+    
+    Anew->fillComplete(A->getDomainMap(), A->getRangeMap());
+    
     return Anew;
 }
 
+/*
+ * Read matrix (unchanged)
+ */
 RCP<matrix_t> read_trilinos(const char * matpath, RCP<const Comm<int>>& comm) {
-    // First, is it a pattern matrix?
     std::ifstream ifs;
     ifs.open(matpath);
     std::string banner;
@@ -101,49 +112,223 @@ RCP<matrix_t> read_trilinos(const char * matpath, RCP<const Comm<int>>& comm) {
     return reader_t::readSparseFile(matpath, comm);
 }
 
-void print_matrix(RCP<matrix_t> &M, const int myid) {
-    M->fillComplete();
+/*
+ * Print matrix (unchanged)
+ */
+void print_matrix(const RCP<matrix_t> &M, const int myid) {
     auto rowMap = M->getRowMap();
     auto colMap = M->getColMap();
-    LO localNumRows = rowMap->getLocalNumElements();
+    const LO localNumRows = rowMap->getLocalNumElements();
+
+    const GO numGlobalRows = M->getGlobalNumRows();
+    const GO numGlobalCols = M->getGlobalNumCols();
+
+    std::vector<std::vector<SC>> localBlock(localNumRows,
+                                                std::vector<SC>(numGlobalCols, 0.0));
 
     for (LO localRow = 0; localRow < localNumRows; ++localRow) {
-        GO globalRow = rowMap->getGlobalElement(localRow);
         size_t numEntries = M->getNumEntriesInLocalRow(localRow);
 
-        // Allocate Kokkos host views
         using local_inds_view_t = typename matrix_t::nonconst_local_inds_host_view_type;
         using values_view_t     = typename matrix_t::nonconst_values_host_view_type;
 
         local_inds_view_t indices("indices", numEntries);
         values_view_t     values("values", numEntries);
-
         size_t actualNumEntries = 0;
         M->getLocalRowCopy(localRow, indices, values, actualNumEntries);
 
-        std::vector<SC> row(colMap->getGlobalNumElements(), 0.0);
-        for (size_t j = 0; j < actualNumEntries; ++j) {
-            GO globalCol = colMap->getGlobalElement(indices(j));
-            if (globalCol < (GO)row.size())
-                row[globalCol] = values(j);
-        }
+        const GO globalRow = rowMap->getGlobalElement(localRow);
 
-        if (myid == 0) {
-            for (size_t j = 0; j < row.size(); ++j)
-                printf("%.6g%s", row[j], (j + 1 == row.size()) ? "\n" : " ");
+        for (size_t j = 0; j < actualNumEntries; ++j) {
+            const GO globalCol = colMap->getGlobalElement(indices(j));
+            if (globalCol >= 0 && globalCol < numGlobalCols)
+                localBlock[localRow][globalCol] = values(j);
+        }
+    }
+
+    for (int rank = 0; rank < M->getComm()->getSize(); ++rank) {
+        MPI_Barrier(MPI_COMM_WORLD);
+        if (myid == rank) {
+            for (LO localRow = 0; localRow < localNumRows; ++localRow) {
+                const GO globalRow = rowMap->getGlobalElement(localRow);
+                printf("[%4lld] ", static_cast<long long>(globalRow));
+                for (GO col = 0; col < numGlobalCols; ++col)
+                    printf("%8.4f ", localBlock[localRow][col]);
+                printf("\n");
+            }
+            fflush(stdout);
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
 }
 
-void mcl_trilinos(const int myid, const MLCArgs *args) {
-    Tpetra::ScopeGuard scope(NULL, NULL);
+/*
+ * Set diagonal (self loops) to 1.0 in-place.
+ * If diagonal position exists, replace the value; otherwise insert it.
+ */
+void set_self_loops(RCP<matrix_t> &A) {
+    auto rowMap = A->getRowMap();
+    auto colMap = A->getColMap();
+    const LO localNumRows = rowMap->getLocalNumElements();
+    SC one = static_cast<SC>(1.0);
+    
+    // std::cout << "isFillActive: " << A->isFillActive() << std::endl;
+    // std::cout << "isFillComplete: " << A->isFillComplete() << std::endl;
+    
+    // Handle all possible states
+    if (A->isFillComplete()) {
+        A->resumeFill();
+    } else if (!A->isFillActive()) {
+        throw std::runtime_error("Matrix is in invalid state (neither active nor complete)");
+    }
+    
+    for (LO lrow = 0; lrow < localNumRows; ++lrow) {
+        GO grow = rowMap->getGlobalElement(lrow);
+        LO lcol = colMap->getLocalElement(grow);
+        
+        if (lcol != Teuchos::OrdinalTraits<LO>::invalid()) {
+            size_t numEntries = A->getNumEntriesInLocalRow(lrow);
+            if (numEntries > 0) {
+                typename matrix_t::nonconst_local_inds_host_view_type indices("i", numEntries);
+                typename matrix_t::nonconst_values_host_view_type values("v", numEntries);
+                size_t got = 0;
+                A->getLocalRowCopy(lrow, indices, values, got);
+                
+                for (size_t j = 0; j < got; ++j) {
+                    if (indices(j) == lcol) {
+                        A->replaceLocalValues(lrow, 1, &one, &lcol);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    A->fillComplete(A->getDomainMap(), A->getRangeMap());
+}
+
+/*
+ * Normalize matrix by columns so that each column sums to 1.
+ * This uses: col_sums = A^T * ones, where ones is a vector of ones sized by number of rows.
+ */
+void normalize_columns(RCP<matrix_t> &A) {
+    using vector_t = Tpetra::Vector<SC, LO, GO>;
+    using mv_t     = Tpetra::MultiVector<SC, LO, GO>;
+
+    auto rowMap = A->getRowMap();
+    auto domainMap = A->getDomainMap();  // This is what you actually need
+
+    // Step 1: compute column sums
+    RCP<mv_t> ones = rcp(new mv_t(rowMap, 1));
+    ones->putScalar(1.0);
+
+    RCP<mv_t> col_sums_mv = rcp(new mv_t(domainMap, 1));  // Use domainMap!
+    A->apply(*ones, *col_sums_mv, Teuchos::TRANS);
+
+    // Step 2: copy and invert values
+    RCP<vector_t> col_sums = rcp(new vector_t(domainMap));  // Use domainMap!
+    {
+        auto mv_h = col_sums_mv->getLocalViewHost(Tpetra::Access::ReadOnly);
+        auto vec_h = col_sums->getLocalViewHost(Tpetra::Access::ReadWrite);
+        const size_t nLocalCols = vec_h.extent(0);
+        for (size_t i = 0; i < nLocalCols; ++i) {
+            SC s = mv_h(i,0);
+            vec_h(i,0) = (s > 1e-20) ? 1.0 / s : 0.0;
+        }
+    }
+
+    // Step 3: scale columns
+    A->rightScale(*col_sums);
+}
+
+/*
+ * Inflation: raise each entry to power r (for MCL r is typically >1; here r=2)
+ * Then normalize by columns to restore stochastic property.
+ * This performs the operation in-place.
+ */
+void inflation(RCP<matrix_t> &A, int myid, const float power = 2.0f) {
+    // Ensure matrix is in correct state at start
+    bool wasFillComplete = A->isFillComplete();
+    if (wasFillComplete) {
+        A->resumeFill();
+    }
+    
+    auto rowMap = A->getRowMap();
+    const LO localNumRows = rowMap->getLocalNumElements();
+
+    for (LO lrow = 0; lrow < localNumRows; ++lrow) {
+        size_t numEntries = A->getNumEntriesInLocalRow(lrow);
+        if (numEntries == 0) continue;
+        
+        typename matrix_t::nonconst_local_inds_host_view_type indices("inds", numEntries);
+        typename matrix_t::nonconst_values_host_view_type values("vals", numEntries);
+        
+        size_t got = 0;
+        A->getLocalRowCopy(lrow, indices, values, got);
+        
+        for (size_t j = 0; j < got; ++j) {
+            values(j) = std::pow(values(j), power);
+        }
+        
+        A->replaceLocalValues(lrow, got, values.data(), indices.data());
+    }
+    
+    // Ensure fillComplete is called before normalize_columns
+    if (A->isFillActive()) {
+        A->fillComplete(A->getDomainMap(), A->getRangeMap());
+    }
+
+    #ifdef DEBUG
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+        if(myid==0) printf("--- A_next (after inflation squaring) ---\n");
+        print_matrix(A, myid);
+    #endif
+    
+    normalize_columns(A);
+}
+
+/*
+ * Main MCL routine - updated to use normalize/inflate/prune
+ */
+void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
+    Tpetra::ScopeGuard scope(&argc, &argv);
     {
         RCP<const Comm<int>> comm = Tpetra::getDefaultComm();
         RCP<matrix_t> A1,A2;
+        if(myid==0) fprintf(stdout, "\nReading matrix\n");
         A1 = read_trilinos(args->mtx_path, comm);
         A2 = rcp(new matrix_t(*A1));
+        if(myid==0) fprintf(stdout, "Matrix read, OK\n");
 
+        // OPTIONAL: set diagonal elements to 1 if requested (CLI flag)
+        // NOTE: Change args->add_diag to the actual field in your MLCArgs struct if different.
+        if (args->add_diag) {
+            if(myid==0) fprintf(stdout, "Adding self-loops (diag = 1)\n");
+            set_self_loops(A1);
+            // After modifying structure, ensure it's fillComplete
+            A1->fillComplete();
+            A2 = rcp(new matrix_t(*A1));
+        }
+        
+        #ifdef DEBUG
+            if(myid==0) printf("--- Initial Matrix ---\n");
+            print_matrix(A1, myid);
+        #endif
+
+        // Normalize initially to create a stochastic matrix (columns sum to 1)
+        if(myid==0) fprintf(stdout, "Normalizing initial matrix (columns sum to 1)\n");
+        normalize_columns(A1);
+        A2 = rcp(new matrix_t(*A1)); // keep A2 consistent
+
+        #ifdef DEBUG
+            fflush(stdout);
+            MPI_Barrier(MPI_COMM_WORLD);
+            if(myid==0) printf("--- Initial Normalized Matrix ---\n");
+            print_matrix(A1, myid);
+        #endif
+
+        std::string timer_prefix = "Timer rank " + std::to_string(myid);
         int iter = 0;
         std::vector<GO> nnz(args->max_iter, 0);
         std::vector<GO> nnz_pruned(args->max_iter, 0);
@@ -156,52 +341,70 @@ void mcl_trilinos(const int myid, const MLCArgs *args) {
             fflush(stdout);
             MPI_Barrier(MPI_COMM_WORLD);
 
-            // Neighbors 
+            // Expansion: square the matrix (A_next = A1 * A2)
             CPU_TIMER_START(mcl_spgemm);
             RCP<matrix_t> A_next = rcp(new matrix_t(A1->getRowMap(), 0));
             Tpetra::MatrixMatrix::Multiply(*A1, false, *A2, false, *A_next, true);
             CPU_TIMER_STOP(mcl_spgemm)
-            TIMER_PRINT_LAST(mcl_spgemm)
+            TIMER_PRINT_LAST_WPREFIX_STR(mcl_spgemm, timer_prefix.c_str())
             #ifdef DEBUG
-                if(myid==0) printf("--- A_next ---");
+                fflush(stdout);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if(myid==0) printf("--- A_next (after expansion) ---\n");
                 print_matrix(A_next, myid);
             #endif
 
-
             nnz[iter] = A_next->getGlobalNumEntries();
-            
-            auto A_next_pruned = prune_square(std::move(A_next), args->pruning_tol);
+
+            // Inflation: raise entries to power (2) and normalize by column
+            inflation(A_next, myid, 2.0f);
+
+            #ifdef DEBUG
+                fflush(stdout);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if(myid==0) printf("--- A_next (after inflation) ---\n");
+                print_matrix(A_next, myid);
+            #endif
+
+            // Prune small values
+            auto A_next_pruned = prune_small(std::move(A_next), args->pruning_tol);
             nnz_pruned[iter] = A_next_pruned->getGlobalNumEntries();
             #ifdef DEBUG
-                if(myid==0) printf("--- A_next pruned ---");
+                fflush(stdout);
+                MPI_Barrier(MPI_COMM_WORLD);
+                if(myid==0) printf("--- A_next pruned ---\n");
                 print_matrix(A_next_pruned, myid);
             #endif
 
+            // Prepare for next iteration
             A1 = A_next_pruned;
-            A2 = A_next_pruned;
+            A2 = A1; // both point to same matrix for next expansion
             ++iter;
+
+            fflush(stdout);
             MPI_Barrier(MPI_COMM_WORLD);
         }
         CPU_TIMER_STOP(mcl)
 
         if(myid==0) {
-            printf("NNZ A_next: ");
-            for (size_t i = 0; i < iter; ++i) printf("%lu ", nnz[i]);
-            printf("\nNNZ A_next post prune: ");
-            for (size_t i = 0; i < iter; ++i) printf("%lu ", nnz_pruned[i]);
             printf("\n===================== Done MCL in %d iterations ======================\n", iter);
+            printf("NNZ A_next:            ");
+            for (size_t i = 0; i < iter; ++i) printf("%8lu ", nnz[i]);
+            printf("\nNNZ A_next post prune: ");
+            for (size_t i = 0; i < iter; ++i) printf("%8lu ", nnz_pruned[i]);
+            printf("\n");
         }
         FLUSH_WAIT(500000)
-        TIMER_PRINT(mcl)
+        TIMER_PRINT_WPREFIX_STR(mcl, timer_prefix.c_str())
     }
 }
 
 
 int main(int argc, char *argv[]) {
-	int myid, ntask;
-	MPI_Init(&argc, &argv);
-	MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-	MPI_Comm_size(MPI_COMM_WORLD, &ntask);
+    int myid, ntask;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+    MPI_Comm_size(MPI_COMM_WORLD, &ntask);
 
     MLCArgs *args = (MLCArgs*)malloc(sizeof(MLCArgs));
     parse_args(argc, argv, args);
@@ -209,16 +412,14 @@ int main(int argc, char *argv[]) {
         printf("\n================= TRILINOS MCL ==================\n");
         printf("Matrix: %s\n", args->mtx_name);
         printf("Max iterations: %u\n", args->max_iter);
-        printf("Pruning tolerance: %s\n", args->pruning_tol);
+        printf("Pruning tolerance: %f\n", args->pruning_tol);
+        printf("Add diag (self loops): %d\n", args->add_diag);
     }
     FLUSH_WAIT(200000);
 
-    mcl_trilinos(myid, args);
+    mcl_trilinos(argc, argv, myid, args);
 
     free(args);
-	MPI_Finalize();
-	return(EXIT_SUCCESS);
+    MPI_Finalize();
+    return(EXIT_SUCCESS);
 }
-
-// Usage example:
-// srun --nodes 1 --qos debug --time 00:01:00 --constraint gpu --ntasks 4 --gpus 4 --account m4646_g comparison/build_trilinos/trilinos_mcl --mtx small_matrices/mcl_and_bfs_test_graph.mtx --pruning_tol 0.01 --max_iter 2

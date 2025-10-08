@@ -16,4 +16,5 @@ cmake -S . -B build_trilinos \
   -DCMAKE_BUILD_TYPE=RELEASE 
 
 cd build_trilinos
-make VERBOSE=1 trilinos_mcl -j16 
+make trilinos_mcl -j16
+make trilinos_mcl_dbg -j16

@@ -32,6 +32,7 @@ find_package(Teuchos REQUIRED Teuchos)
 
 
 # Targets
+
 set(COMMON_LIBS Tpetra::all_libs Teuchos::all_libs MPI::MPI_CXX ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi)
 set(COMMON_FALGS -O3) # -target-accel=nvidia80")
 
@@ -43,3 +44,8 @@ add_executable(trilinos_mcl trilinos/trilinos_mcl.cpp)
 target_link_libraries(trilinos_mcl PRIVATE ${COMMON_LIBS})
 target_include_directories(trilinos_mcl PRIVATE include/mcl)
 target_compile_options(trilinos_mcl PRIVATE ${COMMON_FALGS})
+
+add_executable(trilinos_mcl_dbg trilinos/trilinos_mcl.cpp)
+target_link_libraries(trilinos_mcl_dbg PRIVATE ${COMMON_LIBS})
+target_include_directories(trilinos_mcl_dbg PRIVATE include/mcl)
+target_compile_options(trilinos_mcl_dbg PRIVATE ${COMMON_FALGS} -DDEBUG=1)

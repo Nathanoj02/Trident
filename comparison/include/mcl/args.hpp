@@ -5,6 +5,7 @@ struct MLCArgs {
     char *mtx_name;
     uint32_t max_iter;
     float pruning_tol;
+    bool add_diag;
 };
 
 char* extract_matrix_name(const char* filepath) {
@@ -50,10 +51,13 @@ void parse_args(int argc, char **argv, MLCArgs *args) {
         if (!strcmp(argname, "--mtx")) {
             args->mtx_path = argv[i+1];
             args->mtx_name = extract_matrix_name(args->mtx_path);
-        } else if (!strcmp(argname, "--pruning_tol")) {
+        } else if (!strcmp(argname, "--pruning-tol")) {
             args->pruning_tol = atof(argv[i+1]);
-        } else if (!strcmp(argname, "--max_iter")) {
+        } else if (!strcmp(argname, "--max-iter")) {
             args->max_iter = atoi(argv[i+1]);
+        } else if (!strcmp(argname, "--add-self-loops")) {
+            args->add_diag = true;
+            inc = 1;
         }
     }
 
