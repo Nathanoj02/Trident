@@ -66,20 +66,11 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
         mmio::CSX<IT, VT> *compressed = nullptr;
-        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
-        char tmpstr[20];
-        sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
         if (spacomm != nullptr) {
-
                 CUDA_TIMER_START(compression_time, stream)
                 compressed = spacomm->Compress(csx, target, compression_buffers, stream);
                 CUDA_TIMER_STOP(compression_time)
                 CUDA_CHECK(cudaStreamSynchronize(stream));
-
-                double comp_rate = ((double)compressed->nnz) / ((double) csx->nnz);
-                fprintf(stdout, "<%s> Comp-rate: %d,%d,%lf\n", tmpstr, csx->nnz, compressed->nnz, comp_rate);
-                // ccutils_timers::print_last_time(__timer_vals_compression_time, "compression_time", tmpstr);
-
         }
 
 #ifdef NVTX_PROFILING
@@ -99,9 +90,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         NVTX_POP_RANGE;
 #endif
 
-        // ccutils_timers::print_last_time(__timer_vals_internode_comm, "internode_comm", tmpstr);
-        printf("<%s>[%s] %lf ms, %lf ms\n", tmpstr, "internode_comm(comp+comm)",
-               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, __timer_vals_internode_comm.back());
+        char tmpstr[20];
+        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
+        printf("<%s>[%s] %lf ms, %lf ms, %d B, %d B\n", tmpstr, "internode_comm(comp+comm+size)",
+               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, __timer_vals_internode_comm.back(),
+               csx->nnz * (sizeof(IT)+sizeof(VT)), tosend->nnz * (sizeof(IT)+sizeof(VT)));
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
