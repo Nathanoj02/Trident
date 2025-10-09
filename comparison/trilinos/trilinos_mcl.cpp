@@ -172,39 +172,98 @@ void set_self_loops(RCP<matrix_t> &A) {
     const LO localNumRows = rowMap->getLocalNumElements();
     SC one = static_cast<SC>(1.0);
     
-    // std::cout << "isFillActive: " << A->isFillActive() << std::endl;
-    // std::cout << "isFillComplete: " << A->isFillComplete() << std::endl;
-    
-    // Handle all possible states
-    if (A->isFillComplete()) {
-        A->resumeFill();
-    } else if (!A->isFillActive()) {
-        throw std::runtime_error("Matrix is in invalid state (neither active nor complete)");
-    }
+    // Count entries per row (will be same or +1 if diagonal doesn't exist)
+    std::vector<size_t> entriesPerRow(localNumRows);
+    std::vector<bool> hasDiag(localNumRows, false);
     
     for (LO lrow = 0; lrow < localNumRows; ++lrow) {
         GO grow = rowMap->getGlobalElement(lrow);
         LO lcol = colMap->getLocalElement(grow);
         
-        if (lcol != Teuchos::OrdinalTraits<LO>::invalid()) {
-            size_t numEntries = A->getNumEntriesInLocalRow(lrow);
-            if (numEntries > 0) {
-                typename matrix_t::nonconst_local_inds_host_view_type indices("i", numEntries);
-                typename matrix_t::nonconst_values_host_view_type values("v", numEntries);
-                size_t got = 0;
-                A->getLocalRowCopy(lrow, indices, values, got);
-                
-                for (size_t j = 0; j < got; ++j) {
-                    if (indices(j) == lcol) {
-                        A->replaceLocalValues(lrow, 1, &one, &lcol);
-                        break;
-                    }
+        size_t numEntries = A->getNumEntriesInLocalRow(lrow);
+        entriesPerRow[lrow] = numEntries;
+        
+        if (lcol != Teuchos::OrdinalTraits<LO>::invalid() && numEntries > 0) {
+            typename matrix_t::nonconst_local_inds_host_view_type indices("i", numEntries);
+            typename matrix_t::nonconst_values_host_view_type values("v", numEntries);
+            size_t got = 0;
+            A->getLocalRowCopy(lrow, indices, values, got);
+            
+            for (size_t j = 0; j < got; ++j) {
+                if (indices(j) == lcol) {
+                    hasDiag[lrow] = true;
+                    break;
                 }
+            }
+            
+            // If diagonal doesn't exist, we'll need one more entry
+            if (!hasDiag[lrow]) {
+                entriesPerRow[lrow]++;
+            }
+        } else if (lcol != Teuchos::OrdinalTraits<LO>::invalid()) {
+            // Row is empty but diagonal is valid - add it
+            entriesPerRow[lrow] = 1;
+        }
+    }
+    
+    // Create new matrix
+    RCP<matrix_t> Anew = rcp(new matrix_t(
+        rowMap, colMap,
+        Teuchos::ArrayView<const size_t>(entriesPerRow.data(), entriesPerRow.size())
+    ));
+    
+    // Fill new matrix
+    for (LO lrow = 0; lrow < localNumRows; ++lrow) {
+        GO grow = rowMap->getGlobalElement(lrow);
+        LO lcol = colMap->getLocalElement(grow);
+        
+        size_t numEntries = A->getNumEntriesInLocalRow(lrow);
+        
+        if (numEntries == 0) {
+            // Empty row - just add diagonal if valid
+            if (lcol != Teuchos::OrdinalTraits<LO>::invalid()) {
+                Anew->insertLocalValues(lrow, 1, &one, &lcol);
+            }
+        } else {
+            typename matrix_t::nonconst_local_inds_host_view_type indices("i", numEntries);
+            typename matrix_t::nonconst_values_host_view_type values("v", numEntries);
+            size_t got = 0;
+            A->getLocalRowCopy(lrow, indices, values, got);
+            
+            std::vector<LO> newIndices;
+            std::vector<SC> newValues;
+            newIndices.reserve(got + 1);
+            newValues.reserve(got + 1);
+            
+            bool diagInserted = false;
+            for (size_t j = 0; j < got; ++j) {
+                if (indices(j) == lcol) {
+                    // Replace diagonal with 1.0
+                    newIndices.push_back(indices(j));
+                    newValues.push_back(one);
+                    diagInserted = true;
+                } else {
+                    // Keep existing entry
+                    newIndices.push_back(indices(j));
+                    newValues.push_back(values(j));
+                }
+            }
+            
+            // Add diagonal if it didn't exist
+            if (!diagInserted && lcol != Teuchos::OrdinalTraits<LO>::invalid()) {
+                newIndices.push_back(lcol);
+                newValues.push_back(one);
+            }
+            
+            if (!newIndices.empty()) {
+                Anew->insertLocalValues(lrow, newIndices.size(), 
+                                       newValues.data(), newIndices.data());
             }
         }
     }
     
-    A->fillComplete(A->getDomainMap(), A->getRangeMap());
+    Anew->fillComplete(A->getDomainMap(), A->getRangeMap());
+    A = Anew;
 }
 
 /*
@@ -296,22 +355,21 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
     {
         RCP<const Comm<int>> comm = Tpetra::getDefaultComm();
         RCP<matrix_t> A1,A2;
-        if(myid==0) fprintf(stdout, "\nReading matrix\n");
+        if(myid==0) fprintf(stdout, "Reading matrix\n");
         A1 = read_trilinos(args->mtx_path, comm);
         A2 = rcp(new matrix_t(*A1));
         if(myid==0) fprintf(stdout, "Matrix read, OK\n");
 
         // OPTIONAL: set diagonal elements to 1 if requested (CLI flag)
-        // NOTE: Change args->add_diag to the actual field in your MLCArgs struct if different.
         if (args->add_diag) {
             if(myid==0) fprintf(stdout, "Adding self-loops (diag = 1)\n");
             set_self_loops(A1);
-            // After modifying structure, ensure it's fillComplete
-            A1->fillComplete();
             A2 = rcp(new matrix_t(*A1));
         }
         
         #ifdef DEBUG
+            fflush(stdout);
+            MPI_Barrier(MPI_COMM_WORLD);
             if(myid==0) printf("--- Initial Matrix ---\n");
             print_matrix(A1, myid);
         #endif

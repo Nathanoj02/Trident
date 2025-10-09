@@ -25,7 +25,7 @@ cmake -S . -B build \
   -DKokkos_ENABLE_DEPRECATED_CODE_4=OFF \
   -DKokkos_ENABLE_TESTS=OFF 
 
-cmake --build build -j8
+cmake --build build -j16
 cmake --install build
 
 
@@ -57,5 +57,7 @@ cmake -S . -B build \
   -DKokkosKernels_ENABLE_TPL_CUSOLVER=OFF \
   -DKokkosKernels_ENABLE_TPL_CUSPARSE=OFF
 
-cmake --build build -j8
+cmake --build build -j16
 cmake --install build
+
+rm -rf kokkos kokkos-kernels/

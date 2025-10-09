@@ -6,11 +6,7 @@ source scripts/variables.sh
 
 cd comparison
 
-if [[ -d "ccutils" ]]; then
-  echo "Found symbolic link to ccutils"
-else
-  ln -s  ccutils
-fi
+cp -r ../ccutils .
 
 cmake -S . -B build_trilinos \
   -DCMAKE_BUILD_TYPE=RELEASE 

@@ -29,7 +29,7 @@ int main(int argc, char ** argv)
     //            err = cudaSetDevice(mydev);
 
     int thread_level;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &thread_level);
 
     //int dev;
     //err = cudaGetDevice(&dev);
