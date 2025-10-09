@@ -240,6 +240,7 @@ int main(int argc, char ** argv)
 #ifdef NVTX_PROFILING
         cudaProfilerStop();
 #endif
+        if (spcomm_data != nullptr) delete spcomm_data;
     }
 
     dmmio::DCOO_destroy(&dcoo_A);

@@ -544,6 +544,7 @@ template <typename IT, typename VT>
 struct SpaCommBuffers {
 
     SpaCommBuffers(const mmio::CSX<IT,VT>* to_compress) {
+        initialized = true;
         int nnz = to_compress->nnz;
         entries_grid_size = (nnz + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
         int ptrsize = (to_compress->majordim == mmio::MajorDim::ROWS) ? (to_compress->nrows +1) : (to_compress->ncols +1) ;
@@ -558,7 +559,7 @@ struct SpaCommBuffers {
         CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
     }
 
-    ~SpaCommBuffers() {
+    void explicitFree(void) {
         CUDA_FREE_SAFE(selected_per_block);
         CUDA_FREE_SAFE(IT_partial_results);
         CUDA_FREE_SAFE(VT_partial_results);
@@ -566,8 +567,15 @@ struct SpaCommBuffers {
         CUDA_FREE_SAFE(compressed_indices);
         CUDA_FREE_SAFE(compressed_pointers);
         CUDA_CHECK(cudaFreeHost(host_buffer));
+        tmp_buff.explicitFree();
+        initialized = false;
     }
 
+    ~SpaCommBuffers() {
+        if (initialized) explicitFree();
+    }
+
+    bool initialized;
     int *host_buffer;
     int entries_grid_size;
     int *selected_per_block;
@@ -798,6 +806,7 @@ struct SpaCommHandler
         CUDA_CHECK(cudaMemcpy(B_rows_filters, tmp, sizeof(BMASK_TYPE)*nfilters*mask_len, cudaMemcpyHostToDevice));
         free(tmp);
 #endif
+        initialized = true;
 
 	// ---------------------------------------------------------------------------------
 
@@ -909,13 +918,20 @@ struct SpaCommHandler
     }
 
 
-    ~SpaCommHandler()
+    void explicitFree(void)
     {
         CUDA_FREE_SAFE(A_column_filters);
         CUDA_FREE_SAFE(B_rows_filters);
+        initialized = false;
+    }
+
+    ~SpaCommHandler()
+    {
+        if (initialized) explicitFree();
     }
 
     // Communicator grid
+    bool initialized;
     dmmio::ProcessGrid * grid;
 
     // These two vectors are device vectors that the process will use to compress local tiles before the communication

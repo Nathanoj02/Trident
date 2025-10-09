@@ -276,19 +276,23 @@ struct cubTmpBuff {
     // Ensure buffer has at least 'bytes' capacity
     void* ensure(size_t bytes) {
         if (bytes > current_size) {
-            if (tmp_buffer) CUDA_CHECK(cudaFree(tmp_buffer));
+            if (tmp_buffer!=nullptr) CUDA_CHECK(cudaFree(tmp_buffer));
             CUDA_CHECK(cudaMalloc(&tmp_buffer, 2 * bytes)); // grow with factor
             current_size = 2 * bytes;
         }
         return tmp_buffer;
     }
 
-    ~cubTmpBuff() {
+    void explicitFree(void) {
         if (current_size > 0) {
             CUDA_CHECK(cudaFree(tmp_buffer));
         }
         tmp_buffer = nullptr;
         current_size = 0;
+    }
+
+    ~cubTmpBuff() {
+        if (current_size > 0) explicitFree();
     }
 };
 
@@ -417,7 +421,7 @@ struct CsxBuffers {
         tmp_buffer.ensure(required_size);
     }
 
-    ~CsxBuffers() {
+    void explicitFree(void) {
         if (initialized) {
             cudaFree(d_node_colinds);
             cudaFree(d_node_rowptrs);
@@ -425,12 +429,10 @@ struct CsxBuffers {
             initialized = 0;
             ptr_dim = 0;
             nnz = 0;
-
-            // No more required since I use a cubTmpBuff
-            // if (tmp_buf_size>0) {
-            //     CUDA_CHECK(cudaFree(d_tmp_buffer));
-            //     tmp_buf_size = 0;
-            // }
         }
+    }
+
+    ~CsxBuffers() {
+        if (initialized) explicitFree();
     }
 };

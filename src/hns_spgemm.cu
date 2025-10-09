@@ -56,6 +56,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
         {
+            compression_buffers->explicitFree();
+            delete compression_buffers;
             return;
         }
 
@@ -107,7 +109,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     }
-
 }
 
 template <typename IT, typename VT>
@@ -539,6 +540,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CSX_destroy_device(&bku_B);
     CSX_destroy_device(&bku_A);
 
+    conversion_buffs->explicitFree();
+    gather_buffs->explicitFree();
+    delete conversion_buffs;
+    delete gather_buffs;
     return out;
 }
 
