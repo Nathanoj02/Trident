@@ -89,6 +89,7 @@ add_test(test_queue)
 add_test(test_kokkos)
 add_test(test_compression)
 add_test(test_cuda_mpi)
+add_test(test_p2pallgatherv)
 
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
@@ -110,8 +111,8 @@ add_src(run_spgemm)
 add_src(scratch)
 
 # MACRO FOR ADDING PROFILING EXECUTABLES
-macro(add_prof name)
-    add_executable(${name}_prof src/${name}.cu)
+macro(add_prof name folder)
+    add_executable(${name}_prof ${folder}/${name}.cu)
     target_link_libraries(${name}_prof PRIVATE
                             MPI::MPI_CXX
                             dmmio
@@ -125,7 +126,8 @@ macro(add_prof name)
 endmacro()
 
 #PROFILING
-add_prof(run_spgemm)
+add_prof(run_spgemm src)
+add_prof(test_p2pallgatherv test)
 
 
 option(ENABLE_NVTX_PROFILING "Enable NVTX profiling" OFF)
