@@ -150,10 +150,6 @@ struct TileHolder
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
 
-        // Convert rowtprs to nnz per row
-        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffer));
-
-
         // Get nnz per tile
         std::vector<int> node_nnz(node_size);
         MPI_Allgather(&nnz, 1, MPI_INT, node_nnz.data(), 1, MPI_INT, grid->node_comm);
@@ -164,9 +160,9 @@ struct TileHolder
         int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
 
-
+        // Buffer set-up
         if (buffers == nullptr) {
-            CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
+            CUDA_CHECK(cudaMalloc(d_node_vals,    sizeof(VT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
         } else {
@@ -177,23 +173,33 @@ struct TileHolder
         }
         CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
 
-        
+        // Manage the case of singleton with a direct D2D copy
+        if (node_size == 1) {
+            CUDA_CHECK(cudaMemcpy(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpy(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpy(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice));
+            return(nnz);
+        }
+
+        // Convert rowtprs to nnz per row
+        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffer));
+
 
         // Allgatherv each buffer
 
         // Values
-        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(), 
+        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
                        MPIType<VT>(), grid->node_comm);
-         
+
         // Colinds
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
         
         // Rowptrs
-        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),         
-                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),  
+        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),
+                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),
                       grid->node_comm);
 
 
