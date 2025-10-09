@@ -1,0 +1,7 @@
+path: /leonardo_scratch/large/userexternal/tpasqual/mcl_matrices
+
+small:
+  direct_urls:
+    - url: https://portal.nersc.gov/project/m1982/HipMCL/viruses/vir_vs_vir_30_50length_propermm.mtx
+      filename: vir_vs_vir_30_50length_propermm.mtx
+
