@@ -1,6 +1,6 @@
 #!/bin/bash
 
-datasets=("cage15" "dielFilterV3real" "HV15R" "ldoor" "it-2004" "nlpkkt160")
+datasets=("cage15" "dielFilterV3real" "HV15R" "ldoor" "nlpkkt160")
 
 # grids=("2x2" "4x4")
 # gridproc=("4" "16")
@@ -9,8 +9,8 @@ gridproc=("16")
 
 #configurations=("--impl get" "--impl main" "--impl main --Acsc" "--impl main --Acsc --spcomm")
 #configurations_str=("get_none_none" "main_none_none" "main_Acsc_none" "main_Acsc_spcomm")
-configurations=("--impl main --Acsc --spcomm")
-configurations_str=("main_Acsc_spcomm")
+configurations=("--impl main --Acsc" "--impl main --Acsc --spcomm" "--impl main --Acsc --skip-spgemm" "--impl main --Acsc --spcomm --skip-spgemm")
+configurations_str=("main_Acsc_none_none" "main_Acsc_spcomm_none" "main_Acsc_none_skipspgemm" "main_Acsc_spcomm_skipspgemm")
 
 for mat in ${datasets[@]}
 do

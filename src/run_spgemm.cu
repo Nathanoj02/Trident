@@ -206,7 +206,7 @@ int main(int argc, char ** argv)
         CPU_TIMER_START(spgemm);
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<10; i++) 
+        for (int i=0; i<6; i++) 
         {
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
             fflush(stdout);
