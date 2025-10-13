@@ -10,7 +10,12 @@ int here_iteration = 0;
 // #define DEBUG_THREAD_COMPRESSION
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id)
+inline uint64_t compute_message_size(int nnz, int ptr_size) {
+        return( (nnz * sizeof(VT)) + ((nnz + ptr_size) * sizeof(IT)) );
+}
+
+template <typename IT, typename VT>
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int tag=0)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -91,11 +96,13 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
         char tmpstr[20];
-        char desc = (csx->majordim == mmio::MajorDim::ROWS) ? 'B' : 'A' ;
+        char desc = (tag == 0) ? 'A' : 'B' ; // I suppose I use tag 0 for A (left operand) and tag 1 for B (right operand)
         sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
-        printf("<%s>[%s] %lf ms, %lf ms, %d B, %d B\n", tmpstr, "internode_comm(comp+comm+size)",
+        printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
                (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, __timer_vals_internode_comm.back(),
-               csx->nnz * (sizeof(IT)+sizeof(VT)), tosend->nnz * (sizeof(IT)+sizeof(VT)));
+               compute_message_size<IT,VT>(csx->nnz,    ptrsize+1),
+               compute_message_size<IT,VT>(tosend->nnz, ptrsize+1)
+        );
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -227,11 +234,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     // Launch comm threads
     std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), /*kwd_A.mmio_csx*/ bku_A, spcomm, dev_id);
+                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
     std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), /*kwd_B.mmio_csx*/ bku_B, spcomm, dev_id);
-
-    // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
+                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
