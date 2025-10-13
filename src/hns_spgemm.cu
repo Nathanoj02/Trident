@@ -113,7 +113,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 }
 
 template <typename IT, typename VT>
-mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B,
+mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B, ThreadPool& pool,
                                    SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
     // ------------------ Test compression on an independent buffer ------------------
@@ -233,9 +233,13 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_CHECK(cudaGetDevice(&dev_id));
 
     // Launch comm threads
-    std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
+    // std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
+    //                         std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
+    // std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
+    //                         std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
+    auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
-    std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
+    auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
 
 #if DEBUG_MAIN
@@ -505,8 +509,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     FLUSH_WAIT(1.0);
 #endif
 
-    A_comm_thread.join();
-    B_comm_thread.join();
+    // A_comm_thread.join();
+    // B_comm_thread.join();
+    A_comm_thread.get();
+    B_comm_thread.get();
 
     MPI_Barrier(MPI_COMM_WORLD);
     CPU_TIMER_STOP(spgemm);
@@ -546,4 +552,4 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     return out;
 }
 
-template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);
+template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);

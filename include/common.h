@@ -67,4 +67,12 @@ extern FILE * logfile;
 // #define P2P_ALLGATHERV // Standard allgatherv seam to stage on the host even when cuda-aware
 // #define DEBUG_P2P_ALLGATHERV
 
+// For thread pools
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <atomic>
+
 #endif

@@ -205,6 +205,9 @@ int main(int argc, char ** argv)
 
         CPU_TIMER_START(spgemm);
 
+        // Gen thread pool (mostly for profiling)
+        ThreadPool pool(2);
+
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
         for (int i=0; i<6; i++) 
         {
@@ -219,7 +222,7 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             if (!strcmp(config->impl, "main"))
             {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, spcomm_data, config->skip_spgemm);
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, pool, spcomm_data, config->skip_spgemm);
             }
             else if (!strcmp(config->impl, "get"))
             {
