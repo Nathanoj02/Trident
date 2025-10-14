@@ -549,6 +549,10 @@ struct SpaCommBuffers {
         entries_grid_size = (nnz + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
         int ptrsize = (to_compress->majordim == mmio::MajorDim::ROWS) ? (to_compress->nrows +1) : (to_compress->ncols +1) ;
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Alloc holders & buffers",2);
+#endif
+
         CUDA_CHECK(cudaMallocHost(&host_buffer,    sizeof(int) * entries_grid_size));
         CUDA_CHECK(cudaMalloc(&selected_per_block, sizeof(int) * entries_grid_size));
         CUDA_CHECK(cudaMalloc(&IT_partial_results, sizeof(IT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
@@ -557,6 +561,10 @@ struct SpaCommBuffers {
         CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
         CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
         CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
     }
 
     void explicitFree(void) {

@@ -498,3 +498,25 @@ private:
     std::condition_variable condition;
     bool stop;
 };
+
+class SimpleBarrier {
+public:
+    explicit SimpleBarrier(std::size_t count) : thread_count(count), arrived(0) {}
+
+    void arrive_and_wait() {
+        std::unique_lock<std::mutex> lock(mtx);
+        arrived++;
+        if (arrived == thread_count) {
+            arrived = 0;            // optional, for reuse
+            cv.notify_all();
+        } else {
+            cv.wait(lock, [this] { return arrived == 0; });
+        }
+    }
+
+private:
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::size_t thread_count;
+    std::size_t arrived;
+};

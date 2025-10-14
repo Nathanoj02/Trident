@@ -9,6 +9,10 @@ int here_iteration = 0;
 
 // #define DEBUG_THREAD_COMPRESSION
 
+// Barrier for sync afther thread allocs
+#include <condition_variable>
+SimpleBarrier sync_point(3);
+
 template <typename IT, typename VT>
 inline uint64_t compute_message_size(int nnz, int ptr_size) {
         return( (nnz * sizeof(VT)) + ((nnz + ptr_size) * sizeof(IT)) );
@@ -43,6 +47,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
+    sync_point.arrive_and_wait();
 
     while (true)
     {
@@ -270,6 +275,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
+    sync_point.arrive_and_wait();
     for (int iter = 0; iter < n_iters; iter++)
     {
         CPU_TIMER_START(spgemm);
