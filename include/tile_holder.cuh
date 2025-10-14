@@ -77,6 +77,10 @@ struct TileHolder
 
     IT wait(int src)
     {
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Fetching remote data",2);
+#endif
+
         IT nnz;
         do 
         {
@@ -91,10 +95,29 @@ struct TileHolder
         *flag = -1;
 
         MPI_Win_sync(flag_win);
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
         return nnz;
     }
 
 
+    IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) {
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Fetching local data",2);
+#endif
+
+        CUDA_CHECK(cudaMemcpyAsync(d_vals_buf, input->val,     (input->nnz) * sizeof(VT), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_inds_buf, input->idx_vec, (input->nnz) * sizeof(IT), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_ptrs_buf, input->ptr_vec, (ptr_size+1) * sizeof(IT), cudaMemcpyDeviceToDevice, stream));
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(input->nnz);
+    }
 
 
     void sync_buffers()

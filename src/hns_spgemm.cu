@@ -15,7 +15,7 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
 }
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int tag=0)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int comm_rank, int tag=0)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -31,7 +31,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #ifdef NVTX_PROFILING
     int nvtx_color;
     char compression_str[20], comunication_str[20], nvtx_char;
-    if (csx->majordim == mmio::MajorDim::ROWS) {
+    if (tag == 1) {
             nvtx_color = 3;
             nvtx_char  = 'B';
     } else {
@@ -57,6 +57,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
 #endif
+
+        if (target == comm_rank) continue; // NOTE: self communication managed by main tread
 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
@@ -216,6 +218,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     // CHECK_PTRVEC(kwd_B.mmio_csx->ptr_vec, kwd_B.mmio_csx->nrows+1)
 
+    // Cuda stream for main thread
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
+
     // cusparse handle
     cusparseHandle_t handle;
     CUSPARSE_CHECK(cusparseCreate(&handle));
@@ -238,9 +244,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     // std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
     //                         std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
     auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
+                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, grid->row_rank, 0);
     auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
+                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, grid->col_rank, 1);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
@@ -364,25 +370,26 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // --------------------------
 
-#ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE("wait for data",2);
-#endif
-
+// NOTE:  NVTX ranges are inside '.wait' and '.copy_device_local_csx'
 #ifdef DETAILED_TIMERS
         CPU_TIMER_START(wait_for_input)
 #endif
 
-        // Wait until I've been sent A and B
-        IT A_tile_nnz = A_holder.wait(colAtoGet);
-        IT B_tile_nnz = B_holder.wait(rowBtoGet);
-
+        // Wait until I've been sent A and B or copy from the local data
+        //   NOTE: here I manage the self communication case
+        IT A_tile_nnz, B_tile_nnz;
+        if (colAtoGet != grid->row_rank) {
+            A_tile_nnz = A_holder.wait(colAtoGet);
+        } else {
+            A_tile_nnz = A_holder.copy_device_local_csx(kwd_A.mmio_csx, stream);
+        } if (rowBtoGet != grid->col_rank) {
+            B_tile_nnz = B_holder.wait(rowBtoGet);
+        } else {
+            B_tile_nnz = B_holder.copy_device_local_csx(kwd_B.mmio_csx, stream);
+        }
 
 #ifdef DETAILED_TIMERS
         CPU_TIMER_STOP(wait_for_input)
-#endif
-
-#ifdef NVTX_PROFILING
-        NVTX_POP_RANGE;
 #endif
 
 #if DEBUG_MAIN
