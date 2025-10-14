@@ -11,7 +11,8 @@ int here_iteration = 0;
 
 // Barrier for sync afther thread allocs
 #include <condition_variable>
-SimpleBarrier sync_point(3);
+SimpleBarrier alloc_sync_point(3);
+SimpleBarrier free_sync_point(3);
 
 template <typename IT, typename VT>
 inline uint64_t compute_message_size(int nnz, int ptr_size) {
@@ -47,7 +48,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
-    sync_point.arrive_and_wait();
+    alloc_sync_point.arrive_and_wait();
 
     while (true)
     {
@@ -68,6 +69,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
         {
+            free_sync_point.arrive_and_wait();
             compression_buffers->explicitFree();
             delete compression_buffers;
             return;
@@ -275,7 +277,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
-    sync_point.arrive_and_wait();
+    alloc_sync_point.arrive_and_wait();
     for (int iter = 0; iter < n_iters; iter++)
     {
         CPU_TIMER_START(spgemm);
@@ -522,11 +524,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     FLUSH_WAIT(1.0);
 #endif
 
-    // A_comm_thread.join();
-    // B_comm_thread.join();
-    A_comm_thread.get();
-    B_comm_thread.get();
-
     MPI_Barrier(MPI_COMM_WORLD);
     CPU_TIMER_STOP(spgemm);
 
@@ -555,6 +552,8 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
     mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
 
+    free_sync_point.arrive_and_wait();
+
     CSX_destroy_device(&bku_B);
     CSX_destroy_device(&bku_A);
 
@@ -562,6 +561,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     gather_buffs->explicitFree();
     delete conversion_buffs;
     delete gather_buffs;
+
+    A_comm_thread.get();
+    B_comm_thread.get();
     return out;
 }
 
