@@ -1,5 +1,4 @@
 #include "hns_spgemm.cuh"
-#include <ccutils/timers.h>
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -20,7 +19,7 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
 }
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int comm_rank, int tag=0)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int comm_rank, std::mutex& mpi_mutex, int tag=0)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -31,7 +30,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
-    CPU_TIMER_DEF(internode_comm)
+    float internode_comm;
     CUDA_TIMER_DEF(compression_time)
 #ifdef NVTX_PROFILING
     int nvtx_color;
@@ -89,26 +88,19 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
-        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
-
-        CPU_TIMER_START(internode_comm)
 
         // Put tile on remote process
+        //   NOTE: timer and NVTX ranges inside the function
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
-        holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target);
+        internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
 
-        CPU_TIMER_STOP(internode_comm)
-
-#ifdef NVTX_PROFILING
-        NVTX_POP_RANGE;
-#endif
 
         char tmpstr[20];
         char desc = (tag == 0) ? 'A' : 'B' ; // I suppose I use tag 0 for A (left operand) and tag 1 for B (right operand)
         sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
         printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
-               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, __timer_vals_internode_comm.back(),
+               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, internode_comm,
                compute_message_size<IT,VT>(csx->nnz,    ptrsize+1),
                compute_message_size<IT,VT>(tosend->nnz, ptrsize+1)
         );
@@ -250,10 +242,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     //                         std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
     // std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
     //                         std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
+    std::mutex mpi_mutex;
     auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, grid->row_rank, 0);
+                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, grid->row_rank, std::ref(mpi_mutex), 0);
     auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, grid->col_rank, 1);
+                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, grid->col_rank, std::ref(mpi_mutex), 1);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));

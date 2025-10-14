@@ -520,3 +520,24 @@ private:
     std::size_t thread_count;
     std::size_t arrived;
 };
+
+inline void mutex_MPI_Testall(MPI_Request *requests, int nrequests, std::mutex& mpi_mutex) {
+    int ready = 0;
+    while (!ready) {
+        std::lock_guard<std::mutex> lock(mpi_mutex);
+        MPI_Testall(nrequests, requests, &ready, MPI_STATUS_IGNORE);
+    }
+}
+
+inline void mutex_MPI_Test(MPI_Request *request, std::mutex& mpi_mutex) {
+    mutex_MPI_Testall(request, 1, mpi_mutex);
+}
+
+
+inline void mutex_MPI_Wintest(MPI_Win win, std::mutex& mpi_mutex) {
+    int ready = 0;
+    while (!ready) {
+        std::lock_guard<std::mutex> lock(mpi_mutex);
+        MPI_Win_test(win, &ready);
+    }
+}

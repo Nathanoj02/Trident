@@ -25,6 +25,7 @@
 #define CCUTILS_ENABLE_NVTX 1
 #endif
 
+#include <ccutils/timers.h>
 #include <ccutils/colors.h>
 #include <ccutils/mpi/mpi_macros.h>
 #include <ccutils/macros.h>

@@ -47,7 +47,7 @@ struct TileHolder
 
 
 
-    void put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target)
+    float put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0)
     {
 
 #ifdef PTR_CHECK
@@ -56,6 +56,28 @@ struct TileHolder
         CHECK_PTR(d_ptrs, here_iteration)
         here_iteration++;
 #endif
+
+#ifdef NVTX_PROFILING
+        int nvtx_color;
+        char comunication_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else {
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        }
+        sprintf(comunication_str, "Put time %c", nvtx_char);
+#endif
+
+        CPU_TIMER_DEF(tmp_timer)
+        std::lock_guard<std::mutex> lock(mpi_mutex);
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
+#endif
+
+        CPU_TIMER_START(tmp_timer)
 
         // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
         MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
@@ -72,6 +94,12 @@ struct TileHolder
         MPI_Win_flush(target, flag_win); //TODO: Do I need this?
         //MPI_Win_flush_all(flag_win); //TODO: Do I need this?
 
+        CPU_TIMER_STOP(tmp_timer)
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(__timer_vals_tmp_timer.back());
     }
 
 
