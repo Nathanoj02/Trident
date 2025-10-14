@@ -91,7 +91,7 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
       std::cout << "Number of processes per col: "  << nproccols     << std::endl;
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
-      std::cout << "Chosen implementation: " << config->impl << "(main use MPI_Put)" << std::endl;
+      std::cout << "Chosen implementation: " << config->impl_str << "(main use MPI_Put)" << std::endl;
       std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
     }
@@ -103,12 +103,7 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
-        if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
-            if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
-            MPI_Barrier(MPI_COMM_WORLD);
-            MPI_Abort(MPI_COMM_WORLD, __LINE__);
-        }
-        if (!strcmp(config->impl, "get") && (config->Acsc || config->spcomm)) {
+        if ((config->impl == Implementation::GET) && (config->Acsc || config->spcomm)) {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
@@ -208,7 +203,7 @@ int main(int argc, char ** argv)
         // Gen thread pool (mostly for profiling)
         ThreadPool pool(2);
 
-        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
+        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
         for (int i=0; i<6; i++) 
         {
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
@@ -220,13 +215,11 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            if (!strcmp(config->impl, "main"))
-            {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, pool, spcomm_data, config->skip_spgemm);
-            }
-            else if (!strcmp(config->impl, "get"))
+            if (config->impl == Implementation::GET)
             {
                 dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
+            } else {
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, config->impl, pool, spcomm_data, config->skip_spgemm);
             }
 
             MPI_Barrier(MPI_COMM_WORLD);

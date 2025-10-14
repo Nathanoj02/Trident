@@ -76,4 +76,11 @@ extern FILE * logfile;
 #include <future>
 #include <atomic>
 
+enum Implementation {
+    SENDRECV,
+    PUT,
+    GET
+};
+#define STDIMPL Implementation::SENDRECV
+
 #endif

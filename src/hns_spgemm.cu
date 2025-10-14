@@ -19,7 +19,7 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
 }
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int comm_rank, std::mutex& mpi_mutex, int tag=0)
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, const Implementation impl, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, int comm_rank, std::mutex& mpi_mutex, int tag=0)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -114,7 +114,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 }
 
 template <typename IT, typename VT>
-mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B, ThreadPool& pool,
+mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B, const Implementation impl, ThreadPool& pool,
                                    SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
     // ------------------ Test compression on an independent buffer ------------------
@@ -238,15 +238,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     CUDA_CHECK(cudaGetDevice(&dev_id));
 
     // Launch comm threads
-    // std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-    //                         std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, 0);
-    // std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-    //                         std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, 1);
     std::mutex mpi_mutex;
     auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), bku_A, spcomm, dev_id, grid->row_rank, std::ref(mpi_mutex), 0);
+                            std::ref(A_queue), std::ref(A_holder), bku_A, impl, spcomm, dev_id, grid->row_rank, std::ref(mpi_mutex), 0);
     auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), bku_B, spcomm, dev_id, grid->col_rank, std::ref(mpi_mutex), 1);
+                            std::ref(B_queue), std::ref(B_holder), bku_B, impl, spcomm, dev_id, grid->col_rank, std::ref(mpi_mutex), 1);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
@@ -560,4 +556,4 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     return out;
 }
 
-template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);
+template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);
