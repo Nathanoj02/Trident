@@ -21,6 +21,7 @@ struct TileHolder
     {
         comm = _comm;
         flag = new IT(-1);
+        max_nnz  = nnz_size;
         ptr_size = _ptr_size;
 
         MPI_Comm_rank(comm, &rank);
@@ -63,11 +64,14 @@ struct TileHolder
         if (tag == 1) {
                 nvtx_color = 3;
                 nvtx_char  = 'B';
-        } else {
+        } else if (tag == 0){
                 nvtx_color = 4;
                 nvtx_char  = 'A';
+        } else {
+                nvtx_color = 2;
         }
-        sprintf(comunication_str, "Put time %c", nvtx_char);
+        if (tag!=-1) sprintf(comunication_str, "Put time %c", nvtx_char);
+        else sprintf(comunication_str, "Put warmup", nvtx_char);
 #endif
 
         CPU_TIMER_DEF(tmp_timer)
@@ -197,6 +201,23 @@ struct TileHolder
         }
 
         return(recv_nnz);
+    }
+
+    void warmup(Implementation impl, VT *d_vals, IT *d_inds, IT *d_ptrs) {
+        int comm_size, comm_rank;
+        MPI_Comm_size(comm, &comm_size);
+        MPI_Comm_rank(comm, &comm_rank);
+
+        if ((d_vals == nullptr) || (d_inds == nullptr) || (d_ptrs == nullptr)) return;
+
+        if (impl == Implementation::PUT) {
+            std::mutex useless_mutex;
+            for (int i=0; i<comm_size; i++) {
+                put_tile(d_vals, d_inds, d_ptrs, 1, 1, i, std::ref(useless_mutex), 0, -1);
+                usleep(500);
+            }
+        }
+        // TODO put here the warmup for send/recv
     }
 
     IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) {
@@ -442,6 +463,7 @@ struct TileHolder
     MPI_Win flag_win;
 
     IT ptr_size;
+    IT max_nnz;
 
     MPI_Comm comm;
     int rank;

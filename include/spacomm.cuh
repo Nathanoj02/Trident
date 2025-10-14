@@ -558,9 +558,19 @@ struct SpaCommBuffers {
         CUDA_CHECK(cudaMalloc(&IT_partial_results, sizeof(IT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
         CUDA_CHECK(cudaMalloc(&VT_partial_results, sizeof(VT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
 
-        CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
-        CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
-        CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
+        if (nnz>0) {
+            CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
+            CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
+        } else {
+            compressed_values  = nullptr;
+            compressed_indices = nullptr;
+        }
+
+        if(ptrsize>0) {
+            CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
+        } else {
+            compressed_pointers = nullptr;
+        }
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;

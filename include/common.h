@@ -83,4 +83,6 @@ enum Implementation {
 };
 #define STDIMPL Implementation::SENDRECV
 
+#include "spacomm.cuh"
+
 #endif

@@ -7,8 +7,6 @@
 #include "KokkosWrap.hpp"
 #include <ccutils/cuda/cuda_timers.h>
 
-#include "spacomm.cuh"
-
 #define DEBUG_MAIN 0
 #define DETAILED_TIMERS
 //#define VERBOSE
