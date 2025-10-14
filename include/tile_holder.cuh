@@ -131,6 +131,73 @@ struct TileHolder
         return nnz;
     }
 
+    float send_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0) {
+#ifdef NVTX_PROFILING
+        int nvtx_color;
+        char comunication_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else {
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        }
+        sprintf(comunication_str, "Send time %c", nvtx_char);
+#endif
+
+        float time = 0.0;
+        CPU_TIMER_DEF(tmp_timer)
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
+#endif
+
+        MPI_Request requests[4];
+        {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Isend(&nnz, 1, MPI_INT32_T, target, 0, comm, &(requests[0])); // BUG: MPI types are hardcoded
+        }
+
+        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
+
+        if (nnz>0) {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            CPU_TIMER_START(tmp_timer)
+            MPI_Isend(d_vals, nnz,          MPI_FLOAT,   target, 1, comm, &(requests[1])); // BUG: MPI types are hardcoded
+            MPI_Isend(d_inds, nnz,          MPI_INT32_T, target, 2, comm, &(requests[2])); // BUG: MPI types are hardcoded
+            MPI_Isend(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 3, comm, &(requests[3])); // BUG: MPI types are hardcoded
+            MPI_Waitall(4, requests, MPI_STATUS_IGNORE);
+            CPU_TIMER_STOP(tmp_timer)
+            time = __timer_vals_tmp_timer.back();
+        }
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(time);
+    }
+
+
+    IT receve_tile(int src, std::mutex& mpi_mutex) {
+        int recv_nnz;
+        MPI_Request requests[4];
+        {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Irecv(&recv_nnz, 1, MPI_INT32_T, src, 0, comm, &(requests[0]));
+        }
+
+        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
+
+        if (recv_nnz>0) {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Irecv(d_vals_buf, recv_nnz,     MPI_FLOAT,   src, 1, comm, &(requests[1]));
+            MPI_Irecv(d_inds_buf, recv_nnz,     MPI_INT32_T, src, 2, comm, &(requests[2]));
+            MPI_Irecv(d_ptrs_buf, ptr_size + 1, MPI_INT32_T, src, 3, comm, &(requests[3]));
+            MPI_Waitall(4, requests, MPI_STATUS_IGNORE);
+        }
+
+        return(recv_nnz);
+    }
 
     IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) {
 #ifdef NVTX_PROFILING

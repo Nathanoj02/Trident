@@ -43,7 +43,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
             nvtx_char  = 'A';
     }
     sprintf(compression_str,  "Compression %c", nvtx_char);
-    sprintf(comunication_str, "Put time %c", nvtx_char);
 #endif
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
@@ -93,7 +92,11 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         // Put tile on remote process
         //   NOTE: timer and NVTX ranges inside the function
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
-        internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
+        if (impl == Implementation::PUT) {
+                internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
+        } else {
+                internode_comm = holder.send_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
+        }
 
 
         char tmpstr[20];
@@ -376,11 +379,21 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         //   NOTE: here I manage the self communication case
         IT A_tile_nnz, B_tile_nnz;
         if (colAtoGet != grid->row_rank) {
-            A_tile_nnz = A_holder.wait(colAtoGet);
+            if (impl == Implementation::PUT) {
+                A_tile_nnz = A_holder.wait(colAtoGet);
+            } else {
+                A_tile_nnz = A_holder.receve_tile(colAtoGet, std::ref(mpi_mutex));
+            }
         } else {
             A_tile_nnz = A_holder.copy_device_local_csx(kwd_A.mmio_csx, stream);
-        } if (rowBtoGet != grid->col_rank) {
-            B_tile_nnz = B_holder.wait(rowBtoGet);
+        }
+
+        if (rowBtoGet != grid->col_rank) {
+            if (impl == Implementation::PUT) {
+                B_tile_nnz = B_holder.wait(rowBtoGet);
+            } else {
+                B_tile_nnz = B_holder.receve_tile(rowBtoGet, std::ref(mpi_mutex));
+            }
         } else {
             B_tile_nnz = B_holder.copy_device_local_csx(kwd_B.mmio_csx, stream);
         }
