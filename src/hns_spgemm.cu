@@ -29,10 +29,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     CUDA_CHECK(cudaStreamCreate(&stream));
 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
+    /*
     if (spacomm != nullptr)
         holder.warmup(impl, compression_buffers->compressed_values, compression_buffers->compressed_indices, compression_buffers->compressed_pointers);
     else
         holder.warmup(impl, csx->val, csx->idx_vec, csx->ptr_vec);
+    */
 
     float internode_comm;
     CUDA_TIMER_DEF(compression_time)
