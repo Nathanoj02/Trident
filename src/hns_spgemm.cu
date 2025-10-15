@@ -386,7 +386,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         IT A_tile_nnz, B_tile_nnz;
         if (colAtoGet != grid->row_rank) {
             if (impl == Implementation::PUT) {
-                A_tile_nnz = A_holder.wait(colAtoGet);
+                A_tile_nnz = A_holder.wait(colAtoGet, stream, 0);
             } else {
                 A_tile_nnz = A_holder.receve_tile(colAtoGet, std::ref(mpi_mutex));
             }
@@ -396,7 +396,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         if (rowBtoGet != grid->col_rank) {
             if (impl == Implementation::PUT) {
-                B_tile_nnz = B_holder.wait(rowBtoGet);
+                B_tile_nnz = B_holder.wait(rowBtoGet, stream, 1);
             } else {
                 B_tile_nnz = B_holder.receve_tile(rowBtoGet, std::ref(mpi_mutex));
             }

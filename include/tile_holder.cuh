@@ -107,10 +107,23 @@ struct TileHolder
     }
 
 
-    IT wait(int src)
+    IT wait(int src, cudaStream_t stream = 0, int tag=0)
     {
 #ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE("Fetching remote data",2);
+        int nvtx_color;
+        char nvtx_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else if (tag == 0){
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        } else {
+                nvtx_color = 2;
+        }
+        if (tag!=-1) sprintf(nvtx_str, "Fetching remote data %c", nvtx_char);
+        else sprintf(nvtx_str, "Put warmup", nvtx_char);
+        NVTX_PUSH_RANGE_CUDA(nvtx_str,nvtx_color,stream);
 #endif
 
         IT nnz;
