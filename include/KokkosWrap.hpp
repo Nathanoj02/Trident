@@ -58,7 +58,7 @@ namespace KokkosWrap {
 
         // ---- Constructor ----
         LocalMatrix();
-        LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx);
+        LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx, CsxBuffers<DIT,VT> *buffs=nullptr);
         LocalMatrix(mmio::CSR<DIT, VT>* mmio_csr);
         LocalMatrix(mmio::CSX<DIT, VT>* mmio_csx);
         LocalMatrix(DIT nrows, DIT ncols, DIT nnz, DIT* ptrvec, DIT* idxvec, VT* values, MajorDim layout);
@@ -67,7 +67,7 @@ namespace KokkosWrap {
         static void sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C);
 
         // Conversion
-        KokkosCrs csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * mmio_csx);
+        KokkosCrs csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * mmio_csx, CsxBuffers<DIT,VT> *buffs=nullptr);
 
         // Change access structure
         mmio::CSX<DIT,VT>* get_csx(void);
@@ -160,12 +160,12 @@ namespace KokkosWrap {
     {
         static_assert(std::is_same<KIT, DIT>::value);
         using namespace dmmio::partitioning::indextransform;
-        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size) != 0)
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0)
         {
             dcoo->coo->nrows++;
         }
 
-        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size) != 0)
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size * MASK_SIZE) != 0)
         {
             dcoo->coo->ncols++;
         }
@@ -220,7 +220,7 @@ namespace KokkosWrap {
     LocalMatrix<KIT,DIT,VT>::LocalMatrix() : storage(), initialized(false) {}
 
     template <typename KIT, typename DIT, typename VT>
-    LocalMatrix<KIT,DIT,VT>::LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx) 
+    LocalMatrix<KIT,DIT,VT>::LocalMatrix(cusparseHandle_t& handle, mmio::CSX<DIT, VT>* mmio_csx, CsxBuffers<DIT,VT> *buffs)
         :initialized(true)
     {
         static_assert(std::is_same<KIT, DIT>::value);
@@ -243,7 +243,7 @@ namespace KokkosWrap {
 
             storage = kokkos_csr;
         } else {
-            storage = csc_to_csr(handle, mmio_csx);
+            storage = csc_to_csr(handle, mmio_csx, buffs);
         }
     }
 
@@ -327,22 +327,28 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
 
+        // Create KokkosKernelHandle
+        using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
+            KokkosKernels::default_size_type, KIT, VT,
+            Kokkos::DefaultExecutionSpace,
+            typename Kokkos::DefaultExecutionSpace::memory_space,
+            typename Kokkos::DefaultExecutionSpace::memory_space>;
+
         using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
         csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        // KernelHandle kh;
+        // csr_matrix_type product;
+        // kh.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_CUSPARSE); // or SPGEMM_KK_SPEED, SPGEMM_CUSPARSE, etc.
+        // KokkosSparse::spgemm_symbolic(kh, A.storage, false, B.storage, false, product);
+        // KokkosSparse::spgemm_numeric(kh, A.storage, false, B.storage, false, product);
+        // kh.destroy_spgemm_handle();
 
         if (C.initialized == false) {
             C.storage = product;
             C.initialized = true;
         } else {
             csr_matrix_type accumulator;
-
-            // Create KokkosKernelHandle
-            using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
-                KokkosKernels::default_size_type, KIT, VT,
-                Kokkos::DefaultExecutionSpace,
-                typename Kokkos::DefaultExecutionSpace::memory_space,
-                typename Kokkos::DefaultExecutionSpace::memory_space>;
-
 
             KernelHandle kh;
             kh.create_spadd_handle(false);
@@ -358,7 +364,7 @@ namespace KokkosWrap {
 
     // Convert Kokkos CSC matrix to CRS matrix
     template <typename KIT, typename DIT, typename VT>
-    LocalMatrix<KIT, DIT, VT>::KokkosCrs LocalMatrix<KIT, DIT, VT>::csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * csc)
+    LocalMatrix<KIT, DIT, VT>::KokkosCrs LocalMatrix<KIT, DIT, VT>::csc_to_csr(cusparseHandle_t& handle, mmio::CSX<DIT, VT> * csc, CsxBuffers<DIT,VT> *buffers)
     {
         // Type aliases
         using ordinal_view_t = Kokkos::View<KIT*, Kokkos::DefaultExecutionSpace::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
@@ -378,9 +384,17 @@ namespace KokkosWrap {
         // CSR pointers
         VT * d_csr_vals;
         KIT * d_colinds, * d_rowptrs;
-        CUDA_CHECK(cudaMalloc(&d_csr_vals, sizeof(VT) * nnz));
-        CUDA_CHECK(cudaMalloc(&d_colinds, sizeof(KIT) * nnz));
-        CUDA_CHECK(cudaMalloc(&d_rowptrs, sizeof(KIT) * (nrows + 1)));
+
+        if (buffers == nullptr) {
+            CUDA_CHECK(cudaMalloc(&d_csr_vals, sizeof(VT) * nnz));
+            CUDA_CHECK(cudaMalloc(&d_colinds, sizeof(KIT) * nnz));
+            CUDA_CHECK(cudaMalloc(&d_rowptrs, sizeof(KIT) * (nrows + 1)));
+        } else {
+            buffers->ensure(nnz, nrows + 1);
+            d_csr_vals = buffers->d_node_vals;
+            d_colinds  = buffers->d_node_colinds;
+            d_rowptrs  = buffers->d_node_rowptrs;
+        }
 
 
         // First, use cusparse to convert the csc pointers into raw CSR pointers
@@ -403,7 +417,12 @@ namespace KokkosWrap {
                                                     CUSPARSE_INDEX_BASE_ZERO,
                                                     CUSPARSE_CSR2CSC_ALG_DEFAULT,
                                                     &buff_size));
-        CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
+        if (buffers == nullptr) {
+            CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
+        } else {
+            buffers->ensure_tmp(buff_size);
+            d_buff = buffers->tmp_buffer.tmp_buffer;
+        }
         CUSPARSE_CHECK(cusparseCsr2cscEx2(handle,
                                         ncols, nrows,
                                         nnz,
@@ -419,7 +438,7 @@ namespace KokkosWrap {
                                         CUSPARSE_CSR2CSC_ALG_DEFAULT,
                                         d_buff));
 
-        CUDA_FREE_SAFE(d_buff);
+        if (buffers == nullptr) { CUDA_FREE_SAFE(d_buff); }
 
 
         // Make the KokkosCRS matrix 

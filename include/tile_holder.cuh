@@ -1,37 +1,11 @@
 #pragma once
 #include "common.h"
+#include "utils.cuh"
 #include "kokkos_helpers.cuh"
 
 #define DEBUG_HOLDER 0
 
 //#define PTR_CHECK
-
-#define CHECK_PTR(PT, IT) {  \
-    if (PT == nullptr) {  \
-        std::cerr << "Process " << world_rank << ", " << __func__ << ":" << __LINE__ << "nullptr\n";  \
-    } else {  \
-        CUmemorytype memType;  \
-        CUresult res = cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(PT));  \
-        if (res != CUDA_SUCCESS) {  \
-            int world_rank;  \
-            const char* errName = nullptr;  \
-            cuGetErrorName(res, &errName);  \
-            MPI_Comm_rank(MPI_COMM_WORLD, &world_rank); \
-            std::cerr << "Process " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ <<  \
-                    " --- Error code: " << res << ", name: " << (errName ? errName : "Unknown") << "\n";  \
-        } else { \
-            std::string memStr; \
-            switch (memType) { \
-                case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break; \
-                case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break; \
-                case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break; \
-                default:                   memStr = "UNKNOWN"; break; \
-            } \
-            if (memType != CU_MEMORYTYPE_DEVICE) std::cerr << "Pointer is not from device, memory type: " << memStr << "\n"; \
-            else std::cout << "Pointer of proc " << world_rank << " call " << IT << ", " << __func__ << ":" << __LINE__ << " is fine\n"; \
-        } \
-    }  \
-}
 
 #ifdef PTR_CHECK
 extern int here_iteration;
@@ -47,6 +21,7 @@ struct TileHolder
     {
         comm = _comm;
         flag = new IT(-1);
+        max_nnz  = nnz_size;
         ptr_size = _ptr_size;
 
         MPI_Comm_rank(comm, &rank);
@@ -68,12 +43,54 @@ struct TileHolder
 
     }
 
-
     TileHolder(){}
 
 
+    float put_tile_gat(VT * d_vals, IT * d_inds, IT * d_ptrs, 
+                       const IT nnz, const IT ptr_size, 
+                       const int target, std::mutex& mpi_mutex, 
+                       MPI_Group& group,
+                       cudaStream_t stream = 0, int tag=0)
+    {
+        CPU_TIMER_DEF(tmp_timer)
+        //std::lock_guard<std::mutex> lock(mpi_mutex);
 
-    void put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target)
+        MPI_Win_start(group, 0, d_vals_win);
+        MPI_Win_start(group, 0, d_inds_win);
+        MPI_Win_start(group, 0, d_ptrs_win);
+        MPI_Win_start(group, 0, flag_win);
+
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
+#endif
+
+        CPU_TIMER_START(tmp_timer)
+
+        // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
+        MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
+        MPI_Put(d_inds, nnz, MPI_INT32_T, target, 0, nnz, MPI_INT32_T, d_inds_win);
+        MPI_Put(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 0, ptr_size + 1, MPI_INT32_T, d_ptrs_win);
+
+        // Write nnz to target
+        MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
+
+        MPI_Win_complete(d_vals_win);
+        MPI_Win_complete(d_inds_win);
+        MPI_Win_complete(d_ptrs_win);
+        MPI_Win_complete(flag_win);
+
+        CPU_TIMER_STOP(tmp_timer)
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(__timer_vals_tmp_timer.back());
+
+    }
+
+
+    float put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0)
     {
 
 #ifdef PTR_CHECK
@@ -82,6 +99,31 @@ struct TileHolder
         CHECK_PTR(d_ptrs, here_iteration)
         here_iteration++;
 #endif
+
+#ifdef NVTX_PROFILING
+        int nvtx_color;
+        char comunication_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else if (tag == 0){
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        } else {
+                nvtx_color = 2;
+        }
+        if (tag!=-1) sprintf(comunication_str, "Put time %c", nvtx_char);
+        else sprintf(comunication_str, "Put warmup", nvtx_char);
+#endif
+
+        CPU_TIMER_DEF(tmp_timer)
+        std::lock_guard<std::mutex> lock(mpi_mutex);
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
+#endif
+
+        CPU_TIMER_START(tmp_timer)
 
         // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
         MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
@@ -98,11 +140,52 @@ struct TileHolder
         MPI_Win_flush(target, flag_win); //TODO: Do I need this?
         //MPI_Win_flush_all(flag_win); //TODO: Do I need this?
 
+        CPU_TIMER_STOP(tmp_timer)
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(__timer_vals_tmp_timer.back());
     }
 
 
-    IT wait(int src)
+    IT wait_gat(int src, MPI_Group& group, cudaStream_t stream = 0, int tag=0)
     {
+        MPI_Win_post(group, 0, d_ptrs_win);
+        MPI_Win_post(group, 0, d_inds_win);
+        MPI_Win_post(group, 0, d_vals_win);
+        MPI_Win_post(group, 0, flag_win);
+
+
+        MPI_Win_wait(d_ptrs_win);
+        MPI_Win_wait(d_inds_win);
+        MPI_Win_wait(d_vals_win);
+        MPI_Win_wait(flag_win);
+
+        //MPI_Win_sync(flag_win);
+        return *flag;
+    }
+
+
+    IT wait(int src, cudaStream_t stream = 0, int tag=0)
+    {
+#ifdef NVTX_PROFILING
+        int nvtx_color;
+        char nvtx_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else if (tag == 0){
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        } else {
+                nvtx_color = 2;
+        }
+        if (tag!=-1) sprintf(nvtx_str, "Fetching remote data %c", nvtx_char);
+        else sprintf(nvtx_str, "Put warmup", nvtx_char);
+        NVTX_PUSH_RANGE_CUDA(nvtx_str,nvtx_color,stream);
+#endif
+
         IT nnz;
         do 
         {
@@ -117,17 +200,124 @@ struct TileHolder
         *flag = -1;
 
         MPI_Win_sync(flag_win);
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
         return nnz;
     }
 
 
+    float send_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0) 
+    {
+#ifdef NVTX_PROFILING
+        int nvtx_color;
+        char comunication_str[20], nvtx_char;
+        if (tag == 1) {
+                nvtx_color = 3;
+                nvtx_char  = 'B';
+        } else {
+                nvtx_color = 4;
+                nvtx_char  = 'A';
+        }
+        sprintf(comunication_str, "Send time %c", nvtx_char);
+#endif
+
+        float time = 0.0;
+        CPU_TIMER_DEF(tmp_timer)
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
+#endif
+
+        MPI_Request requests[4];
+        {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Isend(&nnz, 1, MPI_INT32_T, target, 0, comm, &(requests[0])); // BUG: MPI types are hardcoded
+        }
+
+        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
+
+        if (nnz>0) {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            CPU_TIMER_START(tmp_timer)
+            MPI_Isend(d_vals, nnz,          MPI_FLOAT,   target, 1, comm, &(requests[1])); // BUG: MPI types are hardcoded
+            MPI_Isend(d_inds, nnz,          MPI_INT32_T, target, 2, comm, &(requests[2])); // BUG: MPI types are hardcoded
+            MPI_Isend(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 3, comm, &(requests[3])); // BUG: MPI types are hardcoded
+            MPI_Waitall(4, requests, MPI_STATUS_IGNORE);
+            CPU_TIMER_STOP(tmp_timer)
+            time = __timer_vals_tmp_timer.back();
+        }
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(time);
+    }
+
+
+    IT receve_tile(int src, std::mutex& mpi_mutex) {
+        int recv_nnz;
+        MPI_Request requests[4];
+        {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Irecv(&recv_nnz, 1, MPI_INT32_T, src, 0, comm, &(requests[0]));
+        }
+
+        MPI_Wait(&(requests[0]), MPI_STATUS_IGNORE);
+
+        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
+
+        if (recv_nnz>0) {
+            // std::lock_guard<std::mutex> lock(mpi_mutex);
+            MPI_Irecv(d_vals_buf, recv_nnz,     MPI_FLOAT,   src, 1, comm, &(requests[1]));
+            MPI_Irecv(d_inds_buf, recv_nnz,     MPI_INT32_T, src, 2, comm, &(requests[2]));
+            MPI_Irecv(d_ptrs_buf, ptr_size + 1, MPI_INT32_T, src, 3, comm, &(requests[3]));
+            MPI_Waitall(3, requests + 1, MPI_STATUS_IGNORE);
+        }
+
+        return(recv_nnz);
+    }
+
+    void warmup(Implementation impl, VT *d_vals, IT *d_inds, IT *d_ptrs) {
+        int comm_size, comm_rank;
+        MPI_Comm_size(comm, &comm_size);
+        MPI_Comm_rank(comm, &comm_rank);
+
+        if ((d_vals == nullptr) || (d_inds == nullptr) || (d_ptrs == nullptr)) return;
+
+        if (impl == Implementation::PUT) {
+            std::mutex useless_mutex;
+            for (int i=0; i<comm_size; i++) {
+                put_tile(d_vals, d_inds, d_ptrs, 1, 1, i, std::ref(useless_mutex), 0, -1);
+                usleep(500);
+            }
+        }
+        // TODO put here the warmup for send/recv
+    }
+
+    IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) {
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Fetching local data",2);
+#endif
+
+        CUDA_CHECK(cudaMemcpyAsync(d_vals_buf, input->val,     (input->nnz) * sizeof(VT), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_inds_buf, input->idx_vec, (input->nnz) * sizeof(IT), cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(d_ptrs_buf, input->ptr_vec, (ptr_size+1) * sizeof(IT), cudaMemcpyDeviceToDevice, stream));
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+        return(input->nnz);
+    }
 
 
     void sync_buffers()
     {
-        MPI_Win_sync(d_vals_win);
-        MPI_Win_sync(d_inds_win);
-        MPI_Win_sync(d_ptrs_win);
+        //MPI_Win_sync(d_vals_win);
+        //MPI_Win_sync(d_inds_win);
+        //MPI_Win_sync(d_ptrs_win);
     }
 
 
@@ -168,17 +358,13 @@ struct TileHolder
 
 
     int node_allgather(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid,
-                       VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs)
+                       VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs, CsxBuffers<IT,VT>* buffers=nullptr)
     {
 
         sync_buffers();
 
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
-
-        // Convert rowtprs to nnz per row
-        rowptrs_to_rownnz(d_ptrs_buf, nrows);
-
 
         // Get nnz per tile
         std::vector<int> node_nnz(node_size);
@@ -190,44 +376,114 @@ struct TileHolder
         int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
 
-
-        CUDA_CHECK(cudaMalloc(d_node_vals, sizeof(VT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
-        CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        // Buffer set-up
+        if (buffers == nullptr) {
+            CUDA_CHECK(cudaMalloc(d_node_vals,    sizeof(VT) * total_nnz));
+            CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
+            CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
+        } else {
+            buffers->ensure(total_nnz, total_nrows + 1);
+            *d_node_vals    = buffers->d_node_vals;
+            *d_node_colinds = buffers->d_node_colinds;
+            *d_node_rowptrs = buffers->d_node_rowptrs;
+        }
         CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
-        
+
+        // Manage the case of singleton with a direct D2D copy
+        if (node_size == 1) {
+            CUDA_CHECK(cudaMemcpy(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpy(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpy(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice));
+            return(nnz);
+        }
+
+        // Convert rowtprs to nnz per row
+        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffer));
+
 
         // Allgatherv each buffer
 
+#ifndef P2P_ALLGATHERV
         // Values
-        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(), 
+        MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
                        MPIType<VT>(), grid->node_comm);
-         
+
         // Colinds
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
-        
+#else
+        int tag;
+        MPI_Status  *statuses = (MPI_Status*) malloc(2*(grid->node_size) * sizeof(MPI_Status));
+        MPI_Request *requests = (MPI_Request*)malloc(2*(grid->node_size) * sizeof(MPI_Request));
+        for (int i=0; i<grid->node_size; i++) {
+            if (i!=(grid->node_rank)) {
+                tag = (grid->node_rank) * (grid->node_size) + i;
+                MPI_Isend(d_vals_buf, nnz, MPIType<VT>(), i, tag, grid->node_comm, &(requests[i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+
+                tag = i * (grid->node_size) + (grid->node_rank);
+                MPI_Irecv(d_node_vals + displs[i], node_nnz[i], MPIType<VT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+            } else {
+                // Local communication performed with a D2D copy
+                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
+            }
+        }
+        MPI_Waitall(2*(grid->node_size), requests, statuses);
+        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
+
+        for (int i=0; i<grid->node_size; i++) {
+            if (i!=(grid->node_rank)) {
+                tag = (grid->node_rank) * (grid->node_size) + i;
+                MPI_Isend(d_inds_buf, nnz, MPIType<IT>(), i, tag, grid->node_comm, &(requests[i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+
+                tag = i * (grid->node_size) + (grid->node_rank);
+                MPI_Irecv(d_node_colinds + displs[i], node_nnz[i], MPIType<IT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
+
+    #ifdef DEBUG_P2P_ALLGATHERV
+                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
+    #endif
+            } else {
+                // Local communication performed with a D2D copy
+                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
+            }
+        }
+        MPI_Waitall(2*(grid->node_size), requests, statuses);
+        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
+        free(requests);
+        free(statuses);
+#endif
         // Rowptrs
-        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),         
-                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),  
+        MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),
+                      (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),
                       grid->node_comm);
 
 
         // Convert rownnz to rowptrs
-        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows);
+        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffer));
 
         return(total_nnz);
     }
 
-    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
     {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
         IT * d_node_colinds, * d_node_rowptrs;
-        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
+        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
 
 #ifdef PTR_CHECK
         CHECK_PTR(d_node_vals, here_iteration)
@@ -240,13 +496,13 @@ struct TileHolder
                          d_node_vals, d_node_colinds, d_node_rowptrs);
     }
 
-    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid) 
+    mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
     {
         const int total_nrows = (grid->node_size) * nrows;
 
         VT * d_node_vals;
         IT * d_node_colinds, * d_node_rowptrs;
-        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs);
+        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
 
 #ifdef PTR_CHECK
         CHECK_PTR(d_node_vals, here_iteration)
@@ -258,43 +514,6 @@ struct TileHolder
         return form_mmiocsx(total_nrows, ncols, total_nnz, mmio::MajorDim::ROWS,
                             d_node_vals, d_node_colinds, d_node_rowptrs);
     }
-
-
-    template <typename T>
-    struct DiffOp2
-    {
-        DiffOp2(){}
-        __host__ __device__ __forceinline__
-        T operator()(const T& lhs, const T& rhs)
-        {
-            return lhs - rhs;
-        }
-    };
-
-
-    void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows)
-    {
-        void * d_tmp = NULL;
-        size_t tmp_size = 0;
-        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows));
-        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
-        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows));
-        CUDA_FREE_SAFE(d_tmp);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
-
-    void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows)
-    {
-        void * d_tmp = NULL;
-        size_t tmp_size = 0;
-        CUDA_CHECK(cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}));
-        CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
-        CUDA_CHECK(cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}));
-        CUDA_FREE_SAFE(d_tmp);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
 
 
     ~TileHolder()
@@ -321,6 +540,7 @@ struct TileHolder
     MPI_Win flag_win;
 
     IT ptr_size;
+    IT max_nnz;
 
     MPI_Comm comm;
     int rank;

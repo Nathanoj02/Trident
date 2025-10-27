@@ -29,7 +29,7 @@ int main(int argc, char ** argv)
     //            err = cudaSetDevice(mydev);
 
     int thread_level;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &thread_level);
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
 
     //int dev;
     //err = cudaGetDevice(&dev);
@@ -91,7 +91,7 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
       std::cout << "Number of processes per col: "  << nproccols     << std::endl;
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
-      std::cout << "Chosen implementation: " << config->impl << "(main use MPI_Put)" << std::endl;
+      std::cout << "Chosen implementation: " << config->impl_str << "(main use MPI_Put)" << std::endl;
       std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
     }
@@ -103,20 +103,23 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
-        if (strcmp(config->impl, "get") && strcmp(config->impl, "main")) {
-            if (world_rank == 0) fprintf(stderr, "Error: supported implementations are main or get (not %s)\n", config->impl);
-            MPI_Barrier(MPI_COMM_WORLD);
-            MPI_Abort(MPI_COMM_WORLD, __LINE__);
-        }
-        if (!strcmp(config->impl, "get") && (config->Acsc || config->spcomm)) {
+        if ((config->impl == Implementation::GET) && (config->Acsc || config->spcomm)) {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
 
+#ifndef SKIP_SPGEMM
+        if(config->skip_spgemm) {
+            if (world_rank == 0) fprintf(stderr, "WARNING: --skip-spgemm is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
+        }
+#else
+        if (world_rank == 0) fprintf(stderr, "WARNING: -DSKIP_SPGEMM is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
+#endif
+
         // TODO
-        if ( config->spcomm ) {
-            if (world_rank == 0) fprintf(stderr, "Error: --spcomm is not supported yet\n");
+        if ( config->spcomm && nprocpergroup > 1) {
+            if (world_rank == 0) fprintf(stderr, "Error: on 3D grids, --spcomm is not supported yet\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
@@ -165,30 +168,75 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-
-
         mmio::CSX<int32_t, float> *dist_C;
-        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl);
-        for (int i=0; i<10; i++) 
+
+        CPU_TIMER_DEF(spgemm);
+        CPU_TIMER_DEF(spacomm);
+
+#ifdef NVTX_PROFILING
+        cudaProfilerStart();
+        NVTX_PUSH_RANGE("spcomm",1);
+#endif
+
+        CPU_TIMER_START(spacomm);
+
+        // Puting this inside the loop produce craches on the start of second iteration; we don't know why
+        SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
+        if (config->spcomm) {
+            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_A.partitioning->grid);
+        } else {
+            spcomm_data = nullptr;
+        }
+
+        CPU_TIMER_STOP(spacomm);
+        if (world_rank==0)
+        {
+            TIMER_PRINT(spacomm);
+        }
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
+        CPU_TIMER_START(spgemm);
+
+        // Gen thread pool (mostly for profiling)
+        ThreadPool pool(2);
+
+        if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
+        for (int i=0; i<6; i++) 
         {
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
             fflush(stdout);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            sleep(0.2);
+
+#ifdef NVTX_PROFILING
+            NVTX_PUSH_RANGE("spgemm",1);
+#endif
+
             MPI_Barrier(MPI_COMM_WORLD);
-            if (!strcmp(config->impl, "main"))
-            {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B);
-            }
-            else if (!strcmp(config->impl, "get"))
+            if (config->impl == Implementation::GET)
             {
                 dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
+            } else {
+                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, config->impl, pool, spcomm_data, config->skip_spgemm);
             }
 
             MPI_Barrier(MPI_COMM_WORLD);
             delete dist_C;
+
+#ifdef NVTX_PROFILING
+            NVTX_POP_RANGE;
+#endif
+
             fflush(stdout);
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
+
+#ifdef NVTX_PROFILING
+        cudaProfilerStop();
+#endif
+        if (spcomm_data != nullptr) delete spcomm_data;
     }
 
     dmmio::DCOO_destroy(&dcoo_A);

@@ -1,6 +1,7 @@
 .vscode
 .kdev4/
 HnS-SpGEMM.kdev4
+.venv/
 
 comparison/ccutils/
 comparison/build/
@@ -14,3 +15,8 @@ SbatchMan/
 interactive_results/
 interactive_results_2/
 small_matrices/
+kokkos/
+kokkos-kernels/
+
+*.out
+*.bmtx

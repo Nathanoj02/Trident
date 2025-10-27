@@ -19,6 +19,13 @@
 #include <numeric>
 #include <thread>
 
+// #define NVTX_PROFILING
+#ifdef NVTX_PROFILING
+#include <cuda_profiler_api.h>
+#define CCUTILS_ENABLE_NVTX 1
+#endif
+
+#include <ccutils/timers.h>
 #include <ccutils/colors.h>
 #include <ccutils/mpi/mpi_macros.h>
 #include <ccutils/macros.h>
@@ -35,6 +42,8 @@
 
 #include "MPIType.h"
 
+#define CUDA_API_PER_THREAD_DEFAULT_STREAM
+
 #include <mpi.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -49,8 +58,31 @@
 #include <KokkosSparse_spgemm.hpp>
 #include <KokkosSparse_spadd.hpp>
 
+#define BMASK_TYPE uint8_t
+#define MASK_SIZE 8   // set to 8 in production
+// #define SKIP_SPGEMM // To debug compression
+// #define DEBUGBITMASKGENERATION
 
 extern FILE * logfile;
 
+// #define P2P_ALLGATHERV // Standard allgatherv seam to stage on the host even when cuda-aware
+// #define DEBUG_P2P_ALLGATHERV
+
+// For thread pools
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <atomic>
+
+enum Implementation {
+    SENDRECV,
+    PUT,
+    GET
+};
+#define STDIMPL Implementation::SENDRECV
+
+#include "spacomm.cuh"
 
 #endif

@@ -2,12 +2,13 @@ variables:
   # mtx: '/global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/matrices_list_mtx.txt'
   mtx:
     - /global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/Belcastro/mouse_gene/mouse_gene.bmtx
+    - /global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/vanHeukelum/cage15/cage15.bmtx
     # - /global/cfs/cdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/GHS_psdef/ldoor/ldoor.mtx
-  async_mpi: ['__mpi-async'] #, '']
+  async_mpi: ['']# ['__mpi-async'] #, '']
   args:
    - "--impl get"
    - "--impl main"
-   - "--impl main --Acsc"
+   # - "--impl main --Acsc"
    # - "--impl main --Acsc --spcomm"
 
 command: "srun -n {np} -G {np} --gpu-bind=single:1 --cpus-per-task=3 --tasks-per-node 4 ./build_hns/run_spgemm --matA {mtx} --matB {mtx} --2D-pgrid {grid} {args}"

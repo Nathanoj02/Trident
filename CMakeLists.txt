@@ -87,7 +87,9 @@ endmacro()
 # TESTS
 add_test(test_queue)
 add_test(test_kokkos)
-
+add_test(test_compression)
+add_test(test_cuda_mpi)
+add_test(test_p2pallgatherv)
 
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
@@ -107,4 +109,30 @@ endmacro()
 # EXECUTABLES
 add_src(run_spgemm)
 add_src(scratch)
+
+# MACRO FOR ADDING PROFILING EXECUTABLES
+macro(add_prof name folder)
+    add_executable(${name}_prof ${folder}/${name}.cu)
+    target_link_libraries(${name}_prof PRIVATE
+                            MPI::MPI_CXX
+                            dmmio
+                            ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                            hns_spgemm
+                            KokkosKernels::kokkoskernels Kokkos::kokkos
+                            Threads::Threads
+                            CUDA::cusparse)
+    target_compile_options(${name}_prof PUBLIC -Wall -lnvToolsExt)
+    target_compile_definitions(${name}_prof PUBLIC NVTX_PROFILING)
+endmacro()
+
+#PROFILING
+add_prof(run_spgemm src)
+add_prof(test_p2pallgatherv test)
+
+
+option(ENABLE_NVTX_PROFILING "Enable NVTX profiling" OFF)
+
+if(ENABLE_NVTX_PROFILING)
+    target_compile_definitions(hns_spgemm PUBLIC NVTX_PROFILING)
+endif()
 

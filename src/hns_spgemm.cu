@@ -6,27 +6,128 @@ MPIDataTypeCache mpidtc; //fix linker error
 int here_iteration = 0;
 //#endif
 
+// #define DEBUG_THREAD_COMPRESSION
+
+// Barrier for sync afther thread allocs
+#include <condition_variable>
+SimpleBarrier alloc_sync_point(3);
+SimpleBarrier free_sync_point(3);
+
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx)
+inline uint64_t compute_message_size(int nnz, int ptr_size) {
+        return( (nnz * sizeof(VT)) + ((nnz + ptr_size) * sizeof(IT)) );
+}
+
+template <typename IT, typename VT>
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, 
+                          const Implementation impl, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, 
+                          MPI_Group& big_group,
+                          int comm_rank, std::mutex& mpi_mutex, int tag=0)
 {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    cudaStream_t stream;
+    CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
+    CUDA_CHECK(cudaStreamCreate(&stream));
 
-    IT ptrsize = (csx->majordim == mmio::ROWS) ? (csx->nrows) : (csx->ncols) ;
+    SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
+
+    MPI_Group pair_group;
+
+    float internode_comm;
+    CUDA_TIMER_DEF(compression_time)
+#ifdef NVTX_PROFILING
+    int nvtx_color;
+    char compression_str[20], comunication_str[20], nvtx_char;
+    if (tag == 1) {
+            nvtx_color = 3;
+            nvtx_char  = 'B';
+    } else {
+            nvtx_color = 4;
+            nvtx_char  = 'A';
+    }
+    sprintf(compression_str,  "Compression %c", nvtx_char);
+#endif
+
+    IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
+    alloc_sync_point.arrive_and_wait();
+
     while (true)
     {
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA("Waiting_for_work",6,stream);
+#endif
+
         // Wait until someone tells me to send them a tile
         int target = queue.wait();
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
+        if (target == comm_rank) continue; // NOTE: self communication managed by main tread
 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
         {
+            free_sync_point.arrive_and_wait();
+            compression_buffers->explicitFree();
+            delete compression_buffers;
             return;
         }
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE_CUDA(compression_str,nvtx_color,stream);
+#endif
+
+        mmio::CSX<IT, VT> *compressed = nullptr;
+        if (spacomm != nullptr) 
+        {
+            CUDA_TIMER_START(compression_time, stream)
+            compressed = spacomm->Compress(csx, target, compression_buffers, stream);
+            CUDA_TIMER_STOP(compression_time)
+            CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
+
         // Put tile on remote process
-        holder.put_tile(csx->val, csx->idx_vec, csx->ptr_vec, csx->nnz, ptrsize, target);
+        //   NOTE: timer and NVTX ranges inside the function
+        const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
+        if (impl == Implementation::PUT) 
+        {
+            // Make MPI_Group with target
+            int group_ranks[1] = {target};
+            MPI_Group_incl(big_group, 1, group_ranks, &pair_group);
+
+            internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
+            //internode_comm = holder.put_tile_gat(tosend->val, tosend->idx_vec, tosend->ptr_vec, 
+            //                                     tosend->nnz, ptrsize, 
+            //                                     target, mpi_mutex, 
+            //                                     pair_group,
+            //                                     stream, tag);
+            MPI_Group_free(&pair_group);
+        } 
+        else 
+        {
+            internode_comm = holder.send_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
+        }
+
+
+#ifdef DETAILED_TIMERS
+        char tmpstr[20];
+        char desc = (tag == 0) ? 'A' : 'B' ; // I suppose I use tag 0 for A (left operand) and tag 1 for B (right operand)
+        sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
+        printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
+               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, internode_comm,
+               compute_message_size<IT,VT>(csx->nnz,    ptrsize+1),
+               compute_message_size<IT,VT>(tosend->nnz, ptrsize+1)
+        );
+#endif
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
@@ -34,18 +135,76 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     }
-
-
 }
 
 template <typename IT, typename VT>
-mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B)
+mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B, const Implementation impl, ThreadPool& pool,
+                                   SpaComm::SpaCommHandler<IT, VT> *spcomm, bool skipspgemm)
 {
+    // ------------------ Test compression on an independent buffer ------------------
+#ifdef NVTX_PROFILING
+    NVTX_PUSH_RANGE("Copy for bug fix",2);
+#endif
+
+    mmio::CSX<IT,VT> *bku_B = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+    {
+        bku_B->majordim = kwd_B.mmio_csx->majordim;
+        bku_B->nnz      = kwd_B.mmio_csx->nnz;
+        bku_B->nrows    = kwd_B.mmio_csx->nrows;
+        bku_B->ncols    = kwd_B.mmio_csx->ncols;
+
+        VT *new_val;
+        IT *new_row, *new_idx;
+        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(bku_B->nrows +1)));
+        CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_B->nnz)));
+        CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_B->nnz)));
+        CUDA_CHECK(cudaMemcpy(new_row, kwd_B.mmio_csx->ptr_vec, sizeof(IT)*(bku_B->nrows +1), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_idx, kwd_B.mmio_csx->idx_vec, sizeof(IT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_val, kwd_B.mmio_csx->val,     sizeof(VT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
+        bku_B->val      = new_val;
+        bku_B->ptr_vec  = new_row;
+        bku_B->idx_vec  = new_idx;
+    }
+
+    mmio::CSX<IT,VT> *bku_A = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
+    {
+        bku_A->majordim = kwd_A.mmio_csx->majordim;
+        bku_A->nnz      = kwd_A.mmio_csx->nnz;
+        bku_A->nrows    = kwd_A.mmio_csx->nrows;
+        bku_A->ncols    = kwd_A.mmio_csx->ncols;
+
+        VT *new_val;
+        IT *new_row, *new_idx, ptr_size = (bku_A->majordim == mmio::MajorDim::ROWS ) ? (bku_A->nrows +1) : (bku_A->ncols +1) ;
+        CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(ptr_size)));
+        CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_A->nnz)));
+        CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_A->nnz)));
+        CUDA_CHECK(cudaMemcpy(new_row, kwd_A.mmio_csx->ptr_vec, sizeof(IT)*(ptr_size),   cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_idx, kwd_A.mmio_csx->idx_vec, sizeof(IT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
+        CUDA_CHECK(cudaMemcpy(new_val, kwd_A.mmio_csx->val,     sizeof(VT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
+        bku_A->val      = new_val;
+        bku_A->ptr_vec  = new_row;
+        bku_A->idx_vec  = new_idx;
+    }
+
+#ifdef NVTX_PROFILING
+    NVTX_POP_RANGE;
+#endif
+    // -------------------------------------------------------------------------------
+
     // Process grid info
     dmmio::ProcessGrid * grid = kwd_A.partitioning->grid;
     int node_size        = grid->node_size;                     // NOTE: every grid must have the same node size!!
     int common_grid_size = kwd_A.partitioning->grid->row_size; // This must be equal to kwd_B->...->col_size
 
+
+    // For forming mpi groups in the gat stuff 
+    MPI_Group row_group;
+    MPI_Comm_group(grid->row_comm, &row_group);
+
+    MPI_Group col_group;
+    MPI_Comm_group(grid->col_comm, &col_group);
+
+    MPI_Group A_tile_group, B_tile_group;
 
     // Number of iterations (i.e. number of tile to fetch to complete the global SpGEMM)
     const int n_iters = common_grid_size;
@@ -73,10 +232,24 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
 
 
+#ifdef NVTX_PROFILING
+    NVTX_PUSH_RANGE("Alloc holders & buffers",2);
+#endif
+
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     TileHolder<IT, VT> A_holder(kwd_A.getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
+    CsxBuffers<IT,VT> *gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz*1.5, kwd_B.getLocalNrows()*node_size +1);
+    CsxBuffers<IT,VT> *conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNcols()+1);
 
+#ifdef NVTX_PROFILING
+    NVTX_POP_RANGE;
+#endif
+
+
+    // Cuda stream for main thread
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
 
     // cusparse handle
     cusparseHandle_t handle;
@@ -91,11 +264,19 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     MPI_Barrier(MPI_COMM_WORLD);
 #endif
 
+    int dev_id; // To be sure each thread on the same process is assigned to the same GPU
+    CUDA_CHECK(cudaGetDevice(&dev_id));
+
     // Launch comm threads
-    std::thread A_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(A_queue), std::ref(A_holder), kwd_A.mmio_csx);
-    std::thread B_comm_thread(comm_thread_loop_csx<IT, VT>,
-                            std::ref(B_queue), std::ref(B_holder), kwd_B.mmio_csx);
+    std::mutex mpi_mutex;
+    auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
+                            std::ref(A_queue), std::ref(A_holder), bku_A, 
+                            impl, spcomm, dev_id, row_group,
+                            grid->row_rank, std::ref(mpi_mutex), 0);
+    auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
+                            std::ref(B_queue), std::ref(B_holder), bku_B, 
+                            impl, spcomm, dev_id, col_group,
+                            grid->col_rank, std::ref(mpi_mutex), 1);
 
 #if DEBUG_MAIN
     MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
@@ -109,7 +290,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
 #ifdef DETAILED_TIMERS
-    CUDA_TIMER_DEF(internode_comm)
+    CPU_TIMER_DEF(wait_for_input)
     CUDA_TIMER_DEF(intranode_comm)
     CUDA_TIMER_DEF(comp_time)
     CUDA_TIMER_DEF(A_conversion)
@@ -119,9 +300,11 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
 
     // Main loop
+    alloc_sync_point.arrive_and_wait();
     for (int iter = 0; iter < n_iters; iter++)
     {
         CPU_TIMER_START(spgemm);
+
         if (grid->global_rank == 0)
         {
             std::cout<<"Iteration "<<iter<<std::endl;
@@ -133,29 +316,72 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         fprintf(stdout, "Iteration %d -- Rank %d asking for tile of A from %d and tile of B from %d\n", iter, grid->global_rank,
                 A_owner_global,
                 B_owner_global);
+        fflush(stdout);
         FLUSH_WAIT(1000000);
 #endif
+
+
 
         // Tell target I'm ready for tiles of A and B
         A_queue.notify(row_rank, colAtoGet, iter);
         B_queue.notify(col_rank, rowBtoGet, iter);
 
 
+// NOTE:  NVTX ranges are inside '.wait' and '.copy_device_local_csx'
 #ifdef DETAILED_TIMERS
-        CUDA_TIMER_START_DEFAULT(internode_comm)
+        CPU_TIMER_START(wait_for_input)
 #endif
 
-        // Wait until I've been sent A and B
-        IT A_tile_nnz = A_holder.wait(colAtoGet);
-        IT B_tile_nnz = B_holder.wait(rowBtoGet);
+        // Wait until I've been sent A and B or copy from the local data
+        //   NOTE: here I manage the self communication case
+        IT A_tile_nnz, B_tile_nnz;
+        if (colAtoGet != grid->row_rank) 
+        {
+            if (impl == Implementation::PUT) 
+            {
+                //int group_ranks[1] = {colAtoGet};
+                //MPI_Group_incl(row_group, 1, group_ranks, &A_tile_group);
+                A_tile_nnz = A_holder.wait(colAtoGet, stream, 0);
+                //A_tile_nnz = A_holder.wait_gat(colAtoGet, A_tile_group, stream, 0);
+                //MPI_Group_free(&A_tile_group);
+            } 
+            else 
+            {
+                A_tile_nnz = A_holder.receve_tile(colAtoGet, std::ref(mpi_mutex));
+            }
+        } 
+        else 
+        {
+            A_tile_nnz = A_holder.copy_device_local_csx(kwd_A.mmio_csx, stream);
+        }
 
+        if (rowBtoGet != grid->col_rank) 
+        {
+            if (impl == Implementation::PUT) 
+            {
+                //int group_ranks[1] = {rowBtoGet};
+                //MPI_Group_incl(col_group, 1, group_ranks, &B_tile_group);
+                B_tile_nnz = B_holder.wait(rowBtoGet, stream, 1);
+                //B_tile_nnz = B_holder.wait_gat(rowBtoGet, B_tile_group, stream, 0);
+                //MPI_Group_free(&B_tile_group);
+            } 
+            else 
+            {
+                B_tile_nnz = B_holder.receve_tile(rowBtoGet, std::ref(mpi_mutex));
+            }
+        } 
+        else 
+        {
+            B_tile_nnz = B_holder.copy_device_local_csx(kwd_B.mmio_csx, stream);
+        }
 
 #ifdef DETAILED_TIMERS
-        CUDA_TIMER_STOP(internode_comm)
+        CPU_TIMER_STOP(wait_for_input)
 #endif
 
 #if DEBUG_MAIN
-        fprintf(stdout, "Rank %d received tiles for iteration %d\n", grid->global_rank, iter);
+        fprintf(stdout, "Iteration -- %d: Rank %d received tiles for iteration %d\n", iter, grid->global_rank, iter);
+        fflush(stdout);
         FLUSH_WAIT(1000000);
 #endif
 
@@ -168,6 +394,10 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("A_csc2csr_conversion",1);
+#endif
+
         /* TODO check: I must to be carefull here since A can be both a CSR or CSC and all the parameeters
          *  I am considering 'kwd_A->getLocalNrows()' refers to the local owned tiles, not the receved ones.
          */
@@ -175,20 +405,29 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         CUDA_TIMER_START_DEFAULT(A_conversion)
 #endif
 
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(handle, A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> A_remote(handle, A_holder.form_mmiocsx(kwd_A.mmio_csx->nrows, kwd_A.mmio_csx->ncols, A_tile_nnz, kwd_A.mmio_csx->majordim), conversion_buffs);
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(A_conversion)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+        NVTX_PUSH_RANGE("B_allghater",1);
 #endif
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_START_DEFAULT(intranode_comm)
 #endif
 
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid));
+        KokkosWrap::LocalMatrix<int32_t, int32_t, float> B_node(handle, B_holder.node_allgather_mmiocsx(kwd_B.mmio_csx->nrows, kwd_B.mmio_csx->ncols, B_tile_nnz, grid, gather_buffs));
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(intranode_comm)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
 #endif
 
 #ifdef VERBOSE
@@ -202,10 +441,15 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // Local multiply
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d beginning multiply for iteration %d\n", grid->global_rank, iter);
-        print_d_arr((int*)A_remote.storage.graph.entries.data(), A_remote.storage.nnz(), "A_remote colinds");
-        print_d_arr((int*)B_node.storage.graph.entries.data(), B_node.storage.nnz(), "B_remote colinds");
-        print_d_arr((int*)A_remote.storage.graph.row_map.data(), A_remote.storage.numRows() + 1, "B_remote rowptrs");
-        print_d_arr((int*)B_node.storage.graph.row_map.data(), B_node.storage.numRows() + 1, "B_remote rowptrs");
+        //print_d_arr((int*)A_remote.storage.graph.entries.data(), A_remote.storage.nnz(), "A_remote colinds");
+        //print_d_arr((int*)B_node.storage.graph.entries.data(), B_node.storage.nnz(), "B_remote colinds");
+        //print_d_arr((int*)A_remote.storage.graph.row_map.data(), A_remote.storage.numRows() + 1, "B_remote rowptrs");
+        //print_d_arr((int*)B_node.storage.graph.row_map.data(), B_node.storage.numRows() + 1, "B_remote rowptrs");
+#endif
+
+
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("Local SpGEMM",0);
 #endif
 
 
@@ -214,10 +458,17 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
         // This perform C_local += A_remote * B_node
-        KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
+#ifndef SKIP_SPGEMM
+        if (!skipspgemm)
+            KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
+#endif
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comp_time)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
 #endif
 
         // Round shift
@@ -227,34 +478,32 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 
         // Cleanup
         // B_node underlying storage must be manually freed because its views are unmanaged
-        B_node.freeBuffers();
-        if (Acsc_flag)
+        if (gather_buffs==nullptr) B_node.freeBuffers();
+        if (Acsc_flag && conversion_buffs == nullptr)
         {
             A_remote.freeBuffers(); // Free A_remote if spcomm, since received tile was copied into a separate buffer
         }
 
+#ifdef DETAILED_TIMERS
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", grid->global_rank);
+        TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
+        fflush(stdout);
+#endif
+
+
 #ifdef BULK_SYNC
-        MPI_Barrier(MPI_COMM_WORLD);
+        //MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
-
-#ifdef DETAILED_TIMERS
-    char tmpstr[100];
-    sprintf(tmpstr, "[process %d]", grid->global_rank);
-    TIMER_PRINT_WPREFIX_STR(internode_comm, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
-    fflush(stdout);
-#endif
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
     FLUSH_WAIT(1000000);
 #endif
-
-    A_comm_thread.join();
-    B_comm_thread.join();
 
     MPI_Barrier(MPI_COMM_WORLD);
     CPU_TIMER_STOP(spgemm);
@@ -282,8 +531,21 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     }
 
 
-    mmio::CSX<IT, VT> *out = C_local.get_csx(); // KokkosWrap::rawptr_get(C_local);
+    mmio::CSX<IT, VT> *out = KokkosWrap::rawptr_get(C_local);
+
+    free_sync_point.arrive_and_wait();
+
+    CSX_destroy_device(&bku_B);
+    CSX_destroy_device(&bku_A);
+
+    conversion_buffs->explicitFree();
+    gather_buffs->explicitFree();
+    delete conversion_buffs;
+    delete gather_buffs;
+
+    A_comm_thread.get();
+    B_comm_thread.get();
     return out;
 }
 
-template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B);
+template mmio::CSX<int32_t, float>* hns_spgemm_main(KWrapDMat<int32_t, float>& kwd_A, KWrapDMat<int32_t, float>& kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm);

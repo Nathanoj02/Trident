@@ -8,7 +8,7 @@
 #include <ccutils/cuda/cuda_timers.h>
 
 #define DEBUG_MAIN 0
-#define DETAILED_TIMERS
+//#define DETAILED_TIMERS
 //#define VERBOSE
 
 
@@ -74,4 +74,4 @@ template <typename IT, typename VT>
 using KWrapLMat = typename KokkosWrap::LocalMatrix<IT, IT, VT>;
 
 template <typename IT, typename VT>
-mmio::CSX<IT, VT> * hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B);
+mmio::CSX<IT, VT> * hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<IT,VT> *spcomm=nullptr, bool skipspgemm=false);

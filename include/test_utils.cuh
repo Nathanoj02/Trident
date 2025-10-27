@@ -15,7 +15,9 @@ COUNTER_DEF(0);
 
 struct config
 {
-    const char * impl;
+    const char * impl_str;
+    Implementation impl;
+    bool skip_spgemm;
     bool spcomm;
     bool Acsc;
 
@@ -69,9 +71,10 @@ char* extract_matrix_name(const char* filepath)
 
 void parse_args(int argc, char ** argv, Config * config)
 {
+    config->skip_spgemm = false;
     config->spcomm = false;
     config->Acsc = false;
-    config->impl = "none";
+    config->impl_str = "none";
     config->nprocrows = 1;
     config->nproccols = 1;
 
@@ -106,9 +109,14 @@ void parse_args(int argc, char ** argv, Config * config)
             config->Acsc = true;
             inc = 1;
         }
+        else if (!strcmp(argname, "--skip-spgemm"))
+        {
+            config->skip_spgemm = true;
+            inc = 1;
+        }
         else if (!strcmp(argname, "--impl"))
         {
-            config->impl = argv[i+1];
+            config->impl_str = argv[i+1];
         }
         else if (!strcmp(argname, "--2D-pgrid"))
         {
@@ -133,6 +141,16 @@ void parse_args(int argc, char ** argv, Config * config)
             }
         }
 
+    }
+
+    if (!strcmp(config->impl_str, "get")) config->impl = Implementation::GET;
+    else if (!strcmp(config->impl_str, "put")) config->impl = Implementation::PUT;
+    else if (!strcmp(config->impl_str, "sendrecv")) config->impl = Implementation::SENDRECV;
+    else if (!strcmp(config->impl_str, "none")) config->impl = STDIMPL;
+    else {
+        fprintf(stdout, "Error: unrecognized implementation %s, valid implementations are:\n\t%s\n\t%s\n\t%s\n",
+                config->impl_str, "get", "put", "sendrecv");
+        exit(__LINE__);
     }
 
 }

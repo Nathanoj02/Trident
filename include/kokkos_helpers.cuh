@@ -107,9 +107,9 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
     //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
-    IT * d_rowptrs = d2h_copy(rowptrs.data(), coo->nrows + 1);
-    IT * d_colinds = d2h_copy(colinds.data(), coo->nnz);
-    VT * d_vals = d2h_copy(vals.data(), coo->nnz);
+    IT * d_rowptrs = h2d_copy(rowptrs.data(), coo->nrows + 1);
+    IT * d_colinds = h2d_copy(colinds.data(), coo->nnz);
+    VT * d_vals = h2d_copy(vals.data(), coo->nnz);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("converting\n"));
     //FLUSH_WAIT(1000000);
@@ -276,9 +276,9 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
     //FLUSH_WAIT(1000000);
 
     // Now, copy buffers to the device
-    IT * d_colptrs = d2h_copy(colptrs.data(), coo->ncols + 1);
-    IT * d_rowinds = d2h_copy(rowinds.data(), coo->nnz);
-    VT * d_vals = d2h_copy(vals.data(), coo->nnz);
+    IT * d_colptrs = h2d_copy(colptrs.data(), coo->ncols + 1);
+    IT * d_rowinds = h2d_copy(rowinds.data(), coo->nnz);
+    VT * d_vals = h2d_copy(vals.data(), coo->nnz);
 
     //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("converting\n"));
     //FLUSH_WAIT(1000000);
