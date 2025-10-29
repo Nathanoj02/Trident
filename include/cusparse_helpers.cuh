@@ -2,13 +2,216 @@
 
 #include "common.h"
 #include "utils.cuh"
+#include "kokkos_helpers.cuh"
+
+#include <dmmio/dmmio.h>
+#include <dmmio/partitioning.h>
 
 
 
 using namespace mmio;
 
+template <typename IT, typename VT>
+struct DistCusparseCSX
+{
+    using namespace dmmio;
 
-template <typename IT, VT>
+    Partitioning * partitioning;
+    CusparseCSX<IT, VT> * csx;
+
+    DistCusparseCSX(){}
+
+    DistCusparseCSX(CSX<IT, VT> * mat, Partitioning * part):
+        mat(mat), partitioning(part)
+    {}
+
+
+    DistCusparseCSX(dmmio::DCOO<IT, VT> * dcoo, MajorDim T):
+        partitioning(dcoo->partitioning)
+    {
+        using namespace dmmio::partitioning::indextransform;
+
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0)
+        {
+            dcoo->coo->nrows++;
+        }
+
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size * MASK_SIZE) != 0)
+        {
+            dcoo->coo->ncols++;
+        }
+
+        KIT max_dim = max(dcoo->coo->ncols, dcoo->coo->nrows);
+
+        dcoo->coo->ncols = max_dim;
+        dcoo->coo->nrows = max_dim;
+        dcoo->coo->nrows /= (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size);
+        dcoo->coo->ncols /= dcoo->partitioning->grid->row_size;
+
+        for (KIT i=0; i<dcoo->coo->nnz; i++)
+        {
+            dcoo->coo->row[i] = global2local::row(dcoo->partitioning, dcoo->coo->row[i]);
+            dcoo->coo->col[i] = global2local::col(dcoo->partitioning, dcoo->coo->col[i]);
+        }
+
+        auto coo = dcoo->coo;
+
+        CSX<IT, VT> * mat;
+
+        // --- Step 2: Decide layout ---
+        if (T == MajorDim::ROWS) 
+        {
+            mat = coo_to_row_csx(coo);
+        } 
+        else 
+        {
+            mat = coo_to_col_csx(coo);
+        }
+        
+        csx = new CusparseCSX<IT, VT>(mat);
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+
+    IT getLocalPtrvecsize()
+    {
+        if (csx->is_buffs())
+        {
+            return csx->nrows();
+        }
+        if (csx->mat->majordim == MajorDim::ROWS)
+        {
+            return csx->nrows();
+        }
+        else
+        {
+            return csx->ncols();
+        }
+    }
+
+
+    inline IT getLocalNrows()
+    {
+        return csx->nrows();
+    }
+
+
+    inline IT getLocalNcols()
+    {
+        return csx->ncols();
+    }
+
+
+    inline IT getLocalNnz()
+    {
+        return csx->nnz();
+    }
+
+
+    void explicit_free()
+    {
+        csx->explicit_free();
+    }
+    
+};
+
+
+CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, CsxBuffers<IT, VT> * buffers)
+{
+    // Variables
+    VT * d_vals = csc->val;
+    KIT * d_rowinds = csc->idx_vec;
+    KIT * d_colptrs = csc->ptr_vec;
+
+    auto nnz = csc->nnz;
+    auto nrows = csc->nrows;
+    auto ncols = csc->ncols;
+
+
+    // CSX result
+    CSX<IT, VT> * csr = new CSX<IT, VT>;
+    csr->majordim = MajorDim::ROWS;
+    csr->nnz = nnz;
+    csr->nrows = nrows;
+    csr->ncols = ncols;
+
+
+
+    // CSR pointers
+    VT * d_csr_vals;
+    KIT * d_colinds, * d_rowptrs;
+
+    if (buffers == nullptr) 
+    {
+        CUDA_CHECK(cudaMalloc(&d_csr_vals, sizeof(VT) * nnz));
+        CUDA_CHECK(cudaMalloc(&d_colinds, sizeof(KIT) * nnz));
+        CUDA_CHECK(cudaMalloc(&d_rowptrs, sizeof(KIT) * (nrows + 1)));
+    } 
+    else 
+    {
+        buffers->ensure(nnz, nrows + 1);
+        d_csr_vals = buffers->d_node_vals;
+        d_colinds  = buffers->d_node_colinds;
+        d_rowptrs  = buffers->d_node_rowptrs;
+    }
+
+    csr->val = d_csr_vals;
+    csr->ptr_vec = d_rowptrs;
+    csr->idx_vec = d_colinds;
+
+    // First, use cusparse to convert the csc pointers into raw CSR pointers
+    // cusparse does not have a csc->csr, it only has csr->csc
+    // we can trick it into doing csc->csr by pretending our csc
+    // is a transposed csr matrix
+    size_t buff_size = 0;
+    void * d_buff = nullptr;
+    CUSPARSE_CHECK(cusparseCsr2cscEx2_bufferSize(handle,
+                                                ncols, nrows,
+                                                nnz,
+                                                d_vals,
+                                                d_colptrs,
+                                                d_rowinds,
+                                                d_csr_vals,
+                                                d_rowptrs,
+                                                d_colinds,
+                                                CUDA_R_32F,
+                                                CUSPARSE_ACTION_NUMERIC,
+                                                CUSPARSE_INDEX_BASE_ZERO,
+                                                CUSPARSE_CSR2CSC_ALG_DEFAULT,
+                                                &buff_size));
+    if (buffers == nullptr) 
+    {
+        CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
+    } 
+    else 
+    {
+        buffers->ensure_tmp(buff_size);
+        d_buff = buffers->tmp_buffer.tmp_buffer;
+    }
+
+    CUSPARSE_CHECK(cusparseCsr2cscEx2(handle,
+                                    ncols, nrows,
+                                    nnz,
+                                    d_vals,
+                                    d_colptrs,
+                                    d_rowinds,
+                                    d_csr_vals,
+                                    d_rowptrs,
+                                    d_colinds,
+                                    CUDA_R_32F,
+                                    CUSPARSE_ACTION_NUMERIC,
+                                    CUSPARSE_INDEX_BASE_ZERO,
+                                    CUSPARSE_CSR2CSC_ALG_DEFAULT,
+                                    d_buff));
+
+    if (buffers == nullptr) { CUDA_FREE_SAFE(d_buff); }
+
+    return csr;
+}
+
+
+template <typename IT, typename VT>
 struct CusparseCSX
 {
     cusparseSpMatDescr_t descr;
@@ -38,9 +241,26 @@ struct CusparseCSX
     }
 
 
+    CusparseCSX(cusparseHandle_t& handle, 
+                CSX<IT, VT> * _mat,
+                CsxBuffers<IT, VT> * conversion_buffers):
+        mat(nullptr), buffers(nullptr), state(State::Mat)
+    {
+        if (_mat->majordim == MajorDim::COLS)
+        {
+            mat = cusparse_csc_to_csr(handle, _mat, conversion_buffers);
+        }
+        else
+        {
+            mat = _mat;
+        }
+    }
+
+
     CusparseCSX(CsxBuffers<IT, VT> * buffers):
         mat(nullptr), buffers(buffers), state(State::Buffs)
     {
+
         CHECK_CUSPARSE(cusparseCreateCsr(&descr,
                                          buffers->ptr_dim-1,
                                          buffers->other_dim,
@@ -131,6 +351,20 @@ struct CusparseCSX
         }
     }
 
+
+    void explicit_free()
+    {
+        if (is_mat())
+        {
+            CSX_destroy_device(&mat);
+        }
+        else if (is_buffs())
+        {
+            buffers->explicitFree();
+        }
+    }
+
+
     void assert_mat(const char * name)
     {
         std::stringstream ss;
@@ -155,6 +389,36 @@ struct CusparseCSX
         CHECK_CUSPARSE(cusparseDestroySpMat(descr));
     }
 };
+
+
+template <typename IT, VT>
+void cusparse_spmma(cusparseHandle_t& handle,
+                     CusparseCSX<IT, VT>* A, 
+                     CusparseCSX<IT, VT>* B, 
+                     CusparseCSX<IT, VT>* C_prod,
+                     CusparseCSX<IT, VT>* C_accum,
+                     CusparseCSX<IT, VT>* C_local,
+                     const bool accum)
+{
+    // C_prod = AB
+    cusparse_spgemm(handle, A, B, C_prod);
+
+
+    // Do not accumulate, C_local will point to underlying C_prod
+    if (!accum)
+    {
+        std::swap(C_local, C_prod);
+        return;
+    }
+
+
+    // C_accum = C_local + C_prod
+    cusparse_spgeam(handle, C_prod, C_local, C_accum);
+
+    // C_local now points to underlying C_accum storage
+    std::swap(C_local, C_accum);
+
+}
 
 
 template <typename IT, VT>
@@ -242,36 +506,6 @@ void cusparse_spgeam(cusparseHandle_t& handle,
                                       C_accum_buffs->d_node_rowptrs,
                                       C_accum_buffs->d_node_colinds,
                                       C_accum_buffs->tmp_buffers[0]) );
-}
-
-
-template <typename IT, VT>
-void cusparse_spmma(cusparseHandle_t& handle,
-                     CusparseCSX<IT, VT>* A, 
-                     CusparseCSX<IT, VT>* B, 
-                     CusparseCSX<IT, VT>* C_prod,
-                     CusparseCSX<IT, VT>* C_accum,
-                     CusparseCSX<IT, VT>* C_local,
-                     const bool accum)
-{
-    // C_prod = AB
-    cusparse_spgemm(handle, A, B, C_prod);
-
-
-    // Do not accumulate, C_local will point to underlying C_prod
-    if (!accum)
-    {
-        std::swap(C_local, C_prod);
-        return;
-    }
-
-
-    // C_accum = C_local + C_prod
-    cusparse_spgeam(handle, C_prod, C_local, C_accum);
-
-    // C_local now points to underlying C_accum storage
-    std::swap(C_local, C_accum);
-
 }
 
 

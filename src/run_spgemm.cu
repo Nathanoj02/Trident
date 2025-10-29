@@ -24,15 +24,9 @@ int main(int argc, char ** argv)
     int slurm_local_id = (env != nullptr) ? std::atoi(env) : 0;
 
     int numDevices;
-    //cudaError_t err = cudaGetDeviceCount(&numDevices);
-    //int mydev = slurm_local_id % numDevices;
-    //            err = cudaSetDevice(mydev);
 
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
-
-    //int dev;
-    //err = cudaGetDevice(&dev);
 
     int world_size;
     int world_rank;
@@ -71,13 +65,16 @@ int main(int argc, char ** argv)
     Aop   = dmmio::Operation::None;
     Apart = dmmio::PartitioningType::Naive;
 
-    if (Apart == dmmio::PartitioningType::Naive) {
+    if (Apart == dmmio::PartitioningType::Naive) 
+    {
         Bpart = dmmio::PartitioningType::Naive;
         Cpart = dmmio::PartitioningType::Naive;
 
         Bop   = dmmio::Operation::None;
         Cop   = dmmio::Operation::None;
-    } else {
+    } 
+    else 
+    {
         // TODO wirite it for other partitionings and check it
         fprintf(stderr, "Partitioning different by Naive are not supported yet.\n");
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
@@ -98,19 +95,22 @@ int main(int argc, char ** argv)
 
     // Checks on the input params
     {
-        if (config->spcomm && (!config->Acsc)) {
+        if (config->spcomm && (!config->Acsc)) 
+        {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm requires --Acsc\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
-        if ((config->impl == Implementation::GET) && (config->Acsc || config->spcomm)) {
+        if ((config->impl == Implementation::GET) && (config->Acsc || config->spcomm)) 
+        {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
 
 #ifndef SKIP_SPGEMM
-        if(config->skip_spgemm) {
+        if(config->skip_spgemm) 
+        {
             if (world_rank == 0) fprintf(stderr, "WARNING: --skip-spgemm is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
         }
 #else
@@ -118,7 +118,8 @@ int main(int argc, char ** argv)
 #endif
 
         // TODO
-        if ( config->spcomm && nprocpergroup > 1) {
+        if ( config->spcomm && nprocpergroup > 1) 
+        {
             if (world_rank == 0) fprintf(stderr, "Error: on 3D grids, --spcomm is not supported yet\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
@@ -150,7 +151,6 @@ int main(int argc, char ** argv)
     {
         cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
     }
-    // This causes a bunch of complaints related to IPC -- not sure what these are or if they matter
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -161,14 +161,15 @@ int main(int argc, char ** argv)
         MPI_Barrier(MPI_COMM_WORLD);
 
         mmio::MajorDim A_maj = (config->Acsc) ? (mmio::MajorDim::COLS) : (mmio::MajorDim::ROWS) ;
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_A(dcoo_A, A_maj);
-        KokkosWrap::DistribuitedMatrix<int32_t, int32_t, float> wrapped_B(dcoo_B, mmio::MajorDim::ROWS);
+
+        DistCusparseCSX<int32_t, float> * dist_A = new DistCusparseCSX<int32_t, float>(dcoo_A, A_maj);
+        DistCusparseCSX<int32_t, float> * dist_B = new DistCusparseCSX<int32_t, float>(dcoo_B, mmio::MajorDim::ROWS);
+        DistCusparseCSX<int32_t, float> * dist_C;
 
         if (world_rank==0)  printf("Done conversion\n");
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        mmio::CSX<int32_t, float> *dist_C;
 
         CPU_TIMER_DEF(spgemm);
         CPU_TIMER_DEF(spacomm);
@@ -182,13 +183,17 @@ int main(int argc, char ** argv)
 
         // Puting this inside the loop produce craches on the start of second iteration; we don't know why
         SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
-        if (config->spcomm) {
+        if (config->spcomm) 
+        {
             spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_A.partitioning->grid);
-        } else {
+        } 
+        else 
+        {
             spcomm_data = nullptr;
         }
 
         CPU_TIMER_STOP(spacomm);
+
         if (world_rank==0)
         {
             TIMER_PRINT(spacomm);
@@ -203,8 +208,11 @@ int main(int argc, char ** argv)
         // Gen thread pool (mostly for profiling)
         ThreadPool pool(2);
 
+        const int niters = 6;
+
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
-        for (int i=0; i<6; i++) 
+
+        for (int i=0; i<niters; i++) 
         {
             if (world_rank==0) printf("STARTING spgemm round: %d\n", i);
             fflush(stdout);
@@ -215,15 +223,10 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            if (config->impl == Implementation::GET)
-            {
-                dist_C = hns_spgemm_get<int32_t, float>(wrapped_A, wrapped_B);
-            } else {
-                dist_C = hns_spgemm_main<int32_t, float>(wrapped_A, wrapped_B, config->impl, pool, spcomm_data, config->skip_spgemm);
-            }
-
+            dist_C = hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
             MPI_Barrier(MPI_COMM_WORLD);
-            delete dist_C;
+
+            dist_C->explicit_free();
 
 #ifdef NVTX_PROFILING
             NVTX_POP_RANGE;
@@ -241,6 +244,9 @@ int main(int argc, char ** argv)
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
+
+    dist_A->explicit_free();
+    dist_B->explicit_free();
 
 #ifdef LOGFILE
     fclose(logfile);

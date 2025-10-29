@@ -184,15 +184,12 @@ namespace KokkosWrap {
         auto coo = dcoo->coo;
 
         // --- Step 2: Decide layout ---
-        if (T == MajorDim::ROWS) {
-            // auto csr  = coo_to_kokkos_crs(coo);
-            // storage   = csr; // keep CSR
-            // mmio_csx  = rawptr_get(csr);
+        if (T == MajorDim::ROWS) 
+        {
             mmio_csx = coo_to_row_csx(coo);
-        } else {
-            // auto csc  = coo_to_kokkos_ccs(coo);
-            // storage   = csc; // store CSC
-            // mmio_csx  = rawptr_get(csc);
+        } 
+        else 
+        {
             mmio_csx = coo_to_col_csx(coo);
         }
 
