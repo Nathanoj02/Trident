@@ -100,17 +100,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
         if (impl == Implementation::PUT) 
         {
-            // Make MPI_Group with target
-            int group_ranks[1] = {target};
-            MPI_Group_incl(big_group, 1, group_ranks, &pair_group);
-
             internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
-            //internode_comm = holder.put_tile_gat(tosend->val, tosend->idx_vec, tosend->ptr_vec, 
-            //                                     tosend->nnz, ptrsize, 
-            //                                     target, mpi_mutex, 
-            //                                     pair_group,
-            //                                     stream, tag);
-            MPI_Group_free(&pair_group);
         } 
         else 
         {
@@ -239,8 +229,25 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     TileHolder<IT, VT> A_holder(kwd_A.getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(kwd_B.getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
-    CsxBuffers<IT,VT> *gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz*1.5, kwd_B.getLocalNrows()*node_size +1);
-    CsxBuffers<IT,VT> *conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNcols()+1);
+
+
+    // Temporary allgather buffers
+    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz*1.5, kwd_B.getLocalNrows()*node_size + 1, kwd_B.getLocalNcols());
+
+
+    // Temporary csc->csr buffers
+    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNcols()+1, kwd_A.getLocalNrows());
+
+
+    // Temporary local SpGEMM buffers
+    // TODO: Some other size heuristic
+    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNrows()+1, kwd_A.getLocalNcols(), 2);
+    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNrows()+1, kwd_A.getLocalNcols());
+    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, kwd_A.getLocalNrows()+1, kwd_A.getLocalNcols());
+
+
+    // Make CusparseCSX Objects
+
 
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
@@ -251,6 +258,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
+
     // cusparse handle
     cusparseHandle_t handle;
     CUSPARSE_CHECK(cusparseCreate(&handle));
@@ -259,10 +267,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
     // Local C tile to accumulate the result (during each iter: C += A*B)
     KokkosWrap::LocalMatrix<int32_t, int32_t, float> C_local;
 
-#if DEBUG_MAIN
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Launching threads\n"));
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
 
     int dev_id; // To be sure each thread on the same process is assigned to the same GPU
     CUDA_CHECK(cudaGetDevice(&dev_id));
@@ -277,11 +281,6 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
                             std::ref(B_queue), std::ref(B_holder), bku_B, 
                             impl, spcomm, dev_id, col_group,
                             grid->col_rank, std::ref(mpi_mutex), 1);
-
-#if DEBUG_MAIN
-    MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Beginning main loop\n"));
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
 
 
     // Row and column rank 
@@ -333,17 +332,12 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
 #endif
 
         // Wait until I've been sent A and B or copy from the local data
-        //   NOTE: here I manage the self communication case
         IT A_tile_nnz, B_tile_nnz;
         if (colAtoGet != grid->row_rank) 
         {
             if (impl == Implementation::PUT) 
             {
-                //int group_ranks[1] = {colAtoGet};
-                //MPI_Group_incl(row_group, 1, group_ranks, &A_tile_group);
                 A_tile_nnz = A_holder.wait(colAtoGet, stream, 0);
-                //A_tile_nnz = A_holder.wait_gat(colAtoGet, A_tile_group, stream, 0);
-                //MPI_Group_free(&A_tile_group);
             } 
             else 
             {
@@ -359,11 +353,7 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         {
             if (impl == Implementation::PUT) 
             {
-                //int group_ranks[1] = {rowBtoGet};
-                //MPI_Group_incl(col_group, 1, group_ranks, &B_tile_group);
                 B_tile_nnz = B_holder.wait(rowBtoGet, stream, 1);
-                //B_tile_nnz = B_holder.wait_gat(rowBtoGet, B_tile_group, stream, 0);
-                //MPI_Group_free(&B_tile_group);
             } 
             else 
             {
@@ -460,7 +450,9 @@ mmio::CSX<IT, VT>* hns_spgemm_main(KWrapDMat<IT, VT>& kwd_A, KWrapDMat<IT, VT>& 
         // This perform C_local += A_remote * B_node
 #ifndef SKIP_SPGEMM
         if (!skipspgemm)
+        {
             KokkosWrap::LocalMatrix<int32_t, int32_t, float>::sp_mma(A_remote, B_node, C_local);
+        }
 #endif
 
 #ifdef DETAILED_TIMERS

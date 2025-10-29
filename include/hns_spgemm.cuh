@@ -3,6 +3,7 @@
 #include "message_queue.cuh"
 #include "tile_holder.cuh"
 #include "kokkos_helpers.cuh"
+#include "cusparse_helpers.cuh"
 
 #include "KokkosWrap.hpp"
 #include <ccutils/cuda/cuda_timers.h>

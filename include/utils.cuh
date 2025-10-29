@@ -360,37 +360,70 @@ void CSX_destroy_device(mmio::CSX<IT, VT> **csx) {
 }
 
 template<typename IT, typename VT>
-struct CsxBuffers {
+struct CsxBuffers 
+{
     uint64_t nnz;
     uint64_t ptr_dim;
+    uint64_t other_dim;
+    uint64_t nbufs;
     int initialized;
     VT *d_node_vals;
     IT *d_node_colinds;
     IT *d_node_rowptrs;
-    cubTmpBuff tmp_buffer;
+    cubTmpBuff * tmp_buffers;
+    //cubTmpBuff tmp_buffer;
+    //cubTmpBuff tmp_buffer2;
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim) {
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t other_dim) 
+    {
         initialized = 1;
 
         nnz = input_nnz;
         ptr_dim = input_ptr_dim;
+        other_dim = other_dim;
+        nbufs = 1;
         CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+
+        tmp_buffers = new cubTmpBuff[1];
     }
 
-    CsxBuffers(void) {
+
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t other_dim, uint64_t _nbufs) 
+    {
+        initialized = 1;
+
+        nnz = input_nnz;
+        ptr_dim = input_ptr_dim;
+        other_dim = other_dim;
+        nbufs = _nbufs;
+        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+
+        tmp_buffers = new cubTmpBuff[nbufs];
+    }
+
+    CsxBuffers(void) 
+    {
         initialized    = 0;
         d_node_vals    = nullptr;
         d_node_colinds = nullptr;
         d_node_rowptrs = nullptr;
+        tmp_buffers = new cubTmpBuff[1];
     }
 
-    void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) {
-        if (!initialized) {
+    void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) 
+    {
+        if (!initialized) 
+        {
             new (this) CsxBuffers(input_nnz, input_ptr_dim);
-        } else {
-            if (input_nnz > nnz) {
+        } 
+        else 
+        {
+            if (input_nnz > nnz) 
+            {
                 CUDA_CHECK(cudaFree(d_node_vals));
                 CUDA_CHECK(cudaFree(d_node_colinds));
 
@@ -398,7 +431,8 @@ struct CsxBuffers {
                 CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
                 CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
             }
-            if (input_ptr_dim > ptr_dim) {
+            if (input_ptr_dim > ptr_dim) 
+            {
                 CUDA_CHECK(cudaFree(d_node_rowptrs));
 
                 ptr_dim = input_ptr_dim;
@@ -407,27 +441,47 @@ struct CsxBuffers {
         }
     }
 
-    void ensure_tmp(uint64_t required_size) {
-        if (!initialized) {
+
+    void ensure_tmp(uint64_t required_size) 
+    {
+        if (!initialized) 
+        {
             new (this) CsxBuffers();
         }
-        tmp_buffer.ensure(required_size);
+        tmp_buffs[0].ensure(required_size);
     }
 
-    void explicitFree(void) {
-        if (initialized) {
+
+    void ensure_tmp(uint64_t required_size, uint64_t idx) 
+    {
+        if (!initialized) 
+        {
+            new (this) CsxBuffers();
+        }
+        tmp_buffs[idx].ensure(required_size);
+    }
+
+
+    void explicitFree(void) 
+    {
+        if (initialized) 
+        {
             cudaFree(d_node_colinds);
             cudaFree(d_node_rowptrs);
             cudaFree(d_node_vals);
             initialized = 0;
             ptr_dim = 0;
             nnz = 0;
+            delete[] tmp_buffs;
         }
     }
 
-    ~CsxBuffers() {
+
+    ~CsxBuffers() 
+    {
         if (initialized) explicitFree();
     }
+
 };
 
 // Threads pool

@@ -53,7 +53,6 @@ struct TileHolder
                        cudaStream_t stream = 0, int tag=0)
     {
         CPU_TIMER_DEF(tmp_timer)
-        //std::lock_guard<std::mutex> lock(mpi_mutex);
 
         MPI_Win_start(group, 0, d_vals_win);
         MPI_Win_start(group, 0, d_inds_win);
@@ -138,7 +137,6 @@ struct TileHolder
         // Notify target of completion
         MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
         MPI_Win_flush(target, flag_win); //TODO: Do I need this?
-        //MPI_Win_flush_all(flag_win); //TODO: Do I need this?
 
         CPU_TIMER_STOP(tmp_timer)
 
@@ -162,7 +160,6 @@ struct TileHolder
         MPI_Win_wait(d_vals_win);
         MPI_Win_wait(flag_win);
 
-        //MPI_Win_sync(flag_win);
         return *flag;
     }
 
@@ -233,14 +230,12 @@ struct TileHolder
 
         MPI_Request requests[4];
         {
-            // std::lock_guard<std::mutex> lock(mpi_mutex);
             MPI_Isend(&nnz, 1, MPI_INT32_T, target, 0, comm, &(requests[0])); // BUG: MPI types are hardcoded
         }
 
-        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
 
-        if (nnz>0) {
-            // std::lock_guard<std::mutex> lock(mpi_mutex);
+        if (nnz>0) 
+        {
             CPU_TIMER_START(tmp_timer)
             MPI_Isend(d_vals, nnz,          MPI_FLOAT,   target, 1, comm, &(requests[1])); // BUG: MPI types are hardcoded
             MPI_Isend(d_inds, nnz,          MPI_INT32_T, target, 2, comm, &(requests[2])); // BUG: MPI types are hardcoded
@@ -261,16 +256,14 @@ struct TileHolder
         int recv_nnz;
         MPI_Request requests[4];
         {
-            // std::lock_guard<std::mutex> lock(mpi_mutex);
             MPI_Irecv(&recv_nnz, 1, MPI_INT32_T, src, 0, comm, &(requests[0]));
         }
 
         MPI_Wait(&(requests[0]), MPI_STATUS_IGNORE);
 
-        // mutex_MPI_Test(requests, mpi_mutex); // NOTE: requests = &(requests[0])
 
-        if (recv_nnz>0) {
-            // std::lock_guard<std::mutex> lock(mpi_mutex);
+        if (recv_nnz>0) 
+        {
             MPI_Irecv(d_vals_buf, recv_nnz,     MPI_FLOAT,   src, 1, comm, &(requests[1]));
             MPI_Irecv(d_inds_buf, recv_nnz,     MPI_INT32_T, src, 2, comm, &(requests[2]));
             MPI_Irecv(d_ptrs_buf, ptr_size + 1, MPI_INT32_T, src, 3, comm, &(requests[3]));
@@ -328,12 +321,14 @@ struct TileHolder
                                  d_vals_buf, d_inds_buf, d_ptrs_buf);
     }
 
+
     LocalCSR * form_tile(const IT nrows, const IT ncols, const IT nnz,
                          VT * d_vals, IT * d_colinds, IT * d_rowptrs)
     {
         return csr_to_kokkos_crs(nrows, ncols, nnz,
                                  d_vals, d_colinds, d_rowptrs);
     }
+
 
     mmio::CSX<IT, VT> * form_mmiocsx(const IT nrows, const IT ncols, const IT nnz, mmio::MajorDim layout,
                                      VT * d_vals, IT * d_inds, IT * d_ptrs)
@@ -350,6 +345,7 @@ struct TileHolder
         csx->val     = d_vals;
         return(csx);
     }
+
 
     mmio::CSX<IT, VT> * form_mmiocsx(const IT nrows, const IT ncols, const IT nnz, mmio::MajorDim layout)
     {
@@ -377,11 +373,13 @@ struct TileHolder
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
 
         // Buffer set-up
-        if (buffers == nullptr) {
+        if (buffers == nullptr) 
+        {
             CUDA_CHECK(cudaMalloc(d_node_vals,    sizeof(VT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
-        } else {
+        } else 
+        {
             buffers->ensure(total_nnz, total_nrows + 1);
             *d_node_vals    = buffers->d_node_vals;
             *d_node_colinds = buffers->d_node_colinds;
@@ -390,7 +388,8 @@ struct TileHolder
         CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
 
         // Manage the case of singleton with a direct D2D copy
-        if (node_size == 1) {
+        if (node_size == 1) 
+        {
             CUDA_CHECK(cudaMemcpy(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice));
             CUDA_CHECK(cudaMemcpy(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice));
             CUDA_CHECK(cudaMemcpy(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice));
@@ -398,12 +397,11 @@ struct TileHolder
         }
 
         // Convert rowtprs to nnz per row
-        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffer));
+        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffers[0]));
 
 
         // Allgatherv each buffer
 
-#ifndef P2P_ALLGATHERV
         // Values
         MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
@@ -413,58 +411,6 @@ struct TileHolder
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
-#else
-        int tag;
-        MPI_Status  *statuses = (MPI_Status*) malloc(2*(grid->node_size) * sizeof(MPI_Status));
-        MPI_Request *requests = (MPI_Request*)malloc(2*(grid->node_size) * sizeof(MPI_Request));
-        for (int i=0; i<grid->node_size; i++) {
-            if (i!=(grid->node_rank)) {
-                tag = (grid->node_rank) * (grid->node_size) + i;
-                MPI_Isend(d_vals_buf, nnz, MPIType<VT>(), i, tag, grid->node_comm, &(requests[i]));
-
-    #ifdef DEBUG_P2P_ALLGATHERV
-                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
-    #endif
-
-                tag = i * (grid->node_size) + (grid->node_rank);
-                MPI_Irecv(d_node_vals + displs[i], node_nnz[i], MPIType<VT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
-
-    #ifdef DEBUG_P2P_ALLGATHERV
-                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
-    #endif
-            } else {
-                // Local communication performed with a D2D copy
-                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
-            }
-        }
-        MPI_Waitall(2*(grid->node_size), requests, statuses);
-        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
-
-        for (int i=0; i<grid->node_size; i++) {
-            if (i!=(grid->node_rank)) {
-                tag = (grid->node_rank) * (grid->node_size) + i;
-                MPI_Isend(d_inds_buf, nnz, MPIType<IT>(), i, tag, grid->node_comm, &(requests[i]));
-
-    #ifdef DEBUG_P2P_ALLGATHERV
-                fprintf(stdout, "[%d, %d] sent to %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
-    #endif
-
-                tag = i * (grid->node_size) + (grid->node_rank);
-                MPI_Irecv(d_node_colinds + displs[i], node_nnz[i], MPIType<IT>(), i, tag, grid->node_comm, &(requests[grid->node_size + i]));
-
-    #ifdef DEBUG_P2P_ALLGATHERV
-                fprintf(stdout, "[%d, %d] receved from %d with tag %d\n", grid->global_rank, grid->node_rank, i, tag); fflush(stdout);
-    #endif
-            } else {
-                // Local communication performed with a D2D copy
-                CUDA_CHECK(cudaMemcpy(d_node_vals + displs[i], d_vals_buf, nnz*sizeof(VT), cudaMemcpyDeviceToDevice));
-            }
-        }
-        MPI_Waitall(2*(grid->node_size), requests, statuses);
-        MPI_STATUS_CHECK(2*(grid->node_size), statuses, grid->node_comm)
-        free(requests);
-        free(statuses);
-#endif
         // Rowptrs
         MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),
                       (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),
@@ -472,10 +418,11 @@ struct TileHolder
 
 
         // Convert rownnz to rowptrs
-        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffer));
+        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffers[0]));
 
         return(total_nnz);
     }
+
 
     LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
     {
@@ -485,16 +432,11 @@ struct TileHolder
         IT * d_node_colinds, * d_node_rowptrs;
         int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
 
-#ifdef PTR_CHECK
-        CHECK_PTR(d_node_vals, here_iteration)
-        CHECK_PTR(d_node_colinds, here_iteration)
-        CHECK_PTR(d_node_rowptrs, here_iteration)
-	here_iteration++;
-#endif
         // Done
         return form_tile(total_nrows, ncols, total_nnz,
                          d_node_vals, d_node_colinds, d_node_rowptrs);
     }
+
 
     mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
     {
