@@ -185,7 +185,7 @@ int main(int argc, char ** argv)
         SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
         if (config->spcomm) 
         {
-            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(wrapped_A.mmio_csx, wrapped_B.mmio_csx, wrapped_A.partitioning->grid);
+            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(dist_A->csx->mat, dist_B->csx->mat, dist_A->partitioning->grid);
         } 
         else 
         {
@@ -240,13 +240,13 @@ int main(int argc, char ** argv)
         cudaProfilerStop();
 #endif
         if (spcomm_data != nullptr) delete spcomm_data;
+        dist_A->explicit_free();
+        dist_B->explicit_free();
     }
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
-    dist_A->explicit_free();
-    dist_B->explicit_free();
 
 #ifdef LOGFILE
     fclose(logfile);

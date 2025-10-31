@@ -387,7 +387,7 @@ namespace KokkosWrap {
             CUDA_CHECK(cudaMalloc(&d_colinds, sizeof(KIT) * nnz));
             CUDA_CHECK(cudaMalloc(&d_rowptrs, sizeof(KIT) * (nrows + 1)));
         } else {
-            buffers->ensure(nnz, nrows + 1);
+            buffers->ensure(nnz, nrows + 1, ncols);
             d_csr_vals = buffers->d_node_vals;
             d_colinds  = buffers->d_node_colinds;
             d_rowptrs  = buffers->d_node_rowptrs;

@@ -38,6 +38,8 @@
     }  \
 }
 
+#define CUDA_SYNC CUDA_CHECK(cudaDeviceSynchronize());
+
 typedef struct {
     int rowidx;
     int colidx;
@@ -169,6 +171,21 @@ void print_rk0(dmmio::ProcessGrid * grid, const char * msg, Args... args)
 
 
 template <typename... Args>
+void print_rk0(const char * msg, Args... args)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank==0) 
+    {
+        fprintf(stdout, "\n");
+        fprintf(stdout, msg, args...);
+        fprintf(stdout, "\n");
+    }
+    FLUSH_WAIT(500000);
+}
+
+
+template <typename... Args>
 void print_rkn(dmmio::ProcessGrid * grid, const char * msg, Args... args)
 {
     print_rkn(grid->global_rank, msg, args...);
@@ -183,6 +200,16 @@ void print_rkn(int rank, const char * msg, Args... args)
     fprintf(stdout, "\n");
     FLUSH_WAIT(500000);
 }
+
+
+template <typename... Args>
+void print_rkn(const char * msg, Args... args)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    print_rkn(rank, msg, args...);
+}
+
 
 template<typename IT>
 void move2gpu(IT** ptr, uint64_t size) {
@@ -374,13 +401,13 @@ struct CsxBuffers
     //cubTmpBuff tmp_buffer;
     //cubTmpBuff tmp_buffer2;
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t other_dim) 
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
         initialized = 1;
 
         nnz = input_nnz;
         ptr_dim = input_ptr_dim;
-        other_dim = other_dim;
+        other_dim = _other_dim;
         nbufs = 1;
         CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
@@ -390,13 +417,13 @@ struct CsxBuffers
     }
 
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t other_dim, uint64_t _nbufs) 
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs) 
     {
         initialized = 1;
 
         nnz = input_nnz;
         ptr_dim = input_ptr_dim;
-        other_dim = other_dim;
+        other_dim = _other_dim;
         nbufs = _nbufs;
         CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
@@ -414,11 +441,11 @@ struct CsxBuffers
         tmp_buffers = new cubTmpBuff[1];
     }
 
-    void ensure(uint64_t input_nnz, uint64_t input_ptr_dim) 
+    void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
         if (!initialized) 
         {
-            new (this) CsxBuffers(input_nnz, input_ptr_dim);
+            new (this) CsxBuffers(input_nnz, input_ptr_dim, _other_dim);
         } 
         else 
         {
@@ -448,7 +475,7 @@ struct CsxBuffers
         {
             new (this) CsxBuffers();
         }
-        tmp_buffs[0].ensure(required_size);
+        tmp_buffers[0].ensure(required_size);
     }
 
 
@@ -458,7 +485,7 @@ struct CsxBuffers
         {
             new (this) CsxBuffers();
         }
-        tmp_buffs[idx].ensure(required_size);
+        tmp_buffers[idx].ensure(required_size);
     }
 
 
@@ -472,7 +499,7 @@ struct CsxBuffers
             initialized = 0;
             ptr_dim = 0;
             nnz = 0;
-            delete[] tmp_buffs;
+            delete[] tmp_buffers;
         }
     }
 

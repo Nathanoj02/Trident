@@ -372,15 +372,17 @@ struct TileHolder
         int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
 
+
         // Buffer set-up
         if (buffers == nullptr) 
         {
             CUDA_CHECK(cudaMalloc(d_node_vals,    sizeof(VT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_colinds, sizeof(IT) * total_nnz));
             CUDA_CHECK(cudaMalloc(d_node_rowptrs, sizeof(IT) * (total_nrows + 1)));
-        } else 
+        } 
+        else 
         {
-            buffers->ensure(total_nnz, total_nrows + 1);
+            buffers->ensure(total_nnz, total_nrows + 1, ncols);
             *d_node_vals    = buffers->d_node_vals;
             *d_node_colinds = buffers->d_node_colinds;
             *d_node_rowptrs = buffers->d_node_rowptrs;
