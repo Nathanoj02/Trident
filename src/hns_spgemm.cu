@@ -343,10 +343,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
         // Wait until I've been sent A and B or copy from the local data
         IT A_tile_nnz, B_tile_nnz;
+        MPI_Request reqs[2];
 
         if (colAtoGet != grid->row_rank) 
         {
-            A_tile_nnz = A_holder.recv_tile_contig(colAtoGet);
+            A_tile_nnz = A_holder.recv_tile_contig(colAtoGet, &reqs[0]);
         } 
         else 
         {
@@ -355,11 +356,21 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
         if (rowBtoGet != grid->col_rank) 
         {
-            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet);
+            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet, &reqs[1]);
         } 
         else 
         {
             B_tile_nnz = B_holder.copy_device_local_csx(dist_B->csx->mat, stream);
+        }
+
+        if (colAtoGet != grid->row_rank && A_tile_nnz > 0)
+        {
+            MPI_Wait(&reqs[0], MPI_STATUS_IGNORE);
+        }
+
+        if (rowBtoGet != grid->col_rank && B_tile_nnz > 0)
+        {
+            MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
         }
 
         CUDA_SYNC;

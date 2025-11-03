@@ -66,15 +66,15 @@ struct TileHolder
         NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
 
-        MPI_Request size_req;
+        MPI_Request size_req, main_req;
         IT payload[2] = {nnz, sendbuf_size};
         MPI_Isend(payload, 2, MPIType<IT>(), target, 0, comm, &size_req);
 
         if (nnz > 0)
         {
-            MPI_Send(d_sendbuf, sendbuf_size, MPI_CHAR, target, 1, comm);
+            MPI_Isend(d_sendbuf, sendbuf_size, MPI_CHAR, target, 1, comm, &main_req);
+            MPI_Wait(&main_req, MPI_STATUS_IGNORE);
         }
-
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
@@ -83,19 +83,19 @@ struct TileHolder
     }
 
 
-    IT recv_tile_contig(int src) 
+    IT recv_tile_contig(int src, MPI_Request * recv_req) 
     {
         IT sizes[2];
         MPI_Request size_req;
         MPI_Irecv(sizes, 2, MPIType<IT>(), src, 0, comm, &size_req);
         MPI_Wait(&size_req, MPI_STATUS_IGNORE);
 
-        if (sizes[0] > 0) 
-        {
-            MPI_Recv(d_buf, sizes[1], MPI_CHAR, src, 1, comm, MPI_STATUS_IGNORE);
-        }
-
         set_csx_ptrs(sizes[0]);
+
+        if (sizes[0] > 0)
+        {
+            MPI_Irecv(d_buf, sizes[1], MPI_CHAR, src, 1, comm, recv_req);
+        }
 
         return(sizes[0]);
     }
