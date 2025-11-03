@@ -52,21 +52,12 @@
 
 #include <cub/cub.cuh>
 
-#include <Kokkos_Core.hpp>
-#include <KokkosSparse_CrsMatrix.hpp>
-#include <KokkosSparse_CcsMatrix.hpp>
-#include <KokkosSparse_spgemm.hpp>
-#include <KokkosSparse_spadd.hpp>
 
 #define BMASK_TYPE uint8_t
 #define MASK_SIZE 8   // set to 8 in production
-// #define SKIP_SPGEMM // To debug compression
-// #define DEBUGBITMASKGENERATION
 
 extern FILE * logfile;
 
-// #define P2P_ALLGATHERV // Standard allgatherv seam to stage on the host even when cuda-aware
-// #define DEBUG_P2P_ALLGATHERV
 
 // For thread pools
 #include <queue>

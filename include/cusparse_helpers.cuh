@@ -2,7 +2,6 @@
 
 #include "common.h"
 #include "utils.cuh"
-#include "kokkos_helpers.cuh"
 
 #include <dmmio/dmmio.h>
 #include <dmmio/partitioning.h>
@@ -11,6 +10,137 @@
 
 using namespace mmio;
 using namespace dmmio;
+
+template <typename IT, typename VT>
+struct Triple
+{
+    IT row;
+    IT col;
+    VT val;
+};
+
+template <typename IT, typename VT>
+CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
+{
+    using Tr = Triple<IT, VT>;
+
+    // Sort by row
+    std::vector<Tr> triples(coo->nnz);
+    for (IT i=0; i<coo->nnz; i++)
+    {
+        triples[i].row = coo->row[i];
+        triples[i].col = coo->col[i];
+        triples[i].val = coo->val[i];
+    }
+
+
+    std::sort(triples.begin(), triples.end(),
+        [](auto& t1, auto& t2)
+        {
+            return t1.row < t2.row;
+        }
+    );
+
+    // First convert the local COO representation to a CSR representation on the host
+    std::vector<IT> rowptrs(coo->nrows + 1, 0);
+    std::for_each(triples.begin(), triples.end(),
+        [&](auto& t)
+        {
+            rowptrs[t.row+1]++;
+        }
+    );
+
+    std::vector<IT> colinds(coo->nnz);
+    std::transform(triples.begin(), triples.end(),
+                   colinds.begin(),
+        [&](auto& t)
+        {
+            return t.col;
+        }
+    );
+
+    std::vector<VT> vals(coo->nnz);
+    std::transform(triples.begin(), triples.end(),
+                   vals.begin(),
+        [&](auto& t)
+        {
+            return t.val;
+        }
+    );
+
+    std::inclusive_scan(rowptrs.begin() + 1, rowptrs.end(), rowptrs.begin() + 1);
+
+    //IT * d_rowptrs = h2d_copy(rowptrs.data(), coo->nrows + 1);
+    //IT * d_colinds = h2d_copy(colinds.data(), coo->nnz);
+    //VT * d_vals = h2d_copy(vals.data(), coo->nnz);
+
+    // Convert to a mmio row_major CSX matrix (i.e. a csr csx)
+    return(CSX_create_contig_device(coo->nrows, coo->ncols, coo->nnz, mmio::MajorDim::ROWS,
+                            colinds.data(), rowptrs.data(), vals.data()));
+}
+
+
+template <typename IT, typename VT>
+CSX<IT,VT>* coo_to_col_csx_contig(COO<IT, VT> * coo)
+{
+    using Tr = Triple<IT, VT>;
+
+    // Sort by row
+    std::vector<Tr> triples(coo->nnz);
+    for (IT i=0; i<coo->nnz; i++)
+    {
+        triples[i].row = coo->row[i];
+        triples[i].col = coo->col[i];
+        triples[i].val = coo->val[i];
+    }
+
+    std::sort(triples.begin(), triples.end(),
+        [](auto& t1, auto& t2)
+        {
+            return t1.col < t2.col;
+        }
+    );
+
+    // First convert the local COO representation to a CSR representation on the host
+    std::vector<IT> colptrs(coo->ncols + 1, 0);
+    std::for_each(triples.begin(), triples.end(),
+        [&](auto& t)
+        {
+            colptrs[t.col+1]++;
+        }
+    );
+
+    std::vector<IT> rowinds(coo->nnz);
+    std::transform(triples.begin(), triples.end(),
+                   rowinds.begin(),
+        [&](auto& t)
+        {
+            return t.row;
+        }
+    );
+
+    std::vector<VT> vals(coo->nnz);
+    std::transform(triples.begin(), triples.end(),
+                   vals.begin(),
+        [&](auto& t)
+        {
+            return t.val;
+        }
+    );
+
+    std::inclusive_scan(colptrs.begin() + 1, colptrs.end(), colptrs.begin() + 1);
+
+
+    // Now, copy buffers to the device
+    //IT * d_colptrs = h2d_copy(colptrs.data(), coo->ncols + 1);
+    //IT * d_rowinds = h2d_copy(rowinds.data(), coo->nnz);
+    //VT * d_vals = h2d_copy(vals.data(), coo->nnz);
+
+    // Convert to a kokkos ccs matrix
+    return(CSX_create_contig_device(coo->nrows, coo->ncols, coo->nnz, mmio::MajorDim::COLS,
+                            rowinds.data(), colptrs.data(), vals.data()));
+}
+
 
 template <typename IT, typename VT>
 struct CusparseCSX
@@ -263,11 +393,11 @@ struct DistCusparseCSX
         // --- Step 2: Decide layout ---
         if (T == MajorDim::ROWS) 
         {
-            mat = coo_to_row_csx(coo);
+            mat = coo_to_row_csx_contig(coo);
         } 
         else 
         {
-            mat = coo_to_col_csx(coo);
+            mat = coo_to_col_csx_contig(coo);
         }
         
         csx = new CusparseCSX<IT, VT>(mat);

@@ -134,8 +134,6 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
         triples[i].val = coo->val[i];
     }
 
-    //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Copied\n"));
-    //FLUSH_WAIT(1000000);
 
     std::sort(triples.begin(), triples.end(),
         [](auto& t1, auto& t2)
@@ -144,9 +142,6 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
         }
     );
 
-    //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Sorted\n"));
-    //FLUSH_WAIT(1000000);
-    //
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> rowptrs(coo->nrows + 1, 0);
     std::for_each(triples.begin(), triples.end(),
@@ -176,18 +171,9 @@ mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
 
     std::inclusive_scan(rowptrs.begin() + 1, rowptrs.end(), rowptrs.begin() + 1);
 
-    //MPI_PROCESS_PRINT(MPI_COMM_WORLD, 0, printf("Scanned\n"));
-    //FLUSH_WAIT(1000000);
-
-    // Now, copy buffers to the device
-    // IT * d_rowptrs = d2h_copy(rowptrs.data(), coo->nrows + 1);
-    // IT * d_colinds = d2h_copy(colinds.data(), coo->nnz);
-    // VT * d_vals = d2h_copy(vals.data(), coo->nnz);
-    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     IT * d_rowptrs = h2d_copy(rowptrs.data(), coo->nrows + 1);
     IT * d_colinds = h2d_copy(colinds.data(), coo->nnz);
     VT * d_vals = h2d_copy(vals.data(), coo->nnz);
-    // ----------------------------------------------------------
 
     // Convert to a mmio row_major CSX matrix (i.e. a csr csx)
     return(mmio::CSX_create(coo->nrows, coo->ncols, coo->nnz, mmio::MajorDim::ROWS,

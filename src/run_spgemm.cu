@@ -1,8 +1,6 @@
 #include "hns_spgemm.cuh"
-#include "hns_spgemm_get.cuh"
 #include "test_utils.cuh"
 #include <ccutils/timers.h>
-#include <Kokkos_Core.hpp>
 
 #define PRINT_MYDEV { \
     int dev; \
@@ -17,13 +15,9 @@
 
 int main(int argc, char ** argv)
 {
-    Kokkos::initialize(argc, argv);
-    {
-
     const char* env = std::getenv("SLURM_LOCALID");
     int slurm_local_id = (env != nullptr) ? std::atoi(env) : 0;
 
-    int numDevices;
 
     int thread_level;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &thread_level);
@@ -48,10 +42,6 @@ int main(int argc, char ** argv)
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
 
-    int name_len;
-    char processor_name[MPI_MAX_PROCESSOR_NAME];
-    MPI_Get_processor_name(processor_name, &name_len);
-
     MPI_Barrier(MPI_COMM_WORLD);
 
 
@@ -59,19 +49,15 @@ int main(int argc, char ** argv)
     int nprocrows = config->nprocrows, nproccols = config->nproccols, nprocpergroup = world_size/(nprocrows*nproccols);
 
     // Compute all the respective partitioning types
-    dmmio::Operation Aop, Bop, Cop;
-    dmmio::PartitioningType Apart, Bpart, Cpart;
+    dmmio::Operation Aop, Bop;
+    dmmio::PartitioningType Apart;
 
     Aop   = dmmio::Operation::None;
     Apart = dmmio::PartitioningType::Naive;
 
     if (Apart == dmmio::PartitioningType::Naive) 
     {
-        Bpart = dmmio::PartitioningType::Naive;
-        Cpart = dmmio::PartitioningType::Naive;
-
         Bop   = dmmio::Operation::None;
-        Cop   = dmmio::Operation::None;
     } 
     else 
     {
@@ -95,6 +81,13 @@ int main(int argc, char ** argv)
 
     // Checks on the input params
     {
+        if (config->impl == Implementation::PUT)
+        {
+            if (world_rank == 0) fprintf(stderr, "Error: --impl put is no longer supported\n");
+            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
+        }
+
         if (config->spcomm && (!config->Acsc)) 
         {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm requires --Acsc\n");
@@ -254,6 +247,4 @@ int main(int argc, char ** argv)
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
-    }
-    Kokkos::finalize();
 }

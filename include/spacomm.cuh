@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
-#include "KokkosWrap.hpp"
+#include "utils.cuh"
+//#include "KokkosWrap.hpp"
 
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -310,27 +311,27 @@ struct KeepFlagByIndex
     }
 };
 
-#ifdef KOKKOS_TEST
-    template <typename PT>
-    Kokkos::View<unsigned char*> compute_flags_kokkos(
-        int n,
-        const PT* ptr_vec,
-        int m,
-        const BMASK_TYPE* mask)
-    {
-        Kokkos::View<unsigned char*> d_flags("flags", n);
-
-        KeepFlagByIndex<PT> functor(ptr_vec, m, mask);
-
-        Kokkos::parallel_for("ComputeFlags", n, KOKKOS_LAMBDA(int i) {
-            d_flags(i) = static_cast<unsigned char>(functor(i));
-        });
-
-        Kokkos::fence(); // ensure flags are ready
-
-        return d_flags;
-    }
-#endif
+//#ifdef KOKKOS_TEST
+//    template <typename PT>
+//    Kokkos::View<unsigned char*> compute_flags_kokkos(
+//        int n,
+//        const PT* ptr_vec,
+//        int m,
+//        const BMASK_TYPE* mask)
+//    {
+//        Kokkos::View<unsigned char*> d_flags("flags", n);
+//
+//        KeepFlagByIndex<PT> functor(ptr_vec, m, mask);
+//
+//        Kokkos::parallel_for("ComputeFlags", n, KOKKOS_LAMBDA(int i) {
+//            d_flags(i) = static_cast<unsigned char>(functor(i));
+//        });
+//
+//        Kokkos::fence(); // ensure flags are ready
+//
+//        return d_flags;
+//    }
+//#endif
 
 #define EXPLICIT_FLAGS
 
@@ -543,11 +544,13 @@ IT* select_ptrs(IT* raw_ptr, int m, BMASK_TYPE* mask, cudaStream_t stream = 0, c
 template <typename IT, typename VT>
 struct SpaCommBuffers {
 
-    SpaCommBuffers(const mmio::CSX<IT,VT>* to_compress) {
+    SpaCommBuffers(mmio::CSX<IT,VT>* to_compress) {
         initialized = true;
         int nnz = to_compress->nnz;
         entries_grid_size = (nnz + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
         int ptrsize = (to_compress->majordim == mmio::MajorDim::ROWS) ? (to_compress->nrows +1) : (to_compress->ncols +1) ;
+
+        d_buf_size = mmio::CSX_buf_size<IT, VT>(to_compress);
 
 #ifdef NVTX_PROFILING
         NVTX_PUSH_RANGE("Alloc holders & buffers",2);
@@ -558,32 +561,40 @@ struct SpaCommBuffers {
         CUDA_CHECK(cudaMalloc(&IT_partial_results, sizeof(IT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
         CUDA_CHECK(cudaMalloc(&VT_partial_results, sizeof(VT)  * entries_grid_size * BLOCK_SIZE * ITEM_PER_THREAD));
 
-        if (nnz>0) {
-            CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
-            CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
-        } else {
-            compressed_values  = nullptr;
-            compressed_indices = nullptr;
-        }
+        CUDA_CHECK(cudaMalloc(&d_buf, d_buf_size));
 
-        if(ptrsize>0) {
-            CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
-        } else {
-            compressed_pointers = nullptr;
-        }
+        set_ptrs(nnz);
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
 #endif
     }
 
+
+    void set_ptrs(const IT nnz) {
+        if (nnz>0) {
+            compressed_values = (VT*)d_buf;
+            compressed_indices = (IT*)(d_buf + nnz * sizeof(VT));
+            //CUDA_CHECK(cudaMalloc(&compressed_values,   sizeof(VT) * nnz));
+            //CUDA_CHECK(cudaMalloc(&compressed_indices,  sizeof(IT) * nnz));
+        } else {
+            compressed_values  = nullptr;
+            compressed_indices = nullptr;
+        }
+
+        compressed_pointers = (IT*)(d_buf + nnz * sizeof(VT) + nnz * sizeof(IT));
+        //CUDA_CHECK(cudaMalloc(&compressed_pointers, sizeof(IT) * ptrsize));
+    }
+
+
     void explicitFree(void) {
         CUDA_FREE_SAFE(selected_per_block);
         CUDA_FREE_SAFE(IT_partial_results);
         CUDA_FREE_SAFE(VT_partial_results);
-        CUDA_FREE_SAFE(compressed_values);
-        CUDA_FREE_SAFE(compressed_indices);
-        CUDA_FREE_SAFE(compressed_pointers);
+        CUDA_FREE_SAFE(d_buf);
+        //CUDA_FREE_SAFE(compressed_values);
+        //CUDA_FREE_SAFE(compressed_indices);
+        //CUDA_FREE_SAFE(compressed_pointers);
         CUDA_CHECK(cudaFreeHost(host_buffer));
         tmp_buff.explicitFree();
         initialized = false;
@@ -603,6 +614,9 @@ struct SpaCommBuffers {
     VT *compressed_values;
     IT *compressed_indices;
     IT *compressed_pointers;
+
+    char * d_buf;
+    IT d_buf_size;
 
     cubTmpBuff tmp_buff;
 };
@@ -724,7 +738,6 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
     CUDA_CHECK(cudaMemcpyAsync(h_selected_per_block, selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    // std::vector<int> h_displ(grid_size + 1);
     int *h_displ = (int*)malloc(sizeof(int)*(grid_size + 1));
     h_displ[0] = 0;
     for (int i = 0; i < grid_size; i++) {
@@ -733,9 +746,6 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
     int nselected = h_displ[grid_size];
 
 #ifdef DEBUG_SELECT_ENTRIES_CUDA
-    // fprintf(stdout, "h_selected_per_block: ");
-    // for (int i=0; i<grid_size; i++) fprintf(stdout, "%d ", h_selected_per_block[i]);
-    // fprintf(stdout, "\n");
     fprintf(stdout, "nselected: %d\n", nselected);
 #endif
 
@@ -754,12 +764,6 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
         CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
-    // for (int i = 0; i < grid_size; i++) {
-    //     if (h_selected_per_block[i] > 0) {
-    //         int src_base = i * BLOCK_SIZE * ITEM_PER_THREAD;
-    //         CUDA_CHECK(cudaMemcpyAsync(output + h_displ[i], partial_output + src_base, sizeof(ET) * h_selected_per_block[i], cudaMemcpyDeviceToDevice, stream));
-    //     }
-    // }
 
     return(nselected);
 }
@@ -792,8 +796,9 @@ __global__ void check_ptr_kernel(T* ptr_vec, int ptr_size, int* check) {
     MPI_Barrier(MPI_COMM_WORLD); \
 }
 
-template <typename IT, typename VT>
-using KWrapDMat = typename KokkosWrap::DistribuitedMatrix<IT, IT, VT>;
+
+
+
 
 template <typename IT, typename VT>
 struct SpaCommHandler
@@ -807,9 +812,11 @@ struct SpaCommHandler
 
         grid     = input_grid;
         nfilters = input_grid->row_size;
+
 #ifndef DEBUGBITMASKGENERATION
         mask_len = spcomm_2D(csx_A, csx_B, input_grid, &A_column_filters, &B_rows_filters);
 #else
+
         if (grid->global_rank == 0) fprintf(stderr, "DEBUG ONLY MODE: sparsity patter communication is not performed, filters are filled with 1s.\n");
         srand(8);
         int k = csx_A->ncols;
@@ -835,7 +842,7 @@ struct SpaCommHandler
         ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;
 
-        // Set-up parameeters according to A or B operand
+        // Set-up parameters according to A or B operand
         int ptr_size;
         BMASK_TYPE *mask;
         if (layout == mmio::MajorDim::ROWS) {
@@ -858,6 +865,17 @@ struct SpaCommHandler
         )
         free(h_mask);
 #endif
+        // Compute compressed value vector
+        // NOTE: This one has to happen first, since the others can move
+        int num_selected_val = select_entries_cuda<VT, IT>(
+                M->val, M->nnz,
+                M->ptr_vec, ptr_size,
+                mask,
+                buffs,
+                stream
+        );
+
+        buffs->set_ptrs(num_selected_val);
 
         // Compute compressed index vector
         int num_selected = select_entries_cuda<IT, IT>(
@@ -875,14 +893,6 @@ struct SpaCommHandler
         }
 #endif
 
-        // Compute compressed value vector
-        int num_selected_val = select_entries_cuda<VT, IT>(
-                M->val, M->nnz,
-                M->ptr_vec, ptr_size,
-                mask,
-                buffs,
-                stream
-        );
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
@@ -905,13 +915,9 @@ struct SpaCommHandler
             SpaComm::printBit_left2right(tmp, mask_len, stderr);
             MPI_Abort(grid->world_comm, __LINE__);
         }
-/*
-	VT *new_val; IT *new_idx; int num_selected = M->nnz;
-	CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(M->nnz))); // Just to debug
-	CUDA_CHECK(cudaMalloc(&new_val, sizeof(IT)*(M->nnz))); // Just to debug
-*/
+
         // Compute compressed pointer vector
-        IT *new_row = buffs->compressed_pointers;
+        IT * new_row = buffs->compressed_pointers;
         CUDA_CHECK(cudaMemcpyAsync(new_row, M->ptr_vec, sizeof(IT)*ptr_size, cudaMemcpyDeviceToDevice, stream));
         select_ptrs(new_row, ptr_size, mask, stream, &(buffs->tmp_buff)); // Changes are done in place
 
@@ -928,9 +934,15 @@ struct SpaCommHandler
         output->nnz      = num_selected;
         output->nrows    = M->nrows;
         output->ncols    = M->ncols;
-        output->val      = buffs->compressed_values;
-        output->ptr_vec  = buffs->compressed_pointers;
-        output->idx_vec  = buffs->compressed_indices;
+        output->contig   = true;
+
+        output->buf_size = mmio::CSX_buf_size<IT, VT>(M->nrows, M->ncols, num_selected, M->majordim);
+
+        output->buf      = buffs->d_buf;
+        mmio::CSX_get_ptrs(M->nrows, M->ncols, num_selected, output->buf,
+                            &(buffs->compressed_pointers),
+                            &(buffs->compressed_indices),
+                            &(buffs->compressed_values));
 
         return(output);
     }
@@ -942,6 +954,7 @@ struct SpaCommHandler
         CUDA_FREE_SAFE(B_rows_filters);
         initialized = false;
     }
+
 
     ~SpaCommHandler()
     {

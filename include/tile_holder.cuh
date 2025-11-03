@@ -1,222 +1,60 @@
 #pragma once
 #include "common.h"
 #include "utils.cuh"
-#include "kokkos_helpers.cuh"
 
 #define DEBUG_HOLDER 0
 
-//#define PTR_CHECK
-
-#ifdef PTR_CHECK
-extern int here_iteration;
-#endif
 
 template <typename IT, typename VT>
 struct TileHolder
 {
 
-    using LocalCSR = typename KokkosTypes<IT, VT>::CrsMatrix;
-
-    TileHolder(const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
+    TileHolder(const IT _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
     {
+        d_buf_size = _buf_size;
         comm = _comm;
-        flag = new IT(-1);
         max_nnz  = nnz_size;
         ptr_size = _ptr_size;
 
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-        CUDA_CHECK(cudaMalloc(&d_ptrs_buf, sizeof(IT) * (_ptr_size + 1)));
-        CUDA_CHECK(cudaMalloc(&d_vals_buf, sizeof(VT) * nnz_size));
-        CUDA_CHECK(cudaMalloc(&d_inds_buf, sizeof(IT) * nnz_size));
-
-        MPI_Win_create(d_ptrs_buf, sizeof(IT) * (_ptr_size + 1), sizeof(IT), MPI_INFO_NULL, comm, &d_ptrs_win);
-        MPI_Win_create(d_inds_buf, sizeof(IT) * (nnz_size), sizeof(IT), MPI_INFO_NULL, comm, &d_inds_win);
-        MPI_Win_create(d_vals_buf, sizeof(VT) * (nnz_size), sizeof(VT), MPI_INFO_NULL, comm, &d_vals_win);
-        MPI_Win_create((void*)flag, sizeof(IT), sizeof(IT), MPI_INFO_NULL, comm, &flag_win);
-
-        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_ptrs_win);
-        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_inds_win);
-        MPI_Win_lock_all(MPI_MODE_NOCHECK, d_vals_win);
-        MPI_Win_lock_all(MPI_MODE_NOCHECK, flag_win);
+        CUDA_CHECK(cudaMalloc(&d_buf, d_buf_size));
+        CUDA_CHECK(cudaMemset(d_buf, 0, d_buf_size));
 
     }
+
 
     TileHolder(){}
 
 
-    float put_tile_gat(VT * d_vals, IT * d_inds, IT * d_ptrs, 
-                       const IT nnz, const IT ptr_size, 
-                       const int target, std::mutex& mpi_mutex, 
-                       MPI_Group& group,
-                       cudaStream_t stream = 0, int tag=0)
+    void set_csx_ptrs(const IT nnz)
     {
-        CPU_TIMER_DEF(tmp_timer)
-
-        MPI_Win_start(group, 0, d_vals_win);
-        MPI_Win_start(group, 0, d_inds_win);
-        MPI_Win_start(group, 0, d_ptrs_win);
-        MPI_Win_start(group, 0, flag_win);
-
-
-#ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
-#endif
-
-        CPU_TIMER_START(tmp_timer)
-
-        // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
-        MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
-        MPI_Put(d_inds, nnz, MPI_INT32_T, target, 0, nnz, MPI_INT32_T, d_inds_win);
-        MPI_Put(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 0, ptr_size + 1, MPI_INT32_T, d_ptrs_win);
-
-        // Write nnz to target
-        MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
-
-        MPI_Win_complete(d_vals_win);
-        MPI_Win_complete(d_inds_win);
-        MPI_Win_complete(d_ptrs_win);
-        MPI_Win_complete(flag_win);
-
-        CPU_TIMER_STOP(tmp_timer)
-
-#ifdef NVTX_PROFILING
-        NVTX_POP_RANGE;
-#endif
-        return(__timer_vals_tmp_timer.back());
-
+        assert(sizeof(IT) == sizeof(VT));
+        size_t offset = 0;
+        d_vals_buf= (VT*)d_buf;
+        offset += sizeof(VT) * nnz;
+        d_inds_buf= (IT*)(d_buf + offset);
+        offset += sizeof(IT) * nnz;
+        d_ptrs_buf= (IT*)(d_buf + offset);
     }
 
 
-    float put_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0)
+    float send_tile_contig(char * d_sendbuf, const IT sendbuf_size, const IT nnz, const int target, cudaStream_t stream = 0, int tag = 0)
     {
-
-#ifdef PTR_CHECK
-        CHECK_PTR(d_vals, here_iteration)
-        CHECK_PTR(d_inds, here_iteration)
-        CHECK_PTR(d_ptrs, here_iteration)
-        here_iteration++;
-#endif
 
 #ifdef NVTX_PROFILING
         int nvtx_color;
         char comunication_str[20], nvtx_char;
-        if (tag == 1) {
-                nvtx_color = 3;
-                nvtx_char  = 'B';
-        } else if (tag == 0){
-                nvtx_color = 4;
-                nvtx_char  = 'A';
-        } else {
-                nvtx_color = 2;
-        }
-        if (tag!=-1) sprintf(comunication_str, "Put time %c", nvtx_char);
-        else sprintf(comunication_str, "Put warmup", nvtx_char);
-#endif
-
-        CPU_TIMER_DEF(tmp_timer)
-        std::lock_guard<std::mutex> lock(mpi_mutex);
-
-#ifdef NVTX_PROFILING
-        NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
-#endif
-
-        CPU_TIMER_START(tmp_timer)
-
-        // MPI_Put complains about an invalid datatype if I pass it MPIType<VT>()
-        MPI_Put(d_vals, nnz, MPI_FLOAT, target, 0, nnz, MPI_FLOAT, d_vals_win);
-        MPI_Put(d_inds, nnz, MPI_INT32_T, target, 0, nnz, MPI_INT32_T, d_inds_win);
-        MPI_Put(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 0, ptr_size + 1, MPI_INT32_T, d_ptrs_win);
-
-
-        MPI_Win_flush(target, d_ptrs_win);
-        MPI_Win_flush(target, d_inds_win);
-        MPI_Win_flush(target, d_vals_win);
-
-        // Notify target of completion
-        MPI_Accumulate(&nnz, 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, flag_win);
-        MPI_Win_flush(target, flag_win); //TODO: Do I need this?
-
-        CPU_TIMER_STOP(tmp_timer)
-
-#ifdef NVTX_PROFILING
-        NVTX_POP_RANGE;
-#endif
-        return(__timer_vals_tmp_timer.back());
-    }
-
-
-    IT wait_gat(int src, MPI_Group& group, cudaStream_t stream = 0, int tag=0)
-    {
-        MPI_Win_post(group, 0, d_ptrs_win);
-        MPI_Win_post(group, 0, d_inds_win);
-        MPI_Win_post(group, 0, d_vals_win);
-        MPI_Win_post(group, 0, flag_win);
-
-
-        MPI_Win_wait(d_ptrs_win);
-        MPI_Win_wait(d_inds_win);
-        MPI_Win_wait(d_vals_win);
-        MPI_Win_wait(flag_win);
-
-        return *flag;
-    }
-
-
-    IT wait(int src, cudaStream_t stream = 0, int tag=0)
-    {
-#ifdef NVTX_PROFILING
-        int nvtx_color;
-        char nvtx_str[20], nvtx_char;
-        if (tag == 1) {
-                nvtx_color = 3;
-                nvtx_char  = 'B';
-        } else if (tag == 0){
-                nvtx_color = 4;
-                nvtx_char  = 'A';
-        } else {
-                nvtx_color = 2;
-        }
-        if (tag!=-1) sprintf(nvtx_str, "Fetching remote data %c", nvtx_char);
-        else sprintf(nvtx_str, "Put warmup", nvtx_char);
-        NVTX_PUSH_RANGE_CUDA(nvtx_str,nvtx_color,stream);
-#endif
-
-        IT nnz;
-        do 
+        if (tag == 1) 
         {
-            MPI_Win_flush_all(flag_win); //TODO: Get rid of this? I don't understand why it needs to be here, but it seems necessary to update flag
-            MPI_Win_sync(flag_win);
-            nnz = *flag;
-#if DEBUG_HOLDER
-            std::cout<<"Rank: "<<world_rank<<","<<nnz<<std::endl;
-            sleep(1);
-#endif
-        } while (nnz == -1);
-        *flag = -1;
-
-        MPI_Win_sync(flag_win);
-
-#ifdef NVTX_PROFILING
-        NVTX_POP_RANGE;
-#endif
-
-        return nnz;
-    }
-
-
-    float send_tile(VT * d_vals, IT * d_inds, IT * d_ptrs, const IT nnz, const IT ptr_size, const int target, std::mutex& mpi_mutex, cudaStream_t stream = 0, int tag=0) 
-    {
-#ifdef NVTX_PROFILING
-        int nvtx_color;
-        char comunication_str[20], nvtx_char;
-        if (tag == 1) {
-                nvtx_color = 3;
-                nvtx_char  = 'B';
-        } else {
-                nvtx_color = 4;
-                nvtx_char  = 'A';
+            nvtx_color = 3;
+            nvtx_char  = 'B';
+        } 
+        else 
+        {
+            nvtx_color = 4;
+            nvtx_char  = 'A';
         }
         sprintf(comunication_str, "Send time %c", nvtx_char);
 #endif
@@ -228,22 +66,15 @@ struct TileHolder
         NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
 
-        MPI_Request requests[4];
+        MPI_Request size_req;
+        IT payload[2] = {nnz, sendbuf_size};
+        MPI_Isend(payload, 2, MPIType<IT>(), target, 0, comm, &size_req);
+
+        if (nnz > 0)
         {
-            MPI_Isend(&nnz, 1, MPI_INT32_T, target, 0, comm, &(requests[0])); // BUG: MPI types are hardcoded
+            MPI_Send(d_sendbuf, sendbuf_size, MPI_CHAR, target, 1, comm);
         }
 
-
-        if (nnz>0) 
-        {
-            CPU_TIMER_START(tmp_timer)
-            MPI_Isend(d_vals, nnz,          MPI_FLOAT,   target, 1, comm, &(requests[1])); // BUG: MPI types are hardcoded
-            MPI_Isend(d_inds, nnz,          MPI_INT32_T, target, 2, comm, &(requests[2])); // BUG: MPI types are hardcoded
-            MPI_Isend(d_ptrs, ptr_size + 1, MPI_INT32_T, target, 3, comm, &(requests[3])); // BUG: MPI types are hardcoded
-            MPI_Waitall(4, requests, MPI_STATUS_IGNORE);
-            CPU_TIMER_STOP(tmp_timer)
-            time = __timer_vals_tmp_timer.back();
-        }
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
@@ -252,45 +83,29 @@ struct TileHolder
     }
 
 
-    IT receve_tile(int src, std::mutex& mpi_mutex) {
-        int recv_nnz;
-        MPI_Request requests[4];
+    IT recv_tile_contig(int src) 
+    {
+        IT sizes[2];
+        MPI_Request size_req;
+        MPI_Irecv(sizes, 2, MPIType<IT>(), src, 0, comm, &size_req);
+        MPI_Wait(&size_req, MPI_STATUS_IGNORE);
+
+        if (sizes[0] > 0) 
         {
-            MPI_Irecv(&recv_nnz, 1, MPI_INT32_T, src, 0, comm, &(requests[0]));
+            MPI_Recv(d_buf, sizes[1], MPI_CHAR, src, 1, comm, MPI_STATUS_IGNORE);
         }
 
-        MPI_Wait(&(requests[0]), MPI_STATUS_IGNORE);
+        set_csx_ptrs(sizes[0]);
 
-
-        if (recv_nnz>0) 
-        {
-            MPI_Irecv(d_vals_buf, recv_nnz,     MPI_FLOAT,   src, 1, comm, &(requests[1]));
-            MPI_Irecv(d_inds_buf, recv_nnz,     MPI_INT32_T, src, 2, comm, &(requests[2]));
-            MPI_Irecv(d_ptrs_buf, ptr_size + 1, MPI_INT32_T, src, 3, comm, &(requests[3]));
-            MPI_Waitall(3, requests + 1, MPI_STATUS_IGNORE);
-        }
-
-        return(recv_nnz);
+        return(sizes[0]);
     }
 
-    void warmup(Implementation impl, VT *d_vals, IT *d_inds, IT *d_ptrs) {
-        int comm_size, comm_rank;
-        MPI_Comm_size(comm, &comm_size);
-        MPI_Comm_rank(comm, &comm_rank);
 
-        if ((d_vals == nullptr) || (d_inds == nullptr) || (d_ptrs == nullptr)) return;
+    IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) 
+    {
 
-        if (impl == Implementation::PUT) {
-            std::mutex useless_mutex;
-            for (int i=0; i<comm_size; i++) {
-                put_tile(d_vals, d_inds, d_ptrs, 1, 1, i, std::ref(useless_mutex), 0, -1);
-                usleep(500);
-            }
-        }
-        // TODO put here the warmup for send/recv
-    }
+        set_csx_ptrs(input->nnz);
 
-    IT copy_device_local_csx(mmio::CSX<IT,VT> *input, cudaStream_t stream = 0) {
 #ifdef NVTX_PROFILING
         NVTX_PUSH_RANGE("Fetching local data",2);
 #endif
@@ -306,30 +121,6 @@ struct TileHolder
     }
 
 
-    void sync_buffers()
-    {
-        //MPI_Win_sync(d_vals_win);
-        //MPI_Win_sync(d_inds_win);
-        //MPI_Win_sync(d_ptrs_win);
-    }
-
-
-    LocalCSR * form_tile(const IT nrows, const IT ncols, const IT nnz)
-    {
-        sync_buffers();
-        return csr_to_kokkos_crs(nrows, ncols, nnz,
-                                 d_vals_buf, d_inds_buf, d_ptrs_buf);
-    }
-
-
-    LocalCSR * form_tile(const IT nrows, const IT ncols, const IT nnz,
-                         VT * d_vals, IT * d_colinds, IT * d_rowptrs)
-    {
-        return csr_to_kokkos_crs(nrows, ncols, nnz,
-                                 d_vals, d_colinds, d_rowptrs);
-    }
-
-
     mmio::CSX<IT, VT> * form_mmiocsx(const IT nrows, const IT ncols, const IT nnz, mmio::MajorDim layout,
                                      VT * d_vals, IT * d_inds, IT * d_ptrs)
     {
@@ -339,7 +130,6 @@ struct TileHolder
         csx->ncols    = ncols;
         csx->nnz      = nnz;
 
-        sync_buffers();
         csx->ptr_vec = d_ptrs;
         csx->idx_vec = d_inds;
         csx->val     = d_vals;
@@ -357,7 +147,6 @@ struct TileHolder
                        VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs, CsxBuffers<IT,VT>* buffers=nullptr)
     {
 
-        sync_buffers();
 
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
@@ -426,19 +215,6 @@ struct TileHolder
     }
 
 
-    LocalCSR * node_allgather_tiles(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
-    {
-        const int total_nrows = (grid->node_size) * nrows;
-
-        VT * d_node_vals;
-        IT * d_node_colinds, * d_node_rowptrs;
-        int total_nnz = node_allgather(nrows, ncols, nnz, grid, &d_node_vals, &d_node_colinds, &d_node_rowptrs, buffers);
-
-        // Done
-        return form_tile(total_nrows, ncols, total_nnz,
-                         d_node_vals, d_node_colinds, d_node_rowptrs);
-    }
-
 
     mmio::CSX<IT, VT> * node_allgather_mmiocsx(const IT nrows, const IT ncols, const IT nnz, dmmio::ProcessGrid * grid, CsxBuffers<IT,VT>* buffers=nullptr)
     {
@@ -462,29 +238,17 @@ struct TileHolder
 
     ~TileHolder()
     {
-        MPI_Win_unlock_all(d_ptrs_win);
-        MPI_Win_unlock_all(d_vals_win);
-        MPI_Win_unlock_all(d_inds_win);
-        MPI_Win_unlock_all(flag_win);
-        MPI_Win_free(&d_ptrs_win);
-        MPI_Win_free(&d_inds_win);
-        MPI_Win_free(&d_vals_win);
-        MPI_Win_free(&flag_win);
-        CUDA_FREE_SAFE(d_ptrs_buf);
-        CUDA_FREE_SAFE(d_vals_buf);
-        CUDA_FREE_SAFE(d_inds_buf);
+        CUDA_FREE_SAFE(d_buf);
     }
 
 
-    MPI_Win d_vals_win, d_inds_win, d_ptrs_win;
     VT * d_vals_buf;
     IT * d_inds_buf, * d_ptrs_buf;
-
-    volatile IT * flag;
-    MPI_Win flag_win;
+    char * d_buf;
 
     IT ptr_size;
     IT max_nnz;
+    IT d_buf_size;
 
     MPI_Comm comm;
     int rank;

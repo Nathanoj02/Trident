@@ -213,20 +213,6 @@ void print_rkn(const char * msg, Args... args)
 
 template<typename IT>
 void move2gpu(IT** ptr, uint64_t size) {
-    /*  // NOTE nice to set but it don't work
-    CUmemorytype memType;
-    cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(ptr));
-
-    std::string memStr;
-    switch (memType) {
-        case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break;
-        case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break;
-        case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break;
-        default:                   memStr = "UNKNOWN"; break;
-    }
-
-    if (memType != CU_MEMORYTYPE_HOST) std::cerr << "Error: function " << __func__ << " took in input a non host pointer: " << memStr;
-    */
 
     IT *tmp;
     CUDA_CHECK(cudaMalloc(&tmp, sizeof(IT)*size));
@@ -235,22 +221,9 @@ void move2gpu(IT** ptr, uint64_t size) {
     *ptr = tmp;
 }
 
+
 template<typename IT>
 void move2host(IT** ptr, uint64_t size) {
-    /* // NOTE nice to set but it don't work
-    CUmemorytype memType;
-    cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, reinterpret_cast<CUdeviceptr>(ptr));
-
-    std::string memStr;
-    switch (memType) {
-        case CU_MEMORYTYPE_HOST:   memStr = "HOST"; break;
-        case CU_MEMORYTYPE_DEVICE: memStr = "DEVICE"; break;
-        case CU_MEMORYTYPE_ARRAY:  memStr = "ARRAY"; break;
-        default:                   memStr = "UNKNOWN"; break;
-    }
-
-    if (memType != CU_MEMORYTYPE_DEVICE) std::cerr << "Error: function " << __func__ << " took in input a non device pointer: " << memStr;
-    */
 
     IT *tmp = (IT*)malloc(sizeof(IT)*size);
     CUDA_CHECK(cudaMemcpy(tmp, *ptr, sizeof(IT)*size, cudaMemcpyDeviceToHost));
@@ -367,20 +340,74 @@ void par_print(const char * str, Args... args)
 
 
 template<typename IT, typename VT>
-void CSX_destroy_device(mmio::CSX<IT, VT> **csx) {
-    if (*csx != NULL) {
-        if ((*csx)->ptr_vec != NULL) {
-        CUDA_CHECK(cudaFree((*csx)->ptr_vec));
-        (*csx)->ptr_vec = NULL;
+mmio::CSX<IT, VT> * CSX_create_contig_device(IT nrows, IT ncols, IT nnz, mmio::MajorDim majordim, IT * idx_vec, IT * ptr_vec, VT * vals)
+{
+    mmio::CSX<IT, VT> *csx = (mmio::CSX<IT, VT> *)malloc(sizeof(mmio::CSX<IT, VT>));
+    csx->majordim = majordim;
+    csx->nrows    = nrows;
+    csx->ncols    = ncols;
+    csx->nnz      = nnz;
+    csx->contig   = true;
+
+    csx->buf_size = mmio::CSX_buf_size<IT, VT>(nrows, ncols, nnz, majordim);
+    CUDA_CHECK(cudaMalloc(&(csx->buf), csx->buf_size));
+
+    mmio::CSX_get_ptrs(nrows, ncols, nnz, csx->buf,
+                         &(csx->ptr_vec), &(csx->idx_vec), &(csx->val));
+
+    IT ptr_size = (majordim == mmio::MajorDim::ROWS) ? nrows : ncols;
+    CUDA_CHECK(cudaMemcpy(csx->ptr_vec, 
+                          ptr_vec, 
+                          sizeof(IT) * (ptr_size + 1),
+                          cudaMemcpyDefault));
+
+    if (nnz > 0)
+    {
+        CUDA_CHECK(cudaMemcpy(csx->idx_vec, 
+                              idx_vec, 
+                              sizeof(IT) * nnz,
+                              cudaMemcpyDefault));
+        CUDA_CHECK(cudaMemcpy(csx->val, 
+                              vals, 
+                              sizeof(VT) * nnz,
+                              cudaMemcpyDefault));
+    }
+
+    return csx;
+}
+
+
+template<typename IT, typename VT>
+void CSX_destroy_device(mmio::CSX<IT, VT> **csx) 
+{
+    if (*csx != NULL) 
+    {
+        if ((*csx)->contig)
+        {
+            CUDA_CHECK(cudaFree((*csx)->buf));
+            (*csx)->buf = NULL;
         }
-        if ((*csx)->idx_vec != NULL) {
-        CUDA_CHECK(cudaFree((*csx)->idx_vec));
-        (*csx)->idx_vec = NULL;
+        else
+        {
+            if ((*csx)->ptr_vec != NULL) 
+            {
+                CUDA_CHECK(cudaFree((*csx)->ptr_vec));
+                (*csx)->ptr_vec = NULL;
+            }
+
+            if ((*csx)->idx_vec != NULL) 
+            {
+                CUDA_CHECK(cudaFree((*csx)->idx_vec));
+                (*csx)->idx_vec = NULL;
+            }
+
+            if ((*csx)->val != NULL) 
+            {
+                CUDA_CHECK(cudaFree((*csx)->val));
+                (*csx)->val = NULL;
+            }
         }
-        if ((*csx)->val != NULL) {
-        CUDA_CHECK(cudaFree((*csx)->val));
-        (*csx)->val = NULL;
-        }
+
         free(*csx);
         *csx = NULL;
     }

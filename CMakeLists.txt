@@ -17,8 +17,8 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 
 
 # FIND KOKKOS
-find_package(Kokkos REQUIRED)
-find_package(KokkosKernels REQUIRED)
+#find_package(Kokkos REQUIRED)
+#find_package(KokkosKernels REQUIRED)
 
 
 # ADD INCLUDE DIRECTORY
@@ -51,6 +51,7 @@ endif()
 
 # THREADS
 find_package(Threads REQUIRED)
+find_package(OpenMP REQUIRED)
 
 
 # CUDA FLAGS
@@ -60,12 +61,11 @@ set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
 # MAIN HNS_SPGEMM LIBRARY
 add_library(hns_spgemm
             src/hns_spgemm.cu
-            src/hns_spgemm_get.cu)
+            )
 target_link_libraries(hns_spgemm PUBLIC
                         MPI::MPI_CXX 
                         dmmio 
                         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
-                        KokkosKernels::kokkoskernels Kokkos::kokkos
                         Threads::Threads
                         CUDA::cusparse)
 
@@ -78,7 +78,6 @@ macro(add_test name)
                             dmmio 
                             ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
                             hns_spgemm 
-                            KokkosKernels::kokkoskernels Kokkos::kokkos 
                             Threads::Threads 
                             CUDA::cusparse)
 endmacro()
@@ -91,6 +90,9 @@ add_test(test_compression)
 add_test(test_cuda_mpi)
 add_test(test_p2pallgatherv)
 
+add_executable(test_p2p_mthread test/test_p2p_mthread.cpp)
+target_link_libraries(test_p2p_mthread PUBLIC OpenMP::OpenMP_CXX MPI::MPI_CXX)
+
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src name)
     add_executable(${name} src/${name}.cu)
@@ -99,7 +101,6 @@ macro(add_src name)
                             dmmio 
                             ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
                             hns_spgemm 
-                            KokkosKernels::kokkoskernels Kokkos::kokkos 
                             Threads::Threads 
                             CUDA::cusparse)
     target_compile_options(${name} PRIVATE -O3 -Wall)
@@ -118,7 +119,6 @@ macro(add_prof name folder)
                             dmmio
                             ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
                             hns_spgemm
-                            KokkosKernels::kokkoskernels Kokkos::kokkos
                             Threads::Threads
                             CUDA::cusparse)
     target_compile_options(${name}_prof PUBLIC -Wall -lnvToolsExt)

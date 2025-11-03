@@ -2,11 +2,8 @@
 
 MPIDataTypeCache mpidtc; //fix linker error
 
-//#ifdef PTR_CHECK
 int here_iteration = 0;
-//#endif
 
-// #define DEBUG_THREAD_COMPRESSION
 
 // Barrier for sync afther thread allocs
 #include <condition_variable>
@@ -19,9 +16,8 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
 }
 
 template <typename IT, typename VT>
-void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, const mmio::CSX<IT, VT> * csx, 
+void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, 
                           const Implementation impl, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, 
-                          MPI_Group& big_group,
                           int comm_rank, std::mutex& mpi_mutex, int tag=0)
 {
     int rank;
@@ -33,19 +29,21 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
-    MPI_Group pair_group;
 
     float internode_comm;
     CUDA_TIMER_DEF(compression_time)
 #ifdef NVTX_PROFILING
     int nvtx_color;
     char compression_str[20], comunication_str[20], nvtx_char;
-    if (tag == 1) {
-            nvtx_color = 3;
-            nvtx_char  = 'B';
-    } else {
-            nvtx_color = 4;
-            nvtx_char  = 'A';
+    if (tag == 1) 
+    {
+        nvtx_color = 3;
+        nvtx_char  = 'B';
+    } 
+    else 
+    {
+        nvtx_color = 4;
+        nvtx_char  = 'A';
     }
     sprintf(compression_str,  "Compression %c", nvtx_char);
 #endif
@@ -98,14 +96,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         // Put tile on remote process
         //   NOTE: timer and NVTX ranges inside the function
         const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
-        if (impl == Implementation::PUT) 
-        {
-            internode_comm = holder.put_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
-        } 
-        else 
-        {
-            internode_comm = holder.send_tile(tosend->val, tosend->idx_vec, tosend->ptr_vec, tosend->nnz, ptrsize, target, mpi_mutex, stream, tag);
-        }
+        assert(tosend->contig && "Tosend must be contiguous");
+        internode_comm = holder.send_tile_contig(tosend->buf, tosend->buf_size, tosend->nnz, target, stream, tag);
 
 
 #ifdef DETAILED_TIMERS
@@ -196,7 +188,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     MPI_Group col_group;
     MPI_Comm_group(grid->col_comm, &col_group);
 
-    MPI_Group A_tile_group, B_tile_group;
 
     // Number of iterations (i.e. number of tile to fetch to complete the global SpGEMM)
     const int n_iters = common_grid_size;
@@ -204,6 +195,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     // Are we using Acsc_flag?
     bool Acsc_flag = (dist_A->csx->mat->majordim == mmio::MajorDim::COLS);
+    mmio::MajorDim majordim = dist_A->csx->mat->majordim; 
 
 
     // Indices of tiles to fetch in the first iteration from each communicator
@@ -217,12 +209,12 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Get max nnz for A and B tiles (to allocate recv buffers once)
-    uint64_t A_max_nnz = (uint64_t)(dist_A->getLocalNnz()); // have to cast, since MPI_MAX won't work on MPIType<IT>()
-    MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->row_comm);
+    IT A_max_nnz = (dist_A->getLocalNnz()); 
+    MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPI_UINT32_T, MPI_MAX, grid->row_comm);
 
 
-    uint64_t B_max_nnz = (uint64_t)(dist_B->getLocalNnz());
-    MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT64_T, MPI_MAX, grid->col_comm);
+    IT B_max_nnz = (dist_B->getLocalNnz());
+    MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT32_T, MPI_MAX, grid->col_comm);
 
 
 #ifdef NVTX_PROFILING
@@ -231,8 +223,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
-    TileHolder<IT, VT> A_holder(dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
-    TileHolder<IT, VT> B_holder(dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
+    size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz, majordim);
+    size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz, mmio::MajorDim::ROWS);
+    TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
+    TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
 
 
     // Temporary allgather buffers
@@ -288,11 +282,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     std::mutex mpi_mutex;
     auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(A_queue), std::ref(A_holder), A_loc, 
-                            impl, spcomm, dev_id, row_group,
+                            impl, spcomm, dev_id, 
                             grid->row_rank, std::ref(mpi_mutex), 0);
     auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(B_queue), std::ref(B_holder), B_loc, 
-                            impl, spcomm, dev_id, col_group,
+                            impl, spcomm, dev_id, 
                             grid->col_rank, std::ref(mpi_mutex), 1);
 
 
@@ -310,6 +304,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     CPU_TIMER_DEF(spgemm);
 
+    // For deciding whether or not to accumulate
+    bool done_one_spgemm = false;
 
     // Main loop
     alloc_sync_point.arrive_and_wait();
@@ -339,6 +335,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         B_queue.notify(col_rank, rowBtoGet, iter);
 
 
+
         // NOTE:  NVTX ranges are inside '.wait' and '.copy_device_local_csx'
 #ifdef DETAILED_TIMERS
         CPU_TIMER_START(wait_for_input)
@@ -346,16 +343,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
         // Wait until I've been sent A and B or copy from the local data
         IT A_tile_nnz, B_tile_nnz;
+
         if (colAtoGet != grid->row_rank) 
         {
-            if (impl == Implementation::PUT) 
-            {
-                A_tile_nnz = A_holder.wait(colAtoGet, stream, 0);
-            } 
-            else 
-            {
-                A_tile_nnz = A_holder.receve_tile(colAtoGet, std::ref(mpi_mutex));
-            }
+            A_tile_nnz = A_holder.recv_tile_contig(colAtoGet);
         } 
         else 
         {
@@ -364,14 +355,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
         if (rowBtoGet != grid->col_rank) 
         {
-            if (impl == Implementation::PUT) 
-            {
-                B_tile_nnz = B_holder.wait(rowBtoGet, stream, 1);
-            } 
-            else 
-            {
-                B_tile_nnz = B_holder.receve_tile(rowBtoGet, std::ref(mpi_mutex));
-            }
+            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet);
         } 
         else 
         {
@@ -460,9 +444,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
         // This perform C_local += A_remote * B_node
-        if (!skipspgemm)
+        if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            cusparse_spmma<IT, VT>(handle, A_remote, B_node, C_prod, C_accum, C_local, (iter> 0));
+            cusparse_spmma<IT, VT>(handle, A_remote, B_node, C_prod, C_accum, C_local, done_one_spgemm);
+            done_one_spgemm = true;
         }
         CUDA_SYNC;
 
