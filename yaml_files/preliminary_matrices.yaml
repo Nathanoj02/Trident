@@ -1,4 +1,4 @@
-path: /global/cfs/cdirs/m4646/hns_spgemm_matrices
+path: /global/cfs/cdirs/m4646/hns_spgemm_matrices_pico
 
 known_squaring_nnz:
   suite_sparse_matrix_list:

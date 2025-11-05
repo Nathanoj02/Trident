@@ -20,3 +20,5 @@ kokkos-kernels/
 
 *.out
 *.bmtx
+CMakeCache.txt
+CMakeFiles/
