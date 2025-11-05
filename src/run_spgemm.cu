@@ -144,7 +144,10 @@ int main(int argc, char ** argv)
     //{
     //    cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
     //}
-    cudaSetDevice(world_rank % 4);
+
+    int gpn;
+    CUDA_CHECK(cudaGetDeviceCount(&gpn));
+    cudaSetDevice(world_rank % gpn);
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);

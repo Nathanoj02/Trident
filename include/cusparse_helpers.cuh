@@ -590,32 +590,39 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
 
 
 template <typename IT, typename VT>
-void cusparse_spmma(cusparseHandle_t& handle,
-                     CusparseCSX<IT, VT>* A, 
-                     CusparseCSX<IT, VT>* B, 
-                     CusparseCSX<IT, VT>* C_prod,
-                     CusparseCSX<IT, VT>* C_accum,
-                     CusparseCSX<IT, VT>* C_local,
-                     const bool accum)
+int cusparse_spmma(cusparseHandle_t& handle,
+                   CusparseCSX<IT, VT>* A, 
+                   CusparseCSX<IT, VT>* B, 
+                   CusparseCSX<IT, VT>** C_prod,
+                   CusparseCSX<IT, VT>** C_accum,
+                   CusparseCSX<IT, VT>** C_local,
+                   const bool accum)
 {
     // C_prod = AB
-    cusparse_spgemm(handle, A, B, C_prod);
+    int did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
 
 
-    // Do not accumulate, C_local will point to underlying C_prod
-    if (!accum)
+    if (did == 0)
     {
-        std::swap(C_local, C_prod);
-        return;
+        return 0;
     }
 
 
+    // Do not accumulate, C_local will point to underlying C_prod
+    //if (!accum)
+    //{
+    //    std::swap(*C_local, *C_prod);
+    //    return 1;
+    //}
+
+
     // C_accum = C_local + C_prod
-    cusparse_spgeam(handle, C_prod, C_local, C_accum);
+    cusparse_spgeam(handle, *C_prod, *C_local, *C_accum);
 
     // C_local now points to underlying C_accum storage
-    std::swap(C_local, C_accum);
+    std::swap(*C_local, *C_accum);
 
+    return 1;
 }
 
 
@@ -633,6 +640,9 @@ void cusparse_spgeam(cusparseHandle_t& handle,
     CsxBuffers<IT, VT> * C_prod_buffs = C_prod->buffers;
     CsxBuffers<IT, VT> * C_local_buffs = C_local->buffers;
     CsxBuffers<IT, VT> * C_accum_buffs = C_accum->buffers;
+
+    //par_print("C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
+    //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
 
     int m = C_prod->nrows();
     int n = C_prod->ncols();
@@ -701,6 +711,9 @@ void cusparse_spgeam(cusparseHandle_t& handle,
                                       C_accum_buffs->d_node_rowptrs,
                                       C_accum_buffs->d_node_colinds,
                                       C_accum_buffs->tmp_buffers[0].tmp_buffer) );
+
+    //par_print("Post accumulation: C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
+    //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
 }
 
 
@@ -747,7 +760,6 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  NULL));
-    CUDA_SYNC;
     buffers->ensure_tmp(buf_size1); 
     void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
 
@@ -763,7 +775,6 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  d_buf1));
-    CUDA_SYNC;
 
     size_t buf_size2;
     CUSPARSE_CHECK(cusparseSpGEMM_compute(handle,
@@ -777,7 +788,6 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                           alg,
                                           descr, &buf_size2,
                                           NULL));
-    CUDA_SYNC;
 
 
     int64_t num_prods = 0;
@@ -800,7 +810,6 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                           alg,
                                           descr, &buf_size2,
                                           d_buf2));
-    CUDA_SYNC;
 
     par_print("done compute");
 
@@ -816,10 +825,301 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                        A->descr, B->descr, &beta,
                                        C->descr,
                                        CUDA_R_32F, alg, descr));
-    CUDA_SYNC;
 
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
 
 }
-                     
+
+
+//TODO: Sync only on the cusparse stream
+template <typename IT, typename VT>
+int cusparse_spgemm_reuse(cusparseHandle_t& handle,
+                          CusparseCSX<IT, VT>* A,
+                          CusparseCSX<IT, VT>* B,
+                          CusparseCSX<IT, VT>* C)
+{
+    // Check to make sure underlying storage is ok
+    A->assert_mat("A");
+    B->assert_mat("B");
+    C->assert_buffs("C");
+
+    CsxBuffers<IT, VT> * buffers = C->buffers;
+
+    assert(buffers->nbufs >= 5 && "Need at least 5 temporary buffers for SpGEMMreuse");
+
+    cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cusparseSpGEMMAlg_t alg = CUSPARSE_SPGEMM_DEFAULT;
+
+    float alpha = 1.0;
+    float beta = 0.0;
+
+    cusparseSpGEMMDescr_t descr;
+    CUSPARSE_CHECK(cusparseSpGEMM_createDescr(&descr));
+
+    // === Phase 1: Work Estimation ===
+    size_t buf_size1;
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(handle,
+                                                      op, op,
+                                                      A->descr,
+                                                      B->descr,
+                                                      C->descr,
+                                                      alg,
+                                                      descr,
+                                                      &buf_size1,
+                                                      NULL));
+    CUDA_SYNC;
+
+    buffers->ensure_tmp(buf_size1, 0);
+    void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
+
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(handle,
+                                                      op, op,
+                                                      A->descr,
+                                                      B->descr,
+                                                      C->descr,
+                                                      alg,
+                                                      descr,
+                                                      &buf_size1,
+                                                      d_buf1));
+    CUDA_SYNC;
+
+    int64_t num_prods = 0;
+    CUSPARSE_CHECK(cusparseSpGEMM_getNumProducts(descr, &num_prods));
+
+    if (num_prods == 0)
+    {
+        return 0;
+    }
+
+    // === Phase 2: Determine NNZ and sparsity structure ===
+    size_t buf_size2, buf_size3, buf_size4;
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(handle,
+                                           op, op,
+                                           A->descr,
+                                           B->descr,
+                                           C->descr,
+                                           alg,
+                                           descr,
+                                           &buf_size2, NULL,
+                                           &buf_size3, NULL,
+                                           &buf_size4, NULL));
+    CUDA_SYNC;
+
+    buffers->ensure_tmp(buf_size2, 1);
+    buffers->ensure_tmp(buf_size3, 2);
+    buffers->ensure_tmp(buf_size4, 3);
+
+
+    void * d_buf2 = buffers->tmp_buffers[1].tmp_buffer;
+    void * d_buf3 = buffers->tmp_buffers[2].tmp_buffer;
+    void * d_buf4 = buffers->tmp_buffers[3].tmp_buffer;
+
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(handle,
+                                           op, op,
+                                           A->descr,
+                                           B->descr,
+                                           C->descr,
+                                           alg,
+                                           descr,
+                                           &buf_size2, d_buf2,
+                                           &buf_size3, d_buf3,
+                                           &buf_size4, d_buf4));
+    CUDA_SYNC;
+
+    // Get result matrix dimensions and allocate output
+    int64_t Cnrows, Cncols, Cnnz;
+    CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
+
+    buffers->ensure(Cnnz, Cnrows+1, Cncols);
+
+    CUSPARSE_CHECK(cusparseCsrSetPointers(C->descr, buffers->d_node_rowptrs,
+                                          buffers->d_node_colinds, buffers->d_node_vals));
+
+    // === Phase 3: Copy (prepare internal structures) ===
+    size_t buf_size5;
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(handle,
+                                            op, op,
+                                            A->descr,
+                                            B->descr,
+                                            C->descr,
+                                            alg,
+                                            descr,
+                                            &buf_size5, NULL));
+    CUDA_SYNC;
+
+    buffers->ensure_tmp(buf_size5, 4);
+    void * d_buf5 = buffers->tmp_buffers[4].tmp_buffer;
+
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(handle,
+                                            op, op,
+                                            A->descr,
+                                            B->descr,
+                                            C->descr,
+                                            alg,
+                                            descr,
+                                            &buf_size5, d_buf5));
+    CUDA_SYNC;
+
+    // === Phase 4: Compute ===
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_compute(handle,
+                                               op, op,
+                                               &alpha,
+                                               A->descr,
+                                               B->descr,
+                                               &beta,
+                                               C->descr,
+                                               CUDA_R_32F,
+                                               alg,
+                                               descr));
+    CUDA_SYNC;
+
+    CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
+
+    return 1;
+}
+
+
+// Memory-efficient version of SpGEMM based on NVIDIA's spgemm_mem example
+// Uses cusparseSpGEMM_estimateMemory to reduce peak memory consumption
+template <typename IT, typename VT>
+int cusparse_spgemm_mem(cusparseHandle_t& handle,
+                        CusparseCSX<IT, VT>* A,
+                        CusparseCSX<IT, VT>* B,
+                        CusparseCSX<IT, VT>* C,
+                        float chunk_fraction = 0.2f)
+{
+    // Check to make sure underlying storage is ok
+    A->assert_mat("A");
+    B->assert_mat("B");
+    C->assert_buffs("C");
+
+    CsxBuffers<IT, VT> * buffers = C->buffers;
+
+    assert(buffers->nbufs >= 3 && "Need at least 3 temporary buffers for memory-efficient SpGEMM");
+
+    cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cusparseSpGEMMAlg_t alg = CUSPARSE_SPGEMM_ALG3;
+
+    float alpha = 1.0;
+    float beta = 0.0;
+
+    cusparseSpGEMMDescr_t descr;
+    CUSPARSE_CHECK(cusparseSpGEMM_createDescr(&descr));
+
+    // === Phase 1: Work Estimation ===
+    size_t buf_size1;
+    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(handle,
+                                                 op, op,
+                                                 &alpha,
+                                                 A->descr,
+                                                 B->descr,
+                                                 &beta,
+                                                 C->descr,
+                                                 CUDA_R_32F,
+                                                 alg,
+                                                 descr, &buf_size1,
+                                                 NULL));
+
+    buffers->ensure_tmp(buf_size1, 0);
+    void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
+
+    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(handle,
+                                                 op, op,
+                                                 &alpha,
+                                                 A->descr,
+                                                 B->descr,
+                                                 &beta,
+                                                 C->descr,
+                                                 CUDA_R_32F,
+                                                 alg,
+                                                 descr, &buf_size1,
+                                                 d_buf1));
+
+    int64_t num_prods = 0;
+    CUSPARSE_CHECK(cusparseSpGEMM_getNumProducts(descr, &num_prods));
+
+    if (num_prods == 0)
+    {
+        return 0;
+    }
+
+    // === Phase 2: Memory Estimation (memory-efficient approach) ===
+    size_t buf_size2, buf_size3;
+
+    // First call to determine buffer size for memory estimation
+    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(handle,
+                                                 op, op,
+                                                 &alpha,
+                                                 A->descr,
+                                                 B->descr,
+                                                 &beta,
+                                                 C->descr,
+                                                 CUDA_R_32F,
+                                                 alg,
+                                                 descr,
+                                                 chunk_fraction,
+                                                 &buf_size3,
+                                                 NULL,
+                                                 NULL));
+
+    buffers->ensure_tmp(buf_size3, 2);
+    void * d_buf3 = buffers->tmp_buffers[2].tmp_buffer;
+
+    // Second call to perform memory estimation and get compute buffer size
+    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(handle,
+                                                 op, op,
+                                                 &alpha,
+                                                 A->descr,
+                                                 B->descr,
+                                                 &beta,
+                                                 C->descr,
+                                                 CUDA_R_32F,
+                                                 alg,
+                                                 descr,
+                                                 chunk_fraction,
+                                                 &buf_size3,
+                                                 d_buf3,
+                                                 &buf_size2));
+
+
+    // Buffer 3 can be freed now to save memory
+    // But we'll keep it managed by our buffer system for reuse
+
+    // Allocate compute buffer
+    buffers->ensure_tmp(buf_size2, 1);
+    void * d_buf2 = buffers->tmp_buffers[1].tmp_buffer;
+
+    // === Phase 3: Compute ===
+    CUSPARSE_CHECK(cusparseSpGEMM_compute(handle,
+                                          op, op,
+                                          &alpha,
+                                          A->descr,
+                                          B->descr,
+                                          &beta,
+                                          C->descr,
+                                          CUDA_R_32F,
+                                          alg,
+                                          descr, &buf_size2,
+                                          d_buf2));
+
+    // === Phase 4: Get result size and allocate output ===
+    int64_t Cnrows, Cncols, Cnnz;
+    CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
+
+    buffers->ensure(Cnnz, Cnrows+1, Cncols);
+
+    CUSPARSE_CHECK(cusparseCsrSetPointers(C->descr, buffers->d_node_rowptrs,
+                                          buffers->d_node_colinds, buffers->d_node_vals));
+
+    // === Phase 5: Copy results ===
+    CUSPARSE_CHECK(cusparseSpGEMM_copy(handle, op, op, &alpha,
+                                       A->descr, B->descr, &beta,
+                                       C->descr,
+                                       CUDA_R_32F, alg, descr));
+
+    CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
+
+    return 1;
+}
+
 

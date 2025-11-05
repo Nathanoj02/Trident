@@ -119,11 +119,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     }
 }
 
+
 template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
-                                   const Implementation impl, ThreadPool& pool,
-                                   SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                   bool skipspgemm)
+                                         const Implementation impl, ThreadPool& pool,
+                                         SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                         bool skipspgemm)
 {
     // ------------------ Test compression on an independent buffer ------------------
 #ifdef NVTX_PROFILING
@@ -239,7 +240,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     // Temporary local SpGEMM buffers
     // TODO: Some other size heuristic
-    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), 2);
+    int nbuffers = 6;
+    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), 6);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols());
     CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols());
 
@@ -457,8 +459,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         // This perform C_local += A_remote * B_node
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            cusparse_spmma<IT, VT>(handle, A_remote, B_node, C_prod, C_accum, C_local, done_one_spgemm);
-            done_one_spgemm = true;
+            int did_spgemm = cusparse_spmma<IT, VT>(handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm);
+            done_one_spgemm = did_spgemm || done_one_spgemm;
         }
         CUDA_SYNC;
 

@@ -299,7 +299,7 @@ struct DiffOp2
 struct cubTmpBuff {
     void*  tmp_buffer   = nullptr;
     size_t current_size = 0;
-    int factor = 2;
+    float factor = 1.2;
 
     // Ensure buffer has at least 'bytes' capacity
     void* ensure(size_t bytes) {
@@ -444,6 +444,7 @@ template<typename IT, typename VT>
 struct CsxBuffers 
 {
     uint64_t nnz;
+    uint64_t max_nnz;
     uint64_t ptr_dim;
     uint64_t other_dim;
     uint64_t nbufs;
@@ -457,12 +458,13 @@ struct CsxBuffers
     {
         initialized = 1;
 
-        nnz = input_nnz;
+        max_nnz = input_nnz;
+        nnz = 0;
         ptr_dim = input_ptr_dim;
         other_dim = _other_dim;
         nbufs = 1;
-        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
         CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
 
         tmp_buffers = new cubTmpBuff[1];
@@ -473,12 +475,13 @@ struct CsxBuffers
     {
         initialized = 1;
 
-        nnz = input_nnz;
+        nnz = 0;
+        max_nnz = input_nnz;
         ptr_dim = input_ptr_dim;
         other_dim = _other_dim;
         nbufs = _nbufs;
-        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
+        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
         CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
         CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
 
@@ -496,20 +499,22 @@ struct CsxBuffers
 
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
+        nnz = input_nnz;
+
         if (!initialized) 
         {
             new (this) CsxBuffers(input_nnz, input_ptr_dim, _other_dim);
         } 
         else 
         {
-            if (input_nnz > nnz) 
+            if (input_nnz > max_nnz) 
             {
                 CUDA_CHECK(cudaFree(d_node_vals));
                 CUDA_CHECK(cudaFree(d_node_colinds));
 
-                nnz = input_nnz;
-                CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
-                CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
+                max_nnz = input_nnz;
+                CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
+                CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
             }
             if (input_ptr_dim > ptr_dim) 
             {
@@ -553,6 +558,7 @@ struct CsxBuffers
             initialized = 0;
             ptr_dim = 0;
             nnz = 0;
+            max_nnz = 0;
             delete[] tmp_buffers;
         }
     }
