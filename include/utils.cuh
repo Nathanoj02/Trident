@@ -54,6 +54,40 @@ typedef struct {
 } LocalTile;
 
 
+template <typename... Args>
+void par_print(const char * str, Args... args)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Barrier(MPI_COMM_WORLD);
+    fprintf(stdout, "---Process %d---\n", rank);
+    fprintf(stdout, str, args...);
+    fprintf(stdout, "----------------\n");
+    fflush(stdout);
+    sleep(2);
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
+
+inline int getrank()
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    return rank;
+}
+
+
+inline void print_gpu_mem()
+{
+    int rank = getrank();
+    size_t free, total;
+    CUDA_CHECK(cudaMemGetInfo(&free, &total));
+    free /= 1e6;
+    total /= 1e6;
+    par_print("GPU memory: %zu/%zu MB\n", free, total);
+}
+
 template <typename T, typename... Args>
 void print_h_arr(T * h_arr, const uint32_t n, const char * prefix, Args... args)
 {
@@ -265,13 +299,19 @@ struct DiffOp2
 struct cubTmpBuff {
     void*  tmp_buffer   = nullptr;
     size_t current_size = 0;
+    int factor = 2;
 
     // Ensure buffer has at least 'bytes' capacity
     void* ensure(size_t bytes) {
         if (bytes > current_size) {
-            if (tmp_buffer!=nullptr) CUDA_CHECK(cudaFree(tmp_buffer));
-            CUDA_CHECK(cudaMalloc(&tmp_buffer, 2 * bytes)); // grow with factor
-            current_size = 2 * bytes;
+            //par_print("Allocating buffer of size %zu\n", bytes);
+            //print_gpu_mem();
+            if (tmp_buffer!=nullptr) {
+                CUDA_CHECK(cudaFree(tmp_buffer));
+            }
+            CUDA_CHECK(cudaMalloc(&tmp_buffer, factor * bytes)); // grow with factor
+            //par_print("Successfully allocated buffer of size %zu\n", bytes);
+            current_size = factor * bytes;
         }
         return tmp_buffer;
     }
@@ -323,20 +363,6 @@ void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, 
     CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 // ------------------------------------------------------------
-
-template <typename... Args>
-void par_print(const char * str, Args... args)
-{
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Barrier(MPI_COMM_WORLD);
-    fprintf(stdout, "---Process %d---\n", rank);
-    fprintf(stdout, str, args...);
-    fprintf(stdout, "----------------\n");
-    fflush(stdout);
-    sleep(1);
-    MPI_Barrier(MPI_COMM_WORLD);
-}
 
 
 template<typename IT, typename VT>
@@ -413,6 +439,7 @@ void CSX_destroy_device(mmio::CSX<IT, VT> **csx)
     }
 }
 
+
 template<typename IT, typename VT>
 struct CsxBuffers 
 {
@@ -425,8 +452,6 @@ struct CsxBuffers
     IT *d_node_colinds;
     IT *d_node_rowptrs;
     cubTmpBuff * tmp_buffers;
-    //cubTmpBuff tmp_buffer;
-    //cubTmpBuff tmp_buffer2;
 
     CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
@@ -455,6 +480,7 @@ struct CsxBuffers
         CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*nnz));
         CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+        CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
 
         tmp_buffers = new cubTmpBuff[nbufs];
     }
@@ -491,6 +517,7 @@ struct CsxBuffers
 
                 ptr_dim = input_ptr_dim;
                 CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+                CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
             }
         }
     }

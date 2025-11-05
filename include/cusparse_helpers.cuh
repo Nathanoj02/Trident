@@ -250,6 +250,50 @@ struct CusparseCSX
     }
 
 
+
+    void validate_csr()
+    {
+        assert(is_mat());
+
+        IT * h_colinds = d2h_copy(mat->idx_vec, mat->nnz);
+        IT * h_rowptrs = d2h_copy(mat->ptr_vec, mat->nrows+1);
+
+
+        // Validate colinds
+        bool colinds_valid = true;
+        for (IT i=0; i<mat->nnz;i++)
+        {
+            if (h_colinds[i] < 0 || h_colinds[i] >= mat->ncols)
+            {
+                colinds_valid = false;
+                break;
+            }
+        }
+        
+
+        // Validate rowptrs
+        bool rowptrs_valid = true;
+        for (IT i=0; i<mat->nrows; i++)
+        {
+            if (i==0)
+            {
+                rowptrs_valid = (h_rowptrs[0] == 0);
+            }
+            rowptrs_valid = (h_rowptrs[i] <= h_rowptrs[i+1]) && rowptrs_valid;
+        }
+        rowptrs_valid = rowptrs_valid && (h_rowptrs[mat->nrows] == mat->nnz);
+
+
+
+        printf("Colinds valid: %d, rowptrs_valid: %d\n", colinds_valid, rowptrs_valid);
+        fflush(stdout);
+
+
+        free(h_colinds);
+        free(h_rowptrs);
+    }
+
+
     inline IT nrows()
     {
         if (is_mat())
@@ -672,6 +716,11 @@ void cusparse_spgemm(cusparseHandle_t& handle,
     B->assert_mat("B");
     C->assert_buffs("C");
 
+
+    A->validate_csr();
+    B->validate_csr();
+
+
     CsxBuffers<IT, VT> * buffers = C->buffers;
 
     assert(buffers->nbufs >= 2 && "Need at least 2 temporary buffers");
@@ -698,8 +747,10 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  NULL));
-    buffers->ensure_tmp(buf_size1, 0); 
+    CUDA_SYNC;
+    buffers->ensure_tmp(buf_size1); 
     void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
+
 
     CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(handle,
                                                  op, op, 
@@ -712,6 +763,7 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  d_buf1));
+    CUDA_SYNC;
 
     size_t buf_size2;
     CUSPARSE_CHECK(cusparseSpGEMM_compute(handle,
@@ -725,6 +777,14 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                           alg,
                                           descr, &buf_size2,
                                           NULL));
+    CUDA_SYNC;
+
+
+    int64_t num_prods = 0;
+    CUSPARSE_CHECK(cusparseSpGEMM_getNumProducts(descr, &num_prods));
+
+    print_gpu_mem();
+    par_print("FLOPS(C) = %lu\nBuffer Size 2 = %zu\n", num_prods,buf_size2);
 
     buffers->ensure_tmp(buf_size2, 1);
     void * d_buf2 = buffers->tmp_buffers[1].tmp_buffer;
@@ -740,11 +800,15 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                           alg,
                                           descr, &buf_size2,
                                           d_buf2));
+    CUDA_SYNC;
+
+    par_print("done compute");
 
     int64_t Cnrows, Cncols, Cnnz;
     CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
 
     buffers->ensure(Cnnz, Cnrows+1, Cncols);
+    print_gpu_mem();
 
     CUSPARSE_CHECK(cusparseCsrSetPointers(C->descr, buffers->d_node_rowptrs, buffers->d_node_colinds, buffers->d_node_vals));
 
@@ -752,6 +816,7 @@ void cusparse_spgemm(cusparseHandle_t& handle,
                                        A->descr, B->descr, &beta,
                                        C->descr,
                                        CUDA_R_32F, alg, descr));
+    CUDA_SYNC;
 
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
 
