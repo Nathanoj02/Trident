@@ -126,55 +126,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
                                          SpaComm::SpaCommHandler<IT, VT> *spcomm, 
                                          bool skipspgemm)
 {
-    // ------------------ Test compression on an independent buffer ------------------
-#ifdef NVTX_PROFILING
-    NVTX_PUSH_RANGE("Copy for bug fix",2);
-#endif
-
-    //mmio::CSX<IT,VT> *bku_B = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
-    //{
-    //    bku_B->majordim = kwd_B.mmio_csx->majordim;
-    //    bku_B->nnz      = kwd_B.mmio_csx->nnz;
-    //    bku_B->nrows    = kwd_B.mmio_csx->nrows;
-    //    bku_B->ncols    = kwd_B.mmio_csx->ncols;
-
-    //    VT *new_val;
-    //    IT *new_row, *new_idx;
-    //    CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(bku_B->nrows +1)));
-    //    CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_B->nnz)));
-    //    CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_B->nnz)));
-    //    CUDA_CHECK(cudaMemcpy(new_row, kwd_B.mmio_csx->ptr_vec, sizeof(IT)*(bku_B->nrows +1), cudaMemcpyDeviceToDevice));
-    //    CUDA_CHECK(cudaMemcpy(new_idx, kwd_B.mmio_csx->idx_vec, sizeof(IT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
-    //    CUDA_CHECK(cudaMemcpy(new_val, kwd_B.mmio_csx->val,     sizeof(VT)*(bku_B->nnz),      cudaMemcpyDeviceToDevice));
-    //    bku_B->val      = new_val;
-    //    bku_B->ptr_vec  = new_row;
-    //    bku_B->idx_vec  = new_idx;
-    //}
-
-    //mmio::CSX<IT,VT> *bku_A = (mmio::CSX<IT,VT>*)malloc(sizeof(mmio::CSX<IT,VT>));
-    //{
-    //    bku_A->majordim = kwd_A.mmio_csx->majordim;
-    //    bku_A->nnz      = kwd_A.mmio_csx->nnz;
-    //    bku_A->nrows    = kwd_A.mmio_csx->nrows;
-    //    bku_A->ncols    = kwd_A.mmio_csx->ncols;
-
-    //    VT *new_val;
-    //    IT *new_row, *new_idx, ptr_size = (bku_A->majordim == mmio::MajorDim::ROWS ) ? (bku_A->nrows +1) : (bku_A->ncols +1) ;
-    //    CUDA_CHECK(cudaMalloc(&new_row, sizeof(IT)*(ptr_size)));
-    //    CUDA_CHECK(cudaMalloc(&new_idx, sizeof(IT)*(bku_A->nnz)));
-    //    CUDA_CHECK(cudaMalloc(&new_val, sizeof(VT)*(bku_A->nnz)));
-    //    CUDA_CHECK(cudaMemcpy(new_row, kwd_A.mmio_csx->ptr_vec, sizeof(IT)*(ptr_size),   cudaMemcpyDeviceToDevice));
-    //    CUDA_CHECK(cudaMemcpy(new_idx, kwd_A.mmio_csx->idx_vec, sizeof(IT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
-    //    CUDA_CHECK(cudaMemcpy(new_val, kwd_A.mmio_csx->val,     sizeof(VT)*(bku_A->nnz), cudaMemcpyDeviceToDevice));
-    //    bku_A->val      = new_val;
-    //    bku_A->ptr_vec  = new_row;
-    //    bku_A->idx_vec  = new_idx;
-    //}
-
-#ifdef NVTX_PROFILING
-    NVTX_POP_RANGE;
-#endif
-    // -------------------------------------------------------------------------------
 
     // Process grid info
     dmmio::ProcessGrid * grid = dist_A->partitioning->grid;
@@ -331,14 +282,29 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
 
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("NotifyReqTilesA",1);
+#endif
 
         // Tell target I'm ready for tiles of A and B
         A_queue.notify(row_rank, colAtoGet, iter);
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+        NVTX_PUSH_RANGE("NotifyReqTilesB",1);
+#endif
+
         B_queue.notify(col_rank, rowBtoGet, iter);
 
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
+#endif
 
 
-        // NOTE:  NVTX ranges are inside '.wait' and '.copy_device_local_csx'
+#ifdef NVTX_PROFILING
+        NVTX_PUSH_RANGE("RecvInputTiles",1);
+#endif
+
 #ifdef DETAILED_TIMERS
         CPU_TIMER_START(wait_for_input)
 #endif
@@ -375,10 +341,14 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
             MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
         }
 
-        CUDA_SYNC;
+        CUDA_SYNC(stream);
 
 #ifdef DETAILED_TIMERS
         CPU_TIMER_STOP(wait_for_input)
+#endif
+
+#ifdef NVTX_PROFILING
+        NVTX_POP_RANGE;
 #endif
 
 #if DEBUG_MAIN
@@ -411,7 +381,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
                                                                                       A_tile_nnz, 
                                                                                       dist_A->csx->mat->majordim), 
                                                                 conversion_buffs);
-        CUDA_SYNC;
+        CUDA_SYNC(stream);
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(A_conversion)
@@ -427,7 +397,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
         CusparseCSX<IT, VT> * B_node = new CusparseCSX<IT, VT>(B_holder.node_allgather_mmiocsx(dist_B->csx->nrows(), dist_B->csx->ncols(), B_tile_nnz, grid, gather_buffs));
-        CUDA_SYNC;
+        CUDA_SYNC(stream);
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(intranode_comm)
@@ -459,10 +429,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         // This perform C_local += A_remote * B_node
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            int did_spgemm = cusparse_spmma<IT, VT>(handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm);
+            int did_spgemm = cusparse_spmma<IT, VT>(handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm, &stream);
             done_one_spgemm = did_spgemm || done_one_spgemm;
         }
-        CUDA_SYNC;
+        CUDA_SYNC(stream);
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(comp_time)
@@ -523,6 +493,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     MPI_Barrier(MPI_COMM_WORLD);
 
 
+    CUDA_CHECK(cudaStreamDestroy(stream));
     CUSPARSE_CHECK(cusparseDestroy(handle));
 
     if (grid->global_rank==0)

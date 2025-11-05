@@ -38,7 +38,7 @@
     }  \
 }
 
-#define CUDA_SYNC CUDA_CHECK(cudaDeviceSynchronize());
+#define CUDA_SYNC(STR) CUDA_CHECK(cudaStreamSynchronize(STR));
 
 typedef struct {
     int rowidx;
@@ -304,6 +304,9 @@ struct cubTmpBuff {
     // Ensure buffer has at least 'bytes' capacity
     void* ensure(size_t bytes) {
         if (bytes > current_size) {
+#ifdef NVTX_PROFILING
+            NVTX_PUSH_RANGE("reallocTmpbuff",0);
+#endif
             //par_print("Allocating buffer of size %zu\n", bytes);
             //print_gpu_mem();
             if (tmp_buffer!=nullptr) {
@@ -312,6 +315,10 @@ struct cubTmpBuff {
             CUDA_CHECK(cudaMalloc(&tmp_buffer, factor * bytes)); // grow with factor
             //par_print("Successfully allocated buffer of size %zu\n", bytes);
             current_size = factor * bytes;
+
+#ifdef NVTX_PROFILING
+            NVTX_POP_RANGE;
+#endif
         }
         return tmp_buffer;
     }
@@ -509,20 +516,32 @@ struct CsxBuffers
         {
             if (input_nnz > max_nnz) 
             {
+#ifdef NVTX_PROFILING
+                NVTX_PUSH_RANGE("reallocInds",0);
+#endif
                 CUDA_CHECK(cudaFree(d_node_vals));
                 CUDA_CHECK(cudaFree(d_node_colinds));
 
                 max_nnz = input_nnz;
                 CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
                 CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
+#ifdef NVTX_PROFILING
+                NVTX_POP_RANGE;
+#endif
             }
             if (input_ptr_dim > ptr_dim) 
             {
+#ifdef NVTX_PROFILING
+                NVTX_PUSH_RANGE("reallocPtr",0);
+#endif
                 CUDA_CHECK(cudaFree(d_node_rowptrs));
 
                 ptr_dim = input_ptr_dim;
                 CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
                 CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
+#ifdef NVTX_PROFILING
+                NVTX_POP_RANGE;
+#endif
             }
         }
     }
