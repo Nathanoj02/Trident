@@ -35,7 +35,7 @@ struct MessageQueue
         MPI_MESSAGE = MPIType<Message>();
 
         MPI_Win_create(messages, sizeof(Message) * size, sizeof(Message), MPI_INFO_NULL, comm, &msg_win);
-        MPI_Win_lock_all(0, msg_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, msg_win);
     }
 
 
