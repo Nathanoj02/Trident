@@ -66,6 +66,8 @@ struct TileHolder
         NVTX_PUSH_RANGE_CUDA(comunication_str,nvtx_color,stream);
 #endif
 
+        CPU_TIMER_START(tmp_timer)
+
         MPI_Request size_req, main_req;
         IT payload[2] = {nnz, sendbuf_size};
         MPI_Isend(payload, 2, MPIType<IT>(), target, 0, comm, &size_req);
@@ -76,10 +78,12 @@ struct TileHolder
             MPI_Wait(&main_req, MPI_STATUS_IGNORE);
         }
 
+        CPU_TIMER_STOP(tmp_timer)
+
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
 #endif
-        return(time);
+        return(__timer_vals_tmp_timer.back());
     }
 
 

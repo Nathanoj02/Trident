@@ -10,9 +10,14 @@ int here_iteration = 0;
 SimpleBarrier alloc_sync_point(3);
 SimpleBarrier free_sync_point(3);
 
+template <typename IT>
+inline uint64_t compute_ptrv_size(int ptr_size) {
+        return( ptr_size * sizeof(IT) );
+}
+
 template <typename IT, typename VT>
 inline uint64_t compute_message_size(int nnz, int ptr_size) {
-        return( (nnz * sizeof(VT)) + ((nnz + ptr_size) * sizeof(IT)) );
+        return( nnz * (sizeof(VT) + sizeof(IT)) + compute_ptrv_size<IT>(ptr_size) );
 }
 
 template <typename IT, typename VT>
@@ -49,8 +54,11 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     IT ptrsize = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->nrows) : (csx->ncols) ;
+    uint64_t tilebuffersize = compute_message_size<IT,VT>(csx->nnz, ptrsize+1);
     alloc_sync_point.arrive_and_wait();
 
+    int sendround = 0;
+    int compression_flag = (spacomm != nullptr && tilebuffersize >= COMP_THRESHOLD);
     while (true)
     {
 
@@ -81,7 +89,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
         mmio::CSX<IT, VT> *compressed = nullptr;
-        if (spacomm != nullptr) 
+        if (compression_flag)
         {
             CUDA_TIMER_START(compression_time, stream)
             compressed = spacomm->Compress(csx, target, compression_buffers, stream);
@@ -95,21 +103,22 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
         // Put tile on remote process
         //   NOTE: timer and NVTX ranges inside the function
-        const mmio::CSX<IT, VT> *tosend = (spacomm != nullptr) ? compressed : csx ;
+        const mmio::CSX<IT, VT> *tosend = (compression_flag) ? compressed : csx ;
         assert(tosend->contig && "Tosend must be contiguous");
         internode_comm = holder.send_tile_contig(tosend->buf, tosend->buf_size, tosend->nnz, target, stream, tag);
 
 
 #ifdef DETAILED_TIMERS
-        char tmpstr[20];
+        char tmpstr[30];
         char desc = (tag == 0) ? 'A' : 'B' ; // I suppose I use tag 0 for A (left operand) and tag 1 for B (right operand)
-        sprintf(tmpstr, "[p %d, t %d, m %c]", rank, target, desc);
-        printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
-               (spacomm != nullptr) ? (__timer_vals_compression_time.back()) : 0.0, internode_comm,
-               compute_message_size<IT,VT>(csx->nnz,    ptrsize+1),
-               compute_message_size<IT,VT>(tosend->nnz, ptrsize+1)
+        sprintf(tmpstr, "[p %d, t %d, m %c, r %d]", rank, target, desc, sendround);
+        printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
+               (compression_flag) ? (__timer_vals_compression_time.back()) : 0.0, internode_comm,
+               tilebuffersize, compute_message_size<IT,VT>(tosend->nnz, ptrsize+1),
+               compute_ptrv_size<IT>(ptrsize+1)
         );
 #endif
+        sendround++;
 
 #if DEBUG_MAIN
         fprintf(stdout, "Rank %d -- Servicing request from rank %d -- %d/%d requests serviced\n", rank, target, queue.serviced, queue.size);
