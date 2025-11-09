@@ -188,7 +188,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CUDA_CHECK(cudaGetDeviceCount(&gpn));
 
     //TODO: Tune this 
-    static constexpr size_t mempool_size = 40e9; 
+    static constexpr size_t mempool_size = UINT64_MAX;
     setup_mempool(mempool_size, grid->global_rank%gpn, &stream); 
 
 
@@ -197,7 +197,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz, mmio::MajorDim::ROWS);
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm);
     TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm);
-
 
     // Temporary allgather buffers
     CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz*1.5, dist_B->getLocalNrows()*node_size + 1, dist_B->getLocalNcols());
@@ -213,6 +212,19 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 6);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
     CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
+
+
+#ifdef DEBUG_MEM
+    par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_prod_buffs: %zu MB\n, \tC_local_buffs: %zu MB\n, \tC_accum_buffs: %zu MB\n",
+    A_holder.d_buf_size/(1<<20),
+    B_holder.d_buf_size/(1<<20),
+    gather_buffs->total_size()/(1<<20),
+    conversion_buffs->total_size()/(1<<20),
+    C_prod_buffs->total_size()/(1<<20),
+    C_local_buffs->total_size()/(1<<20),
+    C_accum_buffs->total_size()/(1<<20));
+    print_gpu_mem(true);
+#endif
 
 
     // Make CusparseCSX Objects
@@ -265,7 +277,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CPU_TIMER_DEF(spgemm);
 
     // For deciding whether or not to accumulate
+    // TODO: Remove this, currently not used
     bool done_one_spgemm = false;
+
 
     // Main loop
     alloc_sync_point.arrive_and_wait();
@@ -435,10 +449,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         CUDA_TIMER_START_DEFAULT(comp_time)
 #endif
 
-        // This perform C_local += A_remote * B_node
+        // This performs C_local += A_remote * B_node
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm);
+            int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local);
             done_one_spgemm = did_spgemm || done_one_spgemm;
         }
         CUDA_SYNC(stream);
@@ -474,8 +488,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
 
-        MPI_Barrier(MPI_COMM_WORLD);
 #ifdef BULK_SYNC
+        MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
 

@@ -638,8 +638,7 @@ int cusparse_spmma(cusparseHandle_t* handle,
                    CusparseCSX<IT, VT>* B, 
                    CusparseCSX<IT, VT>** C_prod,
                    CusparseCSX<IT, VT>** C_accum,
-                   CusparseCSX<IT, VT>** C_local,
-                   const bool accum)
+                   CusparseCSX<IT, VT>** C_local)
 {
 
 #ifdef NVTX_PROFILING
@@ -647,7 +646,9 @@ int cusparse_spmma(cusparseHandle_t* handle,
 #endif
 
     // C_prod = AB
-    int did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
+    // TODO: heuristic for switching between these
+    //int did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
+    int did = cusparse_spgemm_mem(handle, A, B, *C_prod);
 
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
@@ -932,8 +933,7 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                                                       NULL));
     CUDA_SYNC(*stream);
 
-    //buffers->ensure_tmp_async(buf_size1);
-    buffers->ensure_tmp(buf_size1);
+    buffers->ensure_tmp_async(buf_size1);
     CUDA_SYNC(*stream);
     void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
 
@@ -971,9 +971,6 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                                            &buf_size4, NULL));
     CUDA_SYNC(*stream);
 
-    //buffers->ensure_tmp(buf_size2,  1);
-    //buffers->ensure_tmp(buf_size3,  2);
-    //buffers->ensure_tmp(buf_size4,  3);
     buffers->ensure_tmp_async(buf_size2,  1);
     CUDA_SYNC(*stream);
     buffers->ensure_tmp_async(buf_size3,  2);
@@ -998,6 +995,9 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                                            &buf_size4, d_buf4));
     CUDA_SYNC(*stream);
 
+    buffers->free_tmp_async(0);
+    buffers->free_tmp_async(1);
+
     // Get result matrix dimensions and allocate output
     int64_t Cnrows, Cncols, Cnnz;
     CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
@@ -1020,7 +1020,9 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                                             &buf_size5, NULL));
     CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size5,  4);
+    buffers->free_tmp_async(2);
+
+    buffers->ensure_tmp_async(buf_size5,  4);
     CUDA_SYNC(*stream);
     void * d_buf5 = buffers->tmp_buffers[4].tmp_buffer;
 
@@ -1050,14 +1052,15 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
     CUDA_SYNC(*stream);
 
+    buffers->free_tmp_async(3);
+    buffers->free_tmp_async(4);
+
     return 1;
 }
 
 
-// Memory-efficient version of SpGEMM based on NVIDIA's spgemm_mem example
-// Uses cusparseSpGEMM_estimateMemory to reduce peak memory consumption
 template <typename IT, typename VT>
-int cusparse_spgemm_mem(cusparseHandle_t& handle,
+int cusparse_spgemm_mem(cusparseHandle_t * handle,
                         CusparseCSX<IT, VT>* A,
                         CusparseCSX<IT, VT>* B,
                         CusparseCSX<IT, VT>* C,
@@ -1069,7 +1072,9 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
     C->assert_buffs("C");
 
     CsxBuffers<IT, VT> * buffers = C->buffers;
+    cudaStream_t * stream = buffers->stream;
 
+    assert(stream != nullptr);
     assert(buffers->nbufs >= 3 && "Need at least 3 temporary buffers for memory-efficient SpGEMM");
 
     cusparseOperation_t op = CUSPARSE_OPERATION_NON_TRANSPOSE;
@@ -1083,7 +1088,7 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
 
     // === Phase 1: Work Estimation ===
     size_t buf_size1;
-    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(handle,
+    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(*handle,
                                                  op, op,
                                                  &alpha,
                                                  A->descr,
@@ -1094,11 +1099,13 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  NULL));
+    CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size1, 0);
+    buffers->ensure_tmp_async(buf_size1);
+    CUDA_SYNC(*stream);
     void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
 
-    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(handle,
+    CUSPARSE_CHECK(cusparseSpGEMM_workEstimation(*handle,
                                                  op, op,
                                                  &alpha,
                                                  A->descr,
@@ -1109,6 +1116,7 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
                                                  alg,
                                                  descr, &buf_size1,
                                                  d_buf1));
+    CUDA_SYNC(*stream);
 
     int64_t num_prods = 0;
     CUSPARSE_CHECK(cusparseSpGEMM_getNumProducts(descr, &num_prods));
@@ -1122,7 +1130,7 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
     size_t buf_size2, buf_size3;
 
     // First call to determine buffer size for memory estimation
-    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(handle,
+    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(*handle,
                                                  op, op,
                                                  &alpha,
                                                  A->descr,
@@ -1136,12 +1144,14 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
                                                  &buf_size3,
                                                  NULL,
                                                  NULL));
+    CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size3, 2);
+    buffers->ensure_tmp_async(buf_size3, 2);
+    CUDA_SYNC(*stream);
     void * d_buf3 = buffers->tmp_buffers[2].tmp_buffer;
 
     // Second call to perform memory estimation and get compute buffer size
-    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(handle,
+    CUSPARSE_CHECK(cusparseSpGEMM_estimateMemory(*handle,
                                                  op, op,
                                                  &alpha,
                                                  A->descr,
@@ -1155,17 +1165,17 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
                                                  &buf_size3,
                                                  d_buf3,
                                                  &buf_size2));
+    CUDA_SYNC(*stream);
+    buffers->free_tmp_async(2);
 
-
-    // Buffer 3 can be freed now to save memory
-    // But we'll keep it managed by our buffer system for reuse
 
     // Allocate compute buffer
-    buffers->ensure_tmp(buf_size2, 1);
+    buffers->ensure_tmp_async(buf_size2, 1);
+    CUDA_SYNC(*stream);
     void * d_buf2 = buffers->tmp_buffers[1].tmp_buffer;
 
     // === Phase 3: Compute ===
-    CUSPARSE_CHECK(cusparseSpGEMM_compute(handle,
+    CUSPARSE_CHECK(cusparseSpGEMM_compute(*handle,
                                           op, op,
                                           &alpha,
                                           A->descr,
@@ -1176,21 +1186,26 @@ int cusparse_spgemm_mem(cusparseHandle_t& handle,
                                           alg,
                                           descr, &buf_size2,
                                           d_buf2));
+    CUDA_SYNC(*stream);
 
     // === Phase 4: Get result size and allocate output ===
     int64_t Cnrows, Cncols, Cnnz;
     CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
 
-    buffers->ensure(Cnnz, Cnrows+1, Cncols);
+    buffers->ensure_async(Cnnz, Cnrows+1, Cncols);
+    CUDA_SYNC(*stream);
 
     CUSPARSE_CHECK(cusparseCsrSetPointers(C->descr, buffers->d_node_rowptrs,
                                           buffers->d_node_colinds, buffers->d_node_vals));
 
     // === Phase 5: Copy results ===
-    CUSPARSE_CHECK(cusparseSpGEMM_copy(handle, op, op, &alpha,
+    CUSPARSE_CHECK(cusparseSpGEMM_copy(*handle, op, op, &alpha,
                                        A->descr, B->descr, &beta,
                                        C->descr,
                                        CUDA_R_32F, alg, descr));
+    CUDA_SYNC(*stream);
+    buffers->free_tmp_async(1);
+    buffers->free_tmp_async(3);
 
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
 

@@ -14,11 +14,11 @@ inline void setup_mempool(size_t pool_sz, const int devid, cudaStream_t * stream
 
     CUDA_CHECK(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &pool_sz));
 
-    void * d_tmp;
-    CUDA_CHECK(cudaMallocAsync(&d_tmp, pool_sz, *stream));
-    CUDA_CHECK(cudaFreeAsync(d_tmp, *stream));
+    //void * d_tmp;
+    //CUDA_CHECK(cudaMallocAsync(&d_tmp, pool_sz, *stream));
+    //CUDA_CHECK(cudaFreeAsync(d_tmp, *stream));
 
-    CUDA_CHECK(cudaDeviceSynchronize());
+    //CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 

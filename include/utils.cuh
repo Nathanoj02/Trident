@@ -104,15 +104,24 @@ void print_rkn(const char * msg, Args... args)
     print_rkn(rank, msg, args...);
 }
 
-inline void print_gpu_mem()
+
+inline void print_gpu_mem(bool all=false)
 {
     int rank = getrank();
     size_t free, total;
     CUDA_CHECK(cudaMemGetInfo(&free, &total));
     free /= 1e6;
     total /= 1e6;
-    par_print("GPU memory: %zu/%zu MB\n", free, total);
+    if (all)
+    {
+        par_print("GPU memory: %zu/%zu MB\n", free, total);
+    }
+    else
+    {
+        print_rkn("GPU memory: %zu/%zu MB\n", free, total);
+    }
 }
+
 
 template <typename T, typename... Args>
 void print_h_arr(T * h_arr, const uint32_t n, const char * prefix, Args... args)
@@ -367,7 +376,7 @@ struct cubTmpBuff {
     }
 
 
-    void explicitFreeAsync() {
+    void explicitFreeAsync(void) {
         if (current_size > 0) {
             CUDA_CHECK(cudaFreeAsync(tmp_buffer, *(this->stream)));
         }
@@ -570,6 +579,20 @@ struct CsxBuffers
     }
 
 
+    size_t total_size()
+    {
+        size_t result = 0;
+        result += sizeof(VT) * max_nnz;
+        result += sizeof(IT) * max_nnz;
+        result += sizeof(IT) * ptr_dim;
+        for (int i=0; i<nbufs; i++)
+        {
+            result += tmp_buffers[i].current_size;
+        }
+        return result;
+    }
+
+
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
         nnz = input_nnz;
@@ -660,6 +683,7 @@ struct CsxBuffers
 
     void ensure_tmp(uint64_t required_size, uint64_t idx=0) 
     {
+        assert (idx < nbufs);
         if (!initialized) 
         {
             new (this) CsxBuffers();
@@ -670,11 +694,19 @@ struct CsxBuffers
 
     void ensure_tmp_async(uint64_t required_size, uint64_t idx=0) 
     {
+        assert (idx < nbufs);
         if (!initialized) 
         {
             new (this) CsxBuffers();
         }
         tmp_buffers[idx].ensure_async(required_size);
+    }
+
+
+    void free_tmp_async(uint64_t idx=0)
+    {
+        assert (idx < nbufs);
+        tmp_buffers[idx].explicitFreeAsync();
     }
 
 
