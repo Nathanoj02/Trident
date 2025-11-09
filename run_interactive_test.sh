@@ -9,12 +9,13 @@ gridproc=("16")
 
 #configurations=("--impl get" "--impl main" "--impl main --Acsc" "--impl main --Acsc --spcomm")
 #configurations_str=("get_none_none" "main_none_none" "main_Acsc_none" "main_Acsc_spcomm")
-configurations=("--impl main --skip-spgemm" "--impl main --Acsc --skip-spgemm" "--impl main --Acsc --spcomm --skip-spgemm")
-configurations_str=("main_none_none_skipspgemm" "main_Acsc_none_skipspgemm" "main_Acsc_spcomm_skipspgemm")
+configurations=("--impl sendrecv --skip-spgemm" "--impl sendrecv --Acsc --skip-spgemm" "--impl sendrecv --Acsc --spcomm --skip-spgemm")
+configurations_str=("sendrecv_none_none_skipspgemm" "sendrecv_Acsc_none_skipspgemm" "sendrecv_Acsc_spcomm_skipspgemm")
 
 for mat in ${datasets[@]}
 do
-	matpath=$(./build/name2path.sh build/name2path_list.txt ${mat})
+	#matpath=$(./build/name2path.sh build/name2path_list.txt ${mat})
+	matpath=$(ls /global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/*/*/${mat}.bmtx | head -1)
 	for i in ${!configurations[@]}
 	do
 		conf=${configurations[$i]}
