@@ -12,6 +12,7 @@
     } \
 }
 
+#define LOGFILE
 
 int main(int argc, char ** argv)
 {
@@ -34,10 +35,8 @@ int main(int argc, char ** argv)
         std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
     }
 
-#ifdef LOGFILE
     std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
     FILE * logfile = fopen(logname.c_str(), "w");
-#endif
 
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
@@ -145,9 +144,22 @@ int main(int argc, char ** argv)
     //    cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
     //}
 
+    //cudaStream_t stream;
+    //CUDA_CHECK(cudaStreamCreate(&stream));
+
+    //cusparseHandle_t handle;
+    //CUSPARSE_CHECK(cusparseCreate(&handle));
+
+    //CUSPARSE_CHECK(cusparseSetStream(handle, stream));
+    // Setup mem pool
+
+
     int gpn;
     CUDA_CHECK(cudaGetDeviceCount(&gpn));
-    cudaSetDevice(world_rank % gpn);
+    CUDA_CHECK(cudaSetDevice(world_rank % gpn));
+
+    //static constexpr size_t mempool_size = 60e9; 
+    //setup_mempool(mempool_size, world_rank%gpn); 
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -200,6 +212,7 @@ int main(int argc, char ** argv)
         NVTX_POP_RANGE;
 #endif
 
+
         CPU_TIMER_START(spgemm);
 
         // Gen thread pool (mostly for profiling)
@@ -220,10 +233,8 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            dist_C = hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
+            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
             MPI_Barrier(MPI_COMM_WORLD);
-
-            dist_C->explicit_free();
 
 #ifdef NVTX_PROFILING
             NVTX_POP_RANGE;
@@ -237,17 +248,15 @@ int main(int argc, char ** argv)
         cudaProfilerStop();
 #endif
         if (spcomm_data != nullptr) delete spcomm_data;
-        dist_A->explicit_free();
-        dist_B->explicit_free();
+        delete dist_A;
+        delete dist_B;
     }
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
 
 
-#ifdef LOGFILE
     fclose(logfile);
-#endif
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

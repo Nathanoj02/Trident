@@ -81,7 +81,14 @@ struct MessageQueue
 
     void notify(Message * msg, const int target, const size_t offset)
     {
-        MPI_Accumulate(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
+        MPI_Put(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, msg_win);
+        //MPI_Accumulate(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
+        //MPI_Win_flush(target, msg_win);
+    }
+
+
+    void wait_notify(const int target)
+    {
         MPI_Win_flush(target, msg_win);
     }
 

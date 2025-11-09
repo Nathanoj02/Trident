@@ -78,6 +78,32 @@ inline int getrank()
 }
 
 
+
+template <typename... Args>
+void print_rkn(dmmio::ProcessGrid * grid, const char * msg, Args... args)
+{
+    print_rkn(grid->global_rank, msg, args...);
+}
+
+
+template <typename... Args>
+void print_rkn(int rank, const char * msg, Args... args)
+{
+    fprintf(stdout, "\n" GREEN "Process %d --- " RESET, rank);
+    fprintf(stdout, msg, args...);
+    fprintf(stdout, "\n");
+    FLUSH_WAIT(500000);
+}
+
+
+template <typename... Args>
+void print_rkn(const char * msg, Args... args)
+{
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    print_rkn(rank, msg, args...);
+}
+
 inline void print_gpu_mem()
 {
     int rank = getrank();
@@ -219,32 +245,6 @@ void print_rk0(const char * msg, Args... args)
 }
 
 
-template <typename... Args>
-void print_rkn(dmmio::ProcessGrid * grid, const char * msg, Args... args)
-{
-    print_rkn(grid->global_rank, msg, args...);
-}
-
-
-template <typename... Args>
-void print_rkn(int rank, const char * msg, Args... args)
-{
-    fprintf(stdout, "\n" GREEN "Process %d --- " RESET, rank);
-    fprintf(stdout, msg, args...);
-    fprintf(stdout, "\n");
-    FLUSH_WAIT(500000);
-}
-
-
-template <typename... Args>
-void print_rkn(const char * msg, Args... args)
-{
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    print_rkn(rank, msg, args...);
-}
-
-
 template<typename IT>
 void move2gpu(IT** ptr, uint64_t size) {
 
@@ -297,23 +297,34 @@ struct DiffOp2
 };
 
 struct cubTmpBuff {
-    void*  tmp_buffer   = nullptr;
-    size_t current_size = 0;
-    float factor = 1.2;
+    static constexpr float factor = 1.2;
+
+    void*  tmp_buffer;
+    size_t current_size;
+    bool async;
+    cudaStream_t * stream;
+
+    cubTmpBuff(cudaStream_t * _stream=nullptr):
+        tmp_buffer(nullptr),
+        current_size(0),
+        async(false),
+        stream(_stream)
+    {}
+
 
     // Ensure buffer has at least 'bytes' capacity
     void* ensure(size_t bytes) {
+
         if (bytes > current_size) {
 #ifdef NVTX_PROFILING
             NVTX_PUSH_RANGE("reallocTmpbuff",0);
 #endif
-            //par_print("Allocating buffer of size %zu\n", bytes);
-            //print_gpu_mem();
+            assert( async == false && "Calling ensure must be done on an non-async buffer\n");
+
             if (tmp_buffer!=nullptr) {
                 CUDA_CHECK(cudaFree(tmp_buffer));
             }
             CUDA_CHECK(cudaMalloc(&tmp_buffer, factor * bytes)); // grow with factor
-            //par_print("Successfully allocated buffer of size %zu\n", bytes);
             current_size = factor * bytes;
 
 #ifdef NVTX_PROFILING
@@ -323,6 +334,30 @@ struct cubTmpBuff {
         return tmp_buffer;
     }
 
+
+    void ensure_async(const size_t bytes) {
+        if (bytes > current_size) {
+#ifdef NVTX_PROFILING
+            NVTX_PUSH_RANGE("reallocTmpbuff",0);
+#endif
+            if (current_size == 0) {
+                async = true;
+            }
+            assert(async && "ensure_async must be called on an async buffer\n");
+            if (tmp_buffer!=nullptr) {
+                CUDA_CHECK(cudaFreeAsync(tmp_buffer, *stream));
+                CUDA_SYNC(*stream);
+            }
+            CUDA_CHECK(cudaMallocAsync(&tmp_buffer, bytes, *stream));
+            current_size = bytes;
+
+#ifdef NVTX_PROFILING
+            NVTX_POP_RANGE;
+#endif
+        }
+    }
+
+
     void explicitFree(void) {
         if (current_size > 0) {
             CUDA_CHECK(cudaFree(tmp_buffer));
@@ -331,8 +366,25 @@ struct cubTmpBuff {
         current_size = 0;
     }
 
+
+    void explicitFreeAsync() {
+        if (current_size > 0) {
+            CUDA_CHECK(cudaFreeAsync(tmp_buffer, *(this->stream)));
+        }
+        CUDA_SYNC(*(this->stream));
+        tmp_buffer = nullptr;
+        current_size = 0;
+    }
+
+
     ~cubTmpBuff() {
-        if (current_size > 0) explicitFree();
+        if (current_size > 0) {
+            if (async) {
+                explicitFreeAsync();
+            } else {
+                explicitFree();
+            }
+        }
     }
 };
 
@@ -460,25 +512,10 @@ struct CsxBuffers
     IT *d_node_colinds;
     IT *d_node_rowptrs;
     cubTmpBuff * tmp_buffers;
-
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
-    {
-        initialized = 1;
-
-        max_nnz = input_nnz;
-        nnz = 0;
-        ptr_dim = input_ptr_dim;
-        other_dim = _other_dim;
-        nbufs = 1;
-        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
-
-        tmp_buffers = new cubTmpBuff[1];
-    }
+    cudaStream_t * stream;
 
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs) 
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs=1) 
     {
         initialized = 1;
 
@@ -487,6 +524,7 @@ struct CsxBuffers
         ptr_dim = input_ptr_dim;
         other_dim = _other_dim;
         nbufs = _nbufs;
+        stream = nullptr;
         CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
         CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
         CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
@@ -495,14 +533,42 @@ struct CsxBuffers
         tmp_buffers = new cubTmpBuff[nbufs];
     }
 
+
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, cudaStream_t * _stream, uint64_t _nbufs=1) 
+    {
+        initialized = 1;
+
+        nnz = 0;
+        max_nnz = input_nnz;
+        ptr_dim = input_ptr_dim;
+        other_dim = _other_dim;
+        nbufs = _nbufs;
+        stream = _stream;
+        CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
+        CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
+        CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
+        CUDA_SYNC(*stream);
+        CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
+        CUDA_SYNC(*stream);
+
+        tmp_buffers = new cubTmpBuff[nbufs];
+        for (int i=0; i<nbufs; i++)
+        {
+            tmp_buffers[i].stream = stream;
+        }
+    }
+
+
     CsxBuffers(void) 
     {
         initialized    = 0;
         d_node_vals    = nullptr;
         d_node_colinds = nullptr;
         d_node_rowptrs = nullptr;
+        stream = nullptr;
         tmp_buffers = new cubTmpBuff[1];
     }
+
 
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
@@ -547,23 +613,68 @@ struct CsxBuffers
     }
 
 
-    void ensure_tmp(uint64_t required_size) 
+    void ensure_async(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
+        nnz = input_nnz;
+
         if (!initialized) 
         {
-            new (this) CsxBuffers();
+            new (this) CsxBuffers(input_nnz, input_ptr_dim, _other_dim);
+        } 
+        else 
+        {
+            if (input_nnz > max_nnz) 
+            {
+#ifdef NVTX_PROFILING
+                NVTX_PUSH_RANGE("reallocInds",0);
+#endif
+                CUDA_CHECK(cudaFreeAsync(d_node_vals, *stream));
+                CUDA_CHECK(cudaFreeAsync(d_node_colinds, *stream));
+                CUDA_SYNC(*stream);
+
+                max_nnz = input_nnz;
+                CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
+                CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
+#ifdef NVTX_PROFILING
+                NVTX_POP_RANGE;
+#endif
+            }
+            if (input_ptr_dim > ptr_dim) 
+            {
+#ifdef NVTX_PROFILING
+                NVTX_PUSH_RANGE("reallocPtr",0);
+#endif
+                CUDA_CHECK(cudaFreeAsync(d_node_rowptrs, *stream));
+                CUDA_SYNC(*stream);
+
+                ptr_dim = input_ptr_dim;
+                CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
+                CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
+#ifdef NVTX_PROFILING
+                NVTX_POP_RANGE;
+#endif
+            }
         }
-        tmp_buffers[0].ensure(required_size);
     }
 
 
-    void ensure_tmp(uint64_t required_size, uint64_t idx) 
+    void ensure_tmp(uint64_t required_size, uint64_t idx=0) 
     {
         if (!initialized) 
         {
             new (this) CsxBuffers();
         }
         tmp_buffers[idx].ensure(required_size);
+    }
+
+
+    void ensure_tmp_async(uint64_t required_size, uint64_t idx=0) 
+    {
+        if (!initialized) 
+        {
+            new (this) CsxBuffers();
+        }
+        tmp_buffers[idx].ensure_async(required_size);
     }
 
 
@@ -583,9 +694,34 @@ struct CsxBuffers
     }
 
 
+    void explicitFreeAsync()
+    {
+        assert(stream != nullptr);
+        if (initialized) 
+        {
+            cudaFreeAsync(d_node_colinds, *stream);
+            cudaFreeAsync(d_node_rowptrs, *stream);
+            cudaFreeAsync(d_node_vals, *stream);
+            CUDA_SYNC(*stream);
+            initialized = 0;
+            ptr_dim = 0;
+            nnz = 0;
+            max_nnz = 0;
+            nbufs = 0;
+            delete[] tmp_buffers;
+        }
+    }
+
+
     ~CsxBuffers() 
     {
-        if (initialized) explicitFree();
+        if (initialized)  {
+            if (stream != nullptr) {
+                explicitFreeAsync();
+            } else {
+                explicitFree();
+            }
+        }
     }
 
 };

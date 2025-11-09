@@ -133,14 +133,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     int common_grid_size = dist_A->partitioning->grid->row_size; // This must be equal to dist_B->...->col_size
 
 
-    // For forming mpi groups in the gat stuff 
-    MPI_Group row_group;
-    MPI_Comm_group(grid->row_comm, &row_group);
-
-    MPI_Group col_group;
-    MPI_Comm_group(grid->col_comm, &col_group);
-
-
     // Number of iterations (i.e. number of tile to fetch to complete the global SpGEMM)
     const int n_iters = common_grid_size;
 
@@ -174,6 +166,23 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
 
+    // Set cusparse stream
+    cudaStream_t stream;
+    CUDA_CHECK(cudaStreamCreate(&stream));
+
+    cusparseHandle_t handle;
+    CUSPARSE_CHECK(cusparseCreate(&handle));
+
+    CUSPARSE_CHECK(cusparseSetStream(handle, stream));
+
+    int gpn;
+    CUDA_CHECK(cudaGetDeviceCount(&gpn));
+
+    //TODO: Tune this 
+    static constexpr size_t mempool_size = 40e9; 
+    setup_mempool(mempool_size, grid->global_rank%gpn, &stream); 
+
+
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz, majordim);
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz, mmio::MajorDim::ROWS);
@@ -186,15 +195,15 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Temporary csc->csr buffers
-    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows());
+    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream);
 
 
     // Temporary local SpGEMM buffers
     // TODO: Some other size heuristic
     int nbuffers = 6;
-    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), 6);
-    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols());
-    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols());
+    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 6);
+    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
+    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
 
 
     // Make CusparseCSX Objects
@@ -205,21 +214,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
 #endif
-
-
-    // Cuda stream for main thread
-    cudaStream_t stream;
-    CUDA_CHECK(cudaStreamCreate(&stream));
-
-
-    // Create cusparse handle
-    cusparseHandle_t handle;
-    CUSPARSE_CHECK(cusparseCreate(&handle));
-
-
-    // Set cusparse stream
-    CUSPARSE_CHECK(cusparseSetStream(handle, stream));
-
 
 
     // Local partitions of A and B
@@ -253,6 +247,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CUDA_TIMER_DEF(intranode_comm)
     CUDA_TIMER_DEF(comp_time)
     CUDA_TIMER_DEF(A_conversion)
+#endif
+
+#ifdef NVTX_PROFILING
+    NVTX_PUSH_RANGE("main_loop",1);
 #endif
 
     CPU_TIMER_DEF(spgemm);
@@ -312,6 +310,14 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         // Wait until I've been sent A and B or copy from the local data
         IT A_tile_nnz, B_tile_nnz;
         MPI_Request reqs[2];
+        if (rowBtoGet != grid->col_rank) 
+        {
+            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet, &reqs[1]);
+        } 
+        else 
+        {
+            B_tile_nnz = B_holder.copy_device_local_csx(dist_B->csx->mat, stream);
+        }
 
         if (colAtoGet != grid->row_rank) 
         {
@@ -322,24 +328,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
             A_tile_nnz = A_holder.copy_device_local_csx(dist_A->csx->mat, stream);
         }
 
-        if (rowBtoGet != grid->col_rank) 
+
+        if (rowBtoGet != grid->col_rank && B_tile_nnz > 0)
         {
-            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet, &reqs[1]);
-        } 
-        else 
-        {
-            B_tile_nnz = B_holder.copy_device_local_csx(dist_B->csx->mat, stream);
+            MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
         }
+
 
         if (colAtoGet != grid->row_rank && A_tile_nnz > 0)
         {
             MPI_Wait(&reqs[0], MPI_STATUS_IGNORE);
         }
 
-        if (rowBtoGet != grid->col_rank && B_tile_nnz > 0)
-        {
-            MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
-        }
 
         CUDA_SYNC(stream);
 
@@ -375,7 +375,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
 
-        CusparseCSX<IT, VT> * A_remote = new CusparseCSX<IT,VT>(handle, 
+        CusparseCSX<IT, VT> * A_remote = new CusparseCSX<IT,VT>(&handle, 
                                                                 A_holder.form_mmiocsx(dist_A->csx->nrows(), 
                                                                                       dist_A->csx->ncols(), 
                                                                                       A_tile_nnz, 
@@ -429,7 +429,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         // This perform C_local += A_remote * B_node
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            int did_spgemm = cusparse_spmma<IT, VT>(handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm, &stream);
+            int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, done_one_spgemm);
             done_one_spgemm = did_spgemm || done_one_spgemm;
         }
         CUDA_SYNC(stream);
@@ -448,7 +448,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
         // Cleanup
-        //B_node->explicit_free();
         if (Acsc_flag && conversion_buffs == nullptr)
         {
             A_remote->explicit_free();
@@ -465,8 +464,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
 
-#ifdef BULK_SYNC
+
         MPI_Barrier(MPI_COMM_WORLD);
+#ifdef BULK_SYNC
 #endif
     }
 
@@ -477,6 +477,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     MPI_Barrier(MPI_COMM_WORLD);
     CPU_TIMER_STOP(spgemm);
+
+#ifdef NVTX_PROFILING
+    NVTX_POP_RANGE;
+#endif
 
 #if DEBUG_MAIN
     fprintf(stdout, "Main loop complete for rank %d\n", grid->global_rank);
@@ -493,9 +497,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     MPI_Barrier(MPI_COMM_WORLD);
 
 
-    CUDA_CHECK(cudaStreamDestroy(stream));
-    CUSPARSE_CHECK(cusparseDestroy(handle));
-
     if (grid->global_rank==0)
     {
         TIMER_PRINT_LAST(spgemm);
@@ -504,19 +505,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     free_sync_point.arrive_and_wait();
 
-    //CSX_destroy_device(&bku_B);
-    //CSX_destroy_device(&bku_A);
-
-    //conversion_buffs->explicitFree();
-    //gather_buffs->explicitFree();
     delete conversion_buffs;
     delete gather_buffs;
-    delete C_prod_buffs;
-    delete C_accum_buffs;
+    delete C_prod;
+    delete C_accum;
+    delete C_local;
+
+
+    teardown_mempool(grid->global_rank % gpn);
 
     A_comm_thread.get();
     B_comm_thread.get();
-    return new DistCusparseCSX<IT,VT>(C_local, dist_A->partitioning);
+    return nullptr;
 }
 
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, bool skipspgemm=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);

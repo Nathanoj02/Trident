@@ -184,7 +184,7 @@ struct CusparseCSX
     }
 
 
-    CusparseCSX(cusparseHandle_t& handle, 
+    CusparseCSX(cusparseHandle_t* handle, 
                 CSX<IT, VT> * _mat,
                 CsxBuffers<IT, VT> * conversion_buffers):
         mat(nullptr), buffers(nullptr), state(State::Mat)
@@ -358,6 +358,19 @@ struct CusparseCSX
     }
 
 
+    void explicit_free_async()
+    {
+        if (is_mat())
+        {
+            CSX_destroy_device(&mat);
+        }
+        else if (is_buffs())
+        {
+            buffers->explicitFreeAsync();
+        }
+    }
+
+
     void assert_mat(const char * name)
     {
         std::stringstream ss;
@@ -365,12 +378,14 @@ struct CusparseCSX
         assert( is_mat() && ss.str().c_str());
     }
 
+
     void assert_buffs(const char * name)
     {
         std::stringstream ss;
         ss << "Exepcted "<<name<< " underlying storage to be a CsxBuffers object";
         assert( is_buffs() && ss.str().c_str());
     }
+
 
     ~CusparseCSX()
     {
@@ -383,6 +398,21 @@ struct CusparseCSX
         {
             CUSPARSE_CHECK(cusparseDestroySpMat(descr));
             CUSPARSE_CHECK(cusparseDestroyMatDescr(mat_descr));
+            CSX_destroy_device<IT, VT>(&mat);
+        }
+
+        if (is_buffs()) 
+        {
+
+            if (buffers->stream != nullptr)
+            {
+                buffers->explicitFreeAsync();
+            }
+            else
+            {
+                buffers->explicitFree();
+            }
+
         }
     }
 };
@@ -485,17 +515,26 @@ struct DistCusparseCSX
     }
 
 
-    void explicit_free()
-    {
-        csx->explicit_free();
-    }
+    //void explicit_free()
+    //{
+    //    csx->explicit_free();
+    //}
+
+
+    //void explicit_free_async(cudaStream_t * stream)
+    //{
+    //    csx->explicit_free_async(stream);
+    //}
+
     
 };
 
 
 template <typename IT, typename VT>
-CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, CsxBuffers<IT, VT> * buffers)
+CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t* handle, CSX<IT, VT> * csc, CsxBuffers<IT, VT> * buffers)
 {
+    cudaStream_t * stream = buffers->stream;
+
     // Variables
     VT * d_vals = csc->val;
     IT * d_rowinds = csc->idx_vec;
@@ -514,7 +553,6 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
     csr->ncols = ncols;
 
 
-
     // CSR pointers
     VT * d_csr_vals;
     IT * d_colinds, * d_rowptrs;
@@ -527,7 +565,8 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
     } 
     else 
     {
-        buffers->ensure(nnz, nrows + 1, ncols);
+        buffers->ensure_async(nnz, nrows + 1, ncols);
+        CUDA_SYNC(*stream);
         d_csr_vals = buffers->d_node_vals;
         d_colinds  = buffers->d_node_colinds;
         d_rowptrs  = buffers->d_node_rowptrs;
@@ -543,7 +582,7 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
     // is a transposed csr matrix
     size_t buff_size = 0;
     void * d_buff = nullptr;
-    CUSPARSE_CHECK(cusparseCsr2cscEx2_bufferSize(handle,
+    CUSPARSE_CHECK(cusparseCsr2cscEx2_bufferSize(*handle,
                                                 ncols, nrows,
                                                 nnz,
                                                 d_vals,
@@ -557,17 +596,20 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
                                                 CUSPARSE_INDEX_BASE_ZERO,
                                                 CUSPARSE_CSR2CSC_ALG_DEFAULT,
                                                 &buff_size));
+    CUDA_SYNC(*stream);
+
     if (buffers == nullptr) 
     {
         CUDA_CHECK(cudaMalloc(&d_buff, buff_size));
     } 
     else 
     {
-        buffers->ensure_tmp(buff_size);
+        buffers->ensure_tmp_async(buff_size);
+        CUDA_SYNC(*stream);
         d_buff = buffers->tmp_buffers[0].tmp_buffer;
     }
 
-    CUSPARSE_CHECK(cusparseCsr2cscEx2(handle,
+    CUSPARSE_CHECK(cusparseCsr2cscEx2(*handle,
                                     ncols, nrows,
                                     nnz,
                                     d_vals,
@@ -581,6 +623,7 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
                                     CUSPARSE_INDEX_BASE_ZERO,
                                     CUSPARSE_CSR2CSC_ALG_DEFAULT,
                                     d_buff));
+    CUDA_SYNC(*stream);
 
     if (buffers == nullptr) { CUDA_FREE_SAFE(d_buff); }
 
@@ -590,14 +633,13 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t& handle, CSX<IT, VT> * csc, C
 
 
 template <typename IT, typename VT>
-int cusparse_spmma(cusparseHandle_t& handle,
+int cusparse_spmma(cusparseHandle_t* handle,
                    CusparseCSX<IT, VT>* A, 
                    CusparseCSX<IT, VT>* B, 
                    CusparseCSX<IT, VT>** C_prod,
                    CusparseCSX<IT, VT>** C_accum,
                    CusparseCSX<IT, VT>** C_local,
-                   const bool accum,
-                   cudaStream_t* stream)
+                   const bool accum)
 {
 
 #ifdef NVTX_PROFILING
@@ -605,7 +647,7 @@ int cusparse_spmma(cusparseHandle_t& handle,
 #endif
 
     // C_prod = AB
-    int did = cusparse_spgemm_reuse(handle, A, B, *C_prod, stream);
+    int did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
 
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
@@ -617,13 +659,6 @@ int cusparse_spmma(cusparseHandle_t& handle,
         return 0;
     }
 
-
-    // Do not accumulate, C_local will point to underlying C_prod
-    //if (!accum)
-    //{
-    //    std::swap(*C_local, *C_prod);
-    //    return 1;
-    //}
 
 #ifdef NVTX_PROFILING
     NVTX_PUSH_RANGE("cuspAggr",0);
@@ -644,7 +679,7 @@ int cusparse_spmma(cusparseHandle_t& handle,
 
 
 template <typename IT, typename VT>
-void cusparse_spgeam(cusparseHandle_t& handle,
+void cusparse_spgeam(cusparseHandle_t * handle,
                      CusparseCSX<IT, VT> * C_prod,
                      CusparseCSX<IT, VT> * C_local,
                      CusparseCSX<IT, VT> * C_accum)
@@ -658,6 +693,9 @@ void cusparse_spgeam(cusparseHandle_t& handle,
     CsxBuffers<IT, VT> * C_local_buffs = C_local->buffers;
     CsxBuffers<IT, VT> * C_accum_buffs = C_accum->buffers;
 
+    cudaStream_t * stream = C_prod_buffs->stream;
+    assert(stream != nullptr);
+
     //par_print("C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
     //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
 
@@ -669,7 +707,7 @@ void cusparse_spgeam(cusparseHandle_t& handle,
 
     size_t buf_size = 0;
 
-    CUSPARSE_CHECK( cusparseScsrgeam2_bufferSizeExt(handle,
+    CUSPARSE_CHECK( cusparseScsrgeam2_bufferSizeExt(*handle,
                                                     m, n, 
                                                     &alpha,
                                                     C_prod->mat_descr,
@@ -688,11 +726,13 @@ void cusparse_spgeam(cusparseHandle_t& handle,
                                                     (const int*) C_accum_buffs->d_node_rowptrs,
                                                     (const int*) C_accum_buffs->d_node_colinds,
                                                     &buf_size) );
+    CUDA_SYNC(*stream);
 
-    C_accum_buffs->ensure_tmp(buf_size);
+    C_accum_buffs->ensure_tmp_async(buf_size);
+    CUDA_SYNC(*stream);
 
     int nnz_accum = 0;
-    CUSPARSE_CHECK( cusparseXcsrgeam2Nnz(handle,
+    CUSPARSE_CHECK( cusparseXcsrgeam2Nnz(*handle,
                                          m, n, 
                                          C_prod->mat_descr,
                                          C_prod_buffs->nnz,
@@ -706,10 +746,12 @@ void cusparse_spgeam(cusparseHandle_t& handle,
                                          C_accum_buffs->d_node_rowptrs,
                                          &nnz_accum, 
                                          C_accum_buffs->tmp_buffers[0].tmp_buffer) );
+    CUDA_SYNC(*stream);
 
-    C_accum_buffs->ensure(nnz_accum, m+1, n);
+    C_accum_buffs->ensure_async(nnz_accum, m+1, n);
+    CUDA_SYNC(*stream);
 
-    CUSPARSE_CHECK( cusparseScsrgeam2(handle,
+    CUSPARSE_CHECK( cusparseScsrgeam2(*handle,
                                       m, n,
                                       &alpha,
                                       C_prod->mat_descr,
@@ -728,6 +770,7 @@ void cusparse_spgeam(cusparseHandle_t& handle,
                                       C_accum_buffs->d_node_rowptrs,
                                       C_accum_buffs->d_node_colinds,
                                       C_accum_buffs->tmp_buffers[0].tmp_buffer) );
+    CUDA_SYNC(*stream);
 
     //par_print("Post accumulation: C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
     //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
@@ -850,11 +893,10 @@ void cusparse_spgemm(cusparseHandle_t& handle,
 
 //TODO: Sync only on the cusparse stream
 template <typename IT, typename VT>
-int cusparse_spgemm_reuse(cusparseHandle_t& handle,
+int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                           CusparseCSX<IT, VT>* A,
                           CusparseCSX<IT, VT>* B,
-                          CusparseCSX<IT, VT>* C,
-                          cudaStream_t* stream)
+                          CusparseCSX<IT, VT>* C)
 {
     // Check to make sure underlying storage is ok
     A->assert_mat("A");
@@ -862,6 +904,8 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
     C->assert_buffs("C");
 
     CsxBuffers<IT, VT> * buffers = C->buffers;
+    cudaStream_t * stream = buffers->stream;
+    assert(stream != nullptr);
 
     assert(buffers->nbufs >= 5 && "Need at least 5 temporary buffers for SpGEMMreuse");
 
@@ -873,10 +917,11 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
 
     cusparseSpGEMMDescr_t descr;
     CUSPARSE_CHECK(cusparseSpGEMM_createDescr(&descr));
+    CUDA_SYNC(*stream);
 
     // === Phase 1: Work Estimation ===
     size_t buf_size1;
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(*handle,
                                                       op, op,
                                                       A->descr,
                                                       B->descr,
@@ -885,12 +930,14 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
                                                       descr,
                                                       &buf_size1,
                                                       NULL));
-    CUDA_SYNC(NULL);
+    CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size1, 0);
+    //buffers->ensure_tmp_async(buf_size1);
+    buffers->ensure_tmp(buf_size1);
+    CUDA_SYNC(*stream);
     void * d_buf1 = buffers->tmp_buffers[0].tmp_buffer;
 
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_workEstimation(*handle,
                                                       op, op,
                                                       A->descr,
                                                       B->descr,
@@ -903,6 +950,7 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
 
     int64_t num_prods = 0;
     CUSPARSE_CHECK(cusparseSpGEMM_getNumProducts(descr, &num_prods));
+    CUDA_SYNC(*stream);
 
     if (num_prods == 0)
     {
@@ -911,7 +959,7 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
 
     // === Phase 2: Determine NNZ and sparsity structure ===
     size_t buf_size2, buf_size3, buf_size4;
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(*handle,
                                            op, op,
                                            A->descr,
                                            B->descr,
@@ -923,16 +971,22 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
                                            &buf_size4, NULL));
     CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size2, 1);
-    buffers->ensure_tmp(buf_size3, 2);
-    buffers->ensure_tmp(buf_size4, 3);
+    //buffers->ensure_tmp(buf_size2,  1);
+    //buffers->ensure_tmp(buf_size3,  2);
+    //buffers->ensure_tmp(buf_size4,  3);
+    buffers->ensure_tmp_async(buf_size2,  1);
+    CUDA_SYNC(*stream);
+    buffers->ensure_tmp_async(buf_size3,  2);
+    CUDA_SYNC(*stream);
+    buffers->ensure_tmp_async(buf_size4,  3);
+    CUDA_SYNC(*stream);
 
 
     void * d_buf2 = buffers->tmp_buffers[1].tmp_buffer;
     void * d_buf3 = buffers->tmp_buffers[2].tmp_buffer;
     void * d_buf4 = buffers->tmp_buffers[3].tmp_buffer;
 
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_nnz(*handle,
                                            op, op,
                                            A->descr,
                                            B->descr,
@@ -948,14 +1002,15 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
     int64_t Cnrows, Cncols, Cnnz;
     CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
 
-    buffers->ensure(Cnnz, Cnrows+1, Cncols);
+    buffers->ensure_async(Cnnz, Cnrows+1, Cncols);
+    CUDA_SYNC(*stream);
 
     CUSPARSE_CHECK(cusparseCsrSetPointers(C->descr, buffers->d_node_rowptrs,
                                           buffers->d_node_colinds, buffers->d_node_vals));
 
     // === Phase 3: Copy (prepare internal structures) ===
     size_t buf_size5;
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(*handle,
                                             op, op,
                                             A->descr,
                                             B->descr,
@@ -965,10 +1020,11 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
                                             &buf_size5, NULL));
     CUDA_SYNC(*stream);
 
-    buffers->ensure_tmp(buf_size5, 4);
+    buffers->ensure_tmp(buf_size5,  4);
+    CUDA_SYNC(*stream);
     void * d_buf5 = buffers->tmp_buffers[4].tmp_buffer;
 
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_copy(*handle,
                                             op, op,
                                             A->descr,
                                             B->descr,
@@ -979,7 +1035,7 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
     CUDA_SYNC(*stream);
 
     // === Phase 4: Compute ===
-    CUSPARSE_CHECK(cusparseSpGEMMreuse_compute(handle,
+    CUSPARSE_CHECK(cusparseSpGEMMreuse_compute(*handle,
                                                op, op,
                                                &alpha,
                                                A->descr,
@@ -992,6 +1048,7 @@ int cusparse_spgemm_reuse(cusparseHandle_t& handle,
     CUDA_SYNC(*stream);
 
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
+    CUDA_SYNC(*stream);
 
     return 1;
 }
