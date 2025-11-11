@@ -214,7 +214,7 @@ void log_d_arr(FILE * file, T * d_buf, size_t n, const char * prefix, Args... ar
 {
     T * h_buf = (T*)d2h_copy(d_buf, n);
     log_h_arr<T, Args...>(file, h_buf, n, prefix, args...);
-    freeMem(h_buf);
+    free(h_buf);
 }
 
 
@@ -223,7 +223,7 @@ void log_d_arr_unlimited(FILE * file, T * d_buf, size_t n, const char * prefix, 
 {
     T * h_buf = d2h_copy(d_buf, n);
     log_h_arr_unlimited<T, Args...>(file, h_buf, n, prefix, args...);
-    freeMem(h_buf);
+    free(h_buf);
 }
 
 template <typename... Args>
@@ -405,7 +405,9 @@ void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, 
     if (tmp_buff == nullptr) {
         CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
     } else {
-        d_tmp = tmp_buff->ensure(tmp_size);
+        tmp_buff->ensure(tmp_size);
+        CUDA_SYNC(stream);
+        d_tmp = tmp_buff->tmp_buffer;
     }
     cub::DeviceScan::InclusiveSum(d_tmp, tmp_size, d_rowptrs+1, nrows, stream);
     if (tmp_buff == nullptr) {
@@ -422,7 +424,9 @@ void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, 
     if (tmp_buff == nullptr) {
         CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
     } else {
-        d_tmp = tmp_buff->ensure(tmp_size);
+        tmp_buff->ensure(tmp_size);
+        CUDA_SYNC(stream);
+        d_tmp = tmp_buff->tmp_buffer;
     }
     cub::DeviceAdjacentDifference::SubtractLeft(d_tmp, tmp_size, d_rowptrs, nrows+1, DiffOp2<IT>{}, stream);
     if (tmp_buff == nullptr) {
@@ -556,7 +560,7 @@ struct CsxBuffers
         CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
         CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
         CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
-        CUDA_SYNC(*stream);
+        //CUDA_SYNC(*stream);
         CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
         CUDA_SYNC(*stream);
 
@@ -658,6 +662,7 @@ struct CsxBuffers
                 max_nnz = input_nnz;
                 CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
                 CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
+                CUDA_SYNC(*stream);
 #ifdef NVTX_PROFILING
                 NVTX_POP_RANGE;
 #endif
@@ -673,6 +678,7 @@ struct CsxBuffers
                 ptr_dim = input_ptr_dim;
                 CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
                 CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
+                CUDA_SYNC(*stream);
 #ifdef NVTX_PROFILING
                 NVTX_POP_RANGE;
 #endif

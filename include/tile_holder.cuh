@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
 #include "utils.cuh"
+#include "cusparse_helpers.cuh"
 
 #define DEBUG_HOLDER 0
 
@@ -133,6 +134,8 @@ struct TileHolder
         csx->nrows    = nrows;
         csx->ncols    = ncols;
         csx->nnz      = nnz;
+        csx->contig = false;
+        csx->buf_size = 0;
 
         csx->ptr_vec = d_ptrs;
         csx->idx_vec = d_inds;
@@ -155,6 +158,7 @@ struct TileHolder
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
 
+
         // Get nnz per tile
         std::vector<int> node_nnz(node_size);
         MPI_Allgather(&nnz, 1, MPI_INT, node_nnz.data(), 1, MPI_INT, grid->node_comm);
@@ -164,7 +168,6 @@ struct TileHolder
         std::vector<int> displs(node_size);
         int total_nnz = (IT)std::reduce(node_nnz.begin(), node_nnz.end(), 0);
         std::exclusive_scan(node_nnz.begin(), node_nnz.end(), displs.begin(), 0);
-
 
         // Buffer set-up
         if (buffers == nullptr) 
@@ -180,7 +183,8 @@ struct TileHolder
             *d_node_colinds = buffers->d_node_colinds;
             *d_node_rowptrs = buffers->d_node_rowptrs;
         }
-        CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
+
+        //CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
 
         // Manage the case of singleton with a direct D2D copy
         if (node_size == 1) 
@@ -192,20 +196,23 @@ struct TileHolder
         }
 
         // Convert rowtprs to nnz per row
+        // TODO: These need to use a separate stream
+        // AND they malloc normally right now
         rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffers[0]));
 
 
         // Allgatherv each buffer
-
         // Values
         MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
                        MPIType<VT>(), grid->node_comm);
 
+
         // Colinds
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
+
         // Rowptrs
         MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),
                       (*d_node_rowptrs) + 1, nrows, MPIType<IT>(),
@@ -215,7 +222,7 @@ struct TileHolder
         // Convert rownnz to rowptrs
         rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffers[0]));
 
-        return(total_nnz);
+        return total_nnz;
     }
 
 

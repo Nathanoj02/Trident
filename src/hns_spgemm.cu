@@ -197,7 +197,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Temporary allgather buffers
-    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz*1.5, dist_B->getLocalNrows()*node_size + 1, dist_B->getLocalNcols());
+    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols());
 
 
     // Temporary csc->csr buffers

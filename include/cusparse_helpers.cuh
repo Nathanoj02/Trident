@@ -441,12 +441,14 @@ struct DistCusparseCSX
     {
         using namespace dmmio::partitioning::indextransform;
 
-        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0)
+        while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0 &&
+                dcoo->coo->nrows % (dcoo->partitioning->grid->row_size * MASK_SIZE))
         {
             dcoo->coo->nrows++;
         }
 
-        while (dcoo->coo->ncols % (dcoo->partitioning->grid->row_size * MASK_SIZE) != 0)
+        while (dcoo->coo->ncols % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0 &&
+                dcoo->coo->ncols % (dcoo->partitioning->grid->row_size * MASK_SIZE))
         {
             dcoo->coo->ncols++;
         }
@@ -903,9 +905,6 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
     A->assert_mat("A");
     B->assert_mat("B");
     C->assert_buffs("C");
-
-    //A->validate_csr();
-    //B->validate_csr();
 
     CsxBuffers<IT, VT> * buffers = C->buffers;
     cudaStream_t * stream = buffers->stream;
