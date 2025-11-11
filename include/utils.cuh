@@ -529,26 +529,7 @@ struct CsxBuffers
     bool async_csx;
 
 
-    //CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs=1) 
-    //{
-    //    initialized = 1;
-
-    //    nnz = 0;
-    //    max_nnz = input_nnz;
-    //    ptr_dim = input_ptr_dim;
-    //    other_dim = _other_dim;
-    //    nbufs = _nbufs;
-    //    stream = nullptr;
-    //    CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
-    //    CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
-    //    CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
-    //    CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
-
-    //    tmp_buffers = new cubTmpBuff[nbufs];
-    //}
-
-
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, cudaStream_t * _stream = nullptr, uint64_t _nbufs=1, bool _async_csx=true) 
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, cudaStream_t * _stream = nullptr, uint64_t _nbufs=1, bool _async_csx=false) 
     {
         initialized = 1;
 
@@ -570,6 +551,7 @@ struct CsxBuffers
             CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
             CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
             CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
+            CUDA_SYNC(*stream);
             CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
             CUDA_SYNC(*stream);
         }
@@ -738,11 +720,11 @@ struct CsxBuffers
 
     void explicitFree()
     {
-        assert(stream != nullptr);
         if (initialized) 
         {
             if (async_csx)
             {
+                assert(stream != nullptr);
                 cudaFreeAsync(d_node_colinds, *stream);
                 cudaFreeAsync(d_node_rowptrs, *stream);
                 cudaFreeAsync(d_node_vals, *stream);

@@ -842,6 +842,8 @@ struct SpaCommHandler
         ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;
 
+        buffs->tmp_buff.stream = &stream;
+
         // Set-up parameters according to A or B operand
         int ptr_size;
         BMASK_TYPE *mask;

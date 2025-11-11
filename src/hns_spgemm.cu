@@ -202,15 +202,15 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Temporary csc->csr buffers
-    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream);
+    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
 
 
     // Temporary local SpGEMM buffers
     // TODO: Some other size heuristic
-    int nbuffers = 5;
-    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, nbuffers);
-    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
-    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream);
+    int nbuffers = 6;
+    CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, nbuffers, true);
+    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
 
 
 #ifdef DEBUG_MEM
@@ -283,9 +283,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     // Main loop
     alloc_sync_point.arrive_and_wait();
+    CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
-        CPU_TIMER_START(spgemm);
 
         if (grid->global_rank == 0)
         {
@@ -330,6 +330,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         CPU_TIMER_START(wait_for_input)
 #endif
 
+
+        
         // Wait until I've been sent A and B or copy from the local data
         IT A_tile_nnz, B_tile_nnz;
         MPI_Request reqs[2];
@@ -469,12 +471,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         colAtoGet = (colAtoGet + 1) % common_grid_size; // ShiftLeft
         rowBtoGet = (rowBtoGet + 1) % common_grid_size; // ShiftDown
 
-
-        // Cleanup
-        //if (Acsc_flag && conversion_buffs == nullptr)
-        //{
-        //    A_remote->explicit_free();
-        //}
 
 #ifdef BULK_SYNC
         MPI_Barrier(MPI_COMM_WORLD);

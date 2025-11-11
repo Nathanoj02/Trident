@@ -190,6 +190,10 @@ struct TileHolder
         // Manage the case of singleton with a direct D2D copy
         if (node_size == 1) 
         {
+            //*d_node_vals = d_vals_buf;
+            //*d_node_colinds = d_inds_buf;
+            //*d_node_rowptrs = d_ptrs_buf;
+
             CUDA_CHECK(cudaMemcpyAsync(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice, *stream));
             CUDA_CHECK(cudaMemcpyAsync(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
             CUDA_CHECK(cudaMemcpyAsync(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
