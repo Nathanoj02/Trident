@@ -407,16 +407,7 @@ struct CusparseCSX
 
         if (is_buffs()) 
         {
-
-            if (buffers->stream != nullptr)
-            {
-                buffers->explicitFreeAsync();
-            }
-            else
-            {
-                buffers->explicitFree();
-            }
-
+            buffers->explicitFree();
         }
     }
 };

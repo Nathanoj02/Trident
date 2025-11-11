@@ -155,11 +155,11 @@ struct TileHolder
     {
 
         assert(buffers != nullptr);
+        cudaStream_t * stream = buffers->stream;
+        assert(stream != nullptr);
 
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
-
-        par_print("total_nrows: %d\n", total_nrows);
 
         // Get nnz per tile
         std::vector<int> node_nnz(node_size);
@@ -186,21 +186,21 @@ struct TileHolder
             *d_node_rowptrs = buffers->d_node_rowptrs;
         }
 
-        //CUDA_CHECK(cudaMemset(*d_node_rowptrs, 0, sizeof(IT)));
 
         // Manage the case of singleton with a direct D2D copy
         if (node_size == 1) 
         {
-            CUDA_CHECK(cudaMemcpy(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice));
-            CUDA_CHECK(cudaMemcpy(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice));
-            CUDA_CHECK(cudaMemcpy(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice));
+            CUDA_CHECK(cudaMemcpyAsync(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice, *stream));
+            CUDA_CHECK(cudaMemcpyAsync(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
+            CUDA_CHECK(cudaMemcpyAsync(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
+            CUDA_SYNC(*stream);
             return(nnz);
         }
 
         // Convert rowtprs to nnz per row
         // TODO: These need to use a separate stream
         // AND they malloc normally right now
-        rowptrs_to_rownnz(d_ptrs_buf, nrows, 0, &(buffers->tmp_buffers[0]));
+        rowptrs_to_rownnz(d_ptrs_buf, nrows, *stream, &(buffers->tmp_buffers[0]));
 
 
         // Allgatherv each buffer
@@ -222,7 +222,7 @@ struct TileHolder
 
 
         // Convert rownnz to rowptrs
-        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, 0, &(buffers->tmp_buffers[0]));
+        rownnz_to_rowptrs(*d_node_rowptrs, total_nrows, *stream, &(buffers->tmp_buffers[0]));
 
         return total_nnz;
     }

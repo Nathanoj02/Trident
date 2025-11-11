@@ -405,7 +405,7 @@ void rownnz_to_rowptrs(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, 
     if (tmp_buff == nullptr) {
         CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
     } else {
-        tmp_buff->ensure(tmp_size);
+        tmp_buff->ensure_async(tmp_size);
         CUDA_SYNC(stream);
         d_tmp = tmp_buff->tmp_buffer;
     }
@@ -424,7 +424,7 @@ void rowptrs_to_rownnz(IT * d_rowptrs, const IT nrows, cudaStream_t stream = 0, 
     if (tmp_buff == nullptr) {
         CUDA_CHECK(cudaMalloc(&d_tmp, tmp_size));
     } else {
-        tmp_buff->ensure(tmp_size);
+        tmp_buff->ensure_async(tmp_size);
         CUDA_SYNC(stream);
         d_tmp = tmp_buff->tmp_buffer;
     }
@@ -526,28 +526,29 @@ struct CsxBuffers
     IT *d_node_rowptrs;
     cubTmpBuff * tmp_buffers;
     cudaStream_t * stream;
+    bool async_csx;
 
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs=1) 
-    {
-        initialized = 1;
+    //CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, uint64_t _nbufs=1) 
+    //{
+    //    initialized = 1;
 
-        nnz = 0;
-        max_nnz = input_nnz;
-        ptr_dim = input_ptr_dim;
-        other_dim = _other_dim;
-        nbufs = _nbufs;
-        stream = nullptr;
-        CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
-        CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
-        CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
+    //    nnz = 0;
+    //    max_nnz = input_nnz;
+    //    ptr_dim = input_ptr_dim;
+    //    other_dim = _other_dim;
+    //    nbufs = _nbufs;
+    //    stream = nullptr;
+    //    CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
+    //    CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
+    //    CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+    //    CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
 
-        tmp_buffers = new cubTmpBuff[nbufs];
-    }
+    //    tmp_buffers = new cubTmpBuff[nbufs];
+    //}
 
 
-    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, cudaStream_t * _stream, uint64_t _nbufs=1) 
+    CsxBuffers(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim, cudaStream_t * _stream = nullptr, uint64_t _nbufs=1, bool _async_csx=true) 
     {
         initialized = 1;
 
@@ -557,12 +558,28 @@ struct CsxBuffers
         other_dim = _other_dim;
         nbufs = _nbufs;
         stream = _stream;
-        CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
-        CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
-        CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
-        //CUDA_SYNC(*stream);
-        CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
-        CUDA_SYNC(*stream);
+        async_csx = _async_csx;
+
+        if (async_csx)
+        {
+            assert(stream != nullptr);
+        }
+
+        if (async_csx)
+        {
+            CUDA_CHECK(cudaMallocAsync(&d_node_vals,    sizeof(VT)*max_nnz, *stream));
+            CUDA_CHECK(cudaMallocAsync(&d_node_colinds, sizeof(IT)*max_nnz, *stream));
+            CUDA_CHECK(cudaMallocAsync(&d_node_rowptrs, sizeof(IT)*ptr_dim, *stream));
+            CUDA_CHECK(cudaMemsetAsync(d_node_rowptrs, 0, sizeof(IT) * ptr_dim, *stream));
+            CUDA_SYNC(*stream);
+        }
+        else
+        {
+            CUDA_CHECK(cudaMalloc(&d_node_vals,    sizeof(VT)*max_nnz));
+            CUDA_CHECK(cudaMalloc(&d_node_colinds, sizeof(IT)*max_nnz));
+            CUDA_CHECK(cudaMalloc(&d_node_rowptrs, sizeof(IT)*ptr_dim));
+            CUDA_CHECK(cudaMemset(d_node_rowptrs, 0, sizeof(IT) * ptr_dim));
+        }
 
         tmp_buffers = new cubTmpBuff[nbufs];
         for (int i=0; i<nbufs; i++)
@@ -574,6 +591,7 @@ struct CsxBuffers
 
     CsxBuffers(void) 
     {
+        assert(false && "This should never be called\n");
         initialized    = 0;
         d_node_vals    = nullptr;
         d_node_colinds = nullptr;
@@ -599,6 +617,7 @@ struct CsxBuffers
 
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
+        assert(!async_csx);
         nnz = input_nnz;
 
         if (!initialized) 
@@ -642,6 +661,7 @@ struct CsxBuffers
 
     void ensure_async(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
+        assert(async_csx);
         nnz = input_nnz;
 
         if (!initialized) 
@@ -716,31 +736,24 @@ struct CsxBuffers
     }
 
 
-    void explicitFree(void) 
-    {
-        if (initialized) 
-        {
-            cudaFree(d_node_colinds);
-            cudaFree(d_node_rowptrs);
-            cudaFree(d_node_vals);
-            initialized = 0;
-            ptr_dim = 0;
-            nnz = 0;
-            max_nnz = 0;
-            delete[] tmp_buffers;
-        }
-    }
-
-
-    void explicitFreeAsync()
+    void explicitFree()
     {
         assert(stream != nullptr);
         if (initialized) 
         {
-            cudaFreeAsync(d_node_colinds, *stream);
-            cudaFreeAsync(d_node_rowptrs, *stream);
-            cudaFreeAsync(d_node_vals, *stream);
-            CUDA_SYNC(*stream);
+            if (async_csx)
+            {
+                cudaFreeAsync(d_node_colinds, *stream);
+                cudaFreeAsync(d_node_rowptrs, *stream);
+                cudaFreeAsync(d_node_vals, *stream);
+                CUDA_SYNC(*stream);
+            }
+            else
+            {
+                cudaFree(d_node_colinds);
+                cudaFree(d_node_rowptrs);
+                cudaFree(d_node_vals);
+            }
             initialized = 0;
             ptr_dim = 0;
             nnz = 0;
@@ -753,12 +766,9 @@ struct CsxBuffers
 
     ~CsxBuffers() 
     {
-        if (initialized)  {
-            if (stream != nullptr) {
-                explicitFreeAsync();
-            } else {
-                explicitFree();
-            }
+        if (initialized)  
+        {
+            explicitFree();
         }
     }
 
