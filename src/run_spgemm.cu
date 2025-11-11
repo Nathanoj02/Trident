@@ -139,27 +139,11 @@ int main(int argc, char ** argv)
         false, meta_B
     );
 
-    //if (dcoo_A->partitioning->grid->node_size > 1)
-    //{
-    //    cudaSetDevice(dcoo_A->partitioning->grid->node_rank);
-    //}
-
-    //cudaStream_t stream;
-    //CUDA_CHECK(cudaStreamCreate(&stream));
-
-    //cusparseHandle_t handle;
-    //CUSPARSE_CHECK(cusparseCreate(&handle));
-
-    //CUSPARSE_CHECK(cusparseSetStream(handle, stream));
-    // Setup mem pool
-
 
     int gpn;
     CUDA_CHECK(cudaGetDeviceCount(&gpn));
     CUDA_CHECK(cudaSetDevice(world_rank % gpn));
 
-    //static constexpr size_t mempool_size = 60e9; 
-    //setup_mempool(mempool_size, world_rank%gpn); 
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -233,7 +217,7 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
+            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm, config->mem_efficient);
             MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef NVTX_PROFILING

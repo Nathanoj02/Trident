@@ -394,11 +394,15 @@ struct CusparseCSX
             return;
         }
 
-        if (is_mat() && mat->majordim==MajorDim::ROWS)
+        if (is_mat())
         {
             CUSPARSE_CHECK(cusparseDestroySpMat(descr));
             CUSPARSE_CHECK(cusparseDestroyMatDescr(mat_descr));
-            CSX_destroy_device<IT, VT>(&mat);
+
+            if (mat->majordim == MajorDim::COLS)
+            {
+                CSX_destroy_device<IT, VT>(&mat);
+            }
         }
 
         if (is_buffs()) 
@@ -515,18 +519,6 @@ struct DistCusparseCSX
     }
 
 
-    //void explicit_free()
-    //{
-    //    csx->explicit_free();
-    //}
-
-
-    //void explicit_free_async(cudaStream_t * stream)
-    //{
-    //    csx->explicit_free_async(stream);
-    //}
-
-    
 };
 
 
@@ -638,7 +630,8 @@ int cusparse_spmma(cusparseHandle_t* handle,
                    CusparseCSX<IT, VT>* B, 
                    CusparseCSX<IT, VT>** C_prod,
                    CusparseCSX<IT, VT>** C_accum,
-                   CusparseCSX<IT, VT>** C_local)
+                   CusparseCSX<IT, VT>** C_local,
+                   bool memefficient=true)
 {
 
 #ifdef NVTX_PROFILING
@@ -647,8 +640,15 @@ int cusparse_spmma(cusparseHandle_t* handle,
 
     // C_prod = AB
     // TODO: heuristic for switching between these
-    //int did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
-    int did = cusparse_spgemm_mem(handle, A, B, *C_prod);
+    int did;
+    if (memefficient)
+    {
+        did = cusparse_spgemm_mem(handle, A, B, *C_prod);
+    }
+    else
+    {
+        did = cusparse_spgemm_reuse(handle, A, B, *C_prod);
+    }
 
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
@@ -904,6 +904,9 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
     B->assert_mat("B");
     C->assert_buffs("C");
 
+    //A->validate_csr();
+    //B->validate_csr();
+
     CsxBuffers<IT, VT> * buffers = C->buffers;
     cudaStream_t * stream = buffers->stream;
     assert(stream != nullptr);
@@ -998,6 +1001,8 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
     buffers->free_tmp_async(0);
     buffers->free_tmp_async(1);
 
+    CUDA_SYNC(*stream);
+
     // Get result matrix dimensions and allocate output
     int64_t Cnrows, Cncols, Cnnz;
     CUSPARSE_CHECK(cusparseSpMatGetSize(C->descr, &Cnrows, &Cncols, &Cnnz));
@@ -1020,7 +1025,6 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
                                             &buf_size5, NULL));
     CUDA_SYNC(*stream);
 
-    buffers->free_tmp_async(2);
 
     buffers->ensure_tmp_async(buf_size5,  4);
     CUDA_SYNC(*stream);
@@ -1052,8 +1056,10 @@ int cusparse_spgemm_reuse(cusparseHandle_t * handle,
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
     CUDA_SYNC(*stream);
 
+    buffers->free_tmp_async(2);
     buffers->free_tmp_async(3);
     buffers->free_tmp_async(4);
+    CUDA_SYNC(*stream);
 
     return 1;
 }
@@ -1167,6 +1173,7 @@ int cusparse_spgemm_mem(cusparseHandle_t * handle,
                                                  &buf_size2));
     CUDA_SYNC(*stream);
     buffers->free_tmp_async(2);
+    CUDA_SYNC(*stream);
 
 
     // Allocate compute buffer
@@ -1206,6 +1213,7 @@ int cusparse_spgemm_mem(cusparseHandle_t * handle,
     CUDA_SYNC(*stream);
     buffers->free_tmp_async(1);
     buffers->free_tmp_async(3);
+    CUDA_SYNC(*stream);
 
     CUSPARSE_CHECK(cusparseSpGEMM_destroyDescr(descr));
 

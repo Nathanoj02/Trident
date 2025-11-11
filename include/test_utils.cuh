@@ -20,6 +20,7 @@ struct config
     bool skip_spgemm;
     bool spcomm;
     bool Acsc;
+    bool mem_efficient;
 
     int nprocrows;
     int nproccols;
@@ -77,6 +78,7 @@ void parse_args(int argc, char ** argv, Config * config)
     config->impl_str = "none";
     config->nprocrows = 1;
     config->nproccols = 1;
+    config->mem_efficient = false;
 
     int inc = 2;
     for (int i=1; i<argc; i+=inc)
@@ -117,6 +119,11 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--impl"))
         {
             config->impl_str = argv[i+1];
+        }
+        else if (!strcmp(argname, "--mem-efficient"))
+        {
+            config->mem_efficient = true;
+            inc = 1;
         }
         else if (!strcmp(argname, "--2D-pgrid"))
         {
