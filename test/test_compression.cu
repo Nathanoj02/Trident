@@ -304,6 +304,7 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(SynteticMatrixSeed seed, dmmio::ProcessGr
 
     int nrows = scale_factor;
     int ncols = grid->node_size * scale_factor;
+    int total_rows = grid->node_size * scale_factor;
 
     bool(*empty_row_condition)(int);
     switch(seed) {
@@ -327,31 +328,106 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(SynteticMatrixSeed seed, dmmio::ProcessGr
             exit(__LINE__);
     }
 
-    std::vector<IT> vec_ptr(nrows+1);
+    int ptr_size = (layout == mmio::MajorDim::ROWS) ? (nrows+1) : (ncols+1) ;
+    std::vector<IT> vec_ptr(ptr_size);
     vec_ptr[0] = 0;
     IT nnz = 0;
 
-    int iter_dim = (layout == mmio::MajorDim::ROWS) ? nrows : ncols ;
-    for (int i=0; i<iter_dim; i++) {
-        int grp_i = (grid->node_rank)*scale_factor + i;
-        if (empty_row_condition(grp_i)) {
-            IT row_nnz = (grp_i<(ncols/2)) ? (grp_i+1) : (ncols-grp_i);
-            vec_ptr[i+1] = vec_ptr[i] + row_nnz;
-            nnz += row_nnz;
-        } else {
-            vec_ptr[i+1] = vec_ptr[i];
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // if (grid->global_rank==0) std::cout << __func__ << " initialized" << std::endl; fflush(stdout);
+    // sleep(1);
+    // MPI_Barrier(MPI_COMM_WORLD);
+
+    if (layout == mmio::MajorDim::ROWS) {
+        for (int i=0; i<nrows; i++) {
+            int grp_i = (grid->node_rank)*scale_factor + i;
+            if (empty_row_condition(grp_i)) {
+                IT row_nnz = (grp_i<(ncols/2)) ? (grp_i+1) : (ncols-grp_i);
+                vec_ptr[i+1] = vec_ptr[i] + row_nnz;
+                nnz += row_nnz;
+            } else {
+                vec_ptr[i+1] = vec_ptr[i];
+            }
+        }
+    } else {
+        for (int i=0; i<ncols; i++) {
+            if (empty_row_condition(i)) {
+                IT col_nnz = (i<(total_rows/2)) ? (i+1) : (total_rows-i);
+                vec_ptr[i+1] = vec_ptr[i] + col_nnz;
+                nnz += col_nnz;
+            } else {
+                vec_ptr[i+1] = vec_ptr[i];
+            }
         }
     }
 
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // if (grid->global_rank==0) std::cout << __func__ << " ptr generated, nnz: " << nnz << std::endl; fflush(stdout);
+    // sleep(1);
+    // MPI_Barrier(MPI_COMM_WORLD);
+
     std::vector<IT> vec_idx(nnz);
     std::vector<VT> vec_val(nnz);
-    for (int i=0; i<nrows; i++) {
-        int grp_i = (grid->node_rank)*scale_factor + i;
-        for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
-            vec_idx[vec_ptr[i] + j] = (grp_i<(ncols/2)) ? (grp_i + j) : (ncols - j - 1) ;
-            vec_val[vec_ptr[i] + j] = (vec_ptr[i] + j) * 1.0 ;
+    if (layout == mmio::MajorDim::ROWS) {
+        for (int i=0; i<nrows; i++) {
+            int grp_i = (grid->node_rank)*scale_factor + i;
+            for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
+                vec_idx[vec_ptr[i] + j] = (grp_i<(ncols/2)) ? (grp_i + j) : (ncols - j - 1) ;
+                vec_val[vec_ptr[i] + j] = (vec_ptr[i] + j) * 1.0 ;
+            }
+        }
+    } else {
+        for (int i=0; i<ncols; i++) {
+            for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
+                vec_idx[vec_ptr[i] + j] = (i<(total_rows/2)) ? (i + j) : (total_rows - j - 1) ;
+                vec_val[vec_ptr[i] + j] = (vec_ptr[i] + j) * 1.0 ;
+            }
         }
     }
+
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // if (grid->global_rank==0) std::cout << __func__ << " nnz generated" << std::endl; fflush(stdout);
+    // sleep(1);
+    // MPI_Barrier(MPI_COMM_WORLD);
+
+    if (layout == mmio::MajorDim::COLS) {
+        // Filter nnz wrt range
+        IT filtered_nnz = 0;
+        IT lower_range = (grid->node_rank)*scale_factor, upper_range = lower_range + scale_factor;
+        for (IT value : vec_idx) {
+            if ((value >= lower_range) && (value < upper_range)) filtered_nnz++;
+        }
+
+        IT k = 0;
+        std::vector<IT> new_vec_ptr(ptr_size);
+        std::vector<IT> new_vec_idx(filtered_nnz);
+        std::vector<VT> new_vec_val(filtered_nnz);
+        for (int i=0; i<ptr_size; i++) new_vec_ptr[i] = 0;
+        for (int i=0; i<ncols; i++) {
+            for (int j=0; j<(vec_ptr[i+1] - vec_ptr[i]); j++) {
+                IT value = vec_idx[vec_ptr[i] + j];
+                if ((value >= lower_range) && (value < upper_range)) {
+                    new_vec_ptr[i]++; // NOTE still not a proper vec_ptr
+                    new_vec_idx[k] = vec_idx[vec_ptr[i] + j];
+                    new_vec_val[k] = vec_val[vec_ptr[i] + j];
+                    k++;
+                }
+            }
+        }
+
+        vec_ptr[0] = 0;
+        for (int i=1; i<ptr_size; i++) vec_ptr[i] = vec_ptr[i-1] + new_vec_ptr[i-1];
+        for (int i=0; i<filtered_nnz; i++) {
+            vec_idx[i] = new_vec_idx[i] - lower_range;
+            vec_val[i] = new_vec_val[i];
+        }
+        nnz = filtered_nnz;
+    }
+
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // if (grid->global_rank==0) std::cout << __func__ << " nnz filtered" << std::endl; fflush(stdout);
+    // sleep(1);
+    // MPI_Barrier(MPI_COMM_WORLD);
 
     if (print) {
         std::cout << "---------- Syntetic matrix ( " << seed << ", " << scale_factor << ") ----------" << std::endl;
@@ -661,9 +737,10 @@ int main(int argc, char ** argv) {
 
         // Simulated inputs
         int scale_factor = 16/(grid->node_size);
+        if ((scale_factor % MASK_SIZE) != 0) scale_factor += (scale_factor % MASK_SIZE);
         SynteticMatrixSeed Aseed = static_cast<SynteticMatrixSeed>( grid->col_rank%2);
         SynteticMatrixSeed Bseed = static_cast<SynteticMatrixSeed>((grid->row_rank%3) + 2);
-        mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(Aseed, grid, scale_factor, mmio::MajorDim::COLS, true);
+        mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(Aseed, grid, scale_factor, mmio::MajorDim::COLS);
         mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(Bseed, grid, scale_factor, mmio::MajorDim::ROWS);
 
         MPI_Barrier(MPI_COMM_WORLD);
@@ -744,8 +821,6 @@ int main(int argc, char ** argv) {
             }
             MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
             if (world_rank==0) { if(global_check) fprintf(stdout, "Check passed\n"); else fprintf(stderr, "ERROR on check\n"); }
-
-            MPI_Abort(MPI_COMM_WORLD, __LINE__);
             // ------------------------------
 
             SpaComm::SpaCommBuffers<int32_t, float> *buffA = new SpaComm::SpaCommBuffers<int32_t, float>(A_csx);
@@ -770,6 +845,21 @@ int main(int argc, char ** argv) {
 
                 BMASK_TYPE *A_map = SpaComm::gen_bitmask(csxtosendA->ptr_vec, csxtosendA->ncols, MASK_SIZE);
                 BMASK_TYPE *B_map = SpaComm::gen_bitmask(csxtosendB->ptr_vec, csxtosendB->nrows, MASK_SIZE);
+
+                if (grid->node_size > 1) {
+                    BMASK_TYPE *tmp_A_map, *tmp_B_map;
+                    int mask_size = spcomm_data->mask_len;
+                    int sub_mask_size = spcomm_data->sub_mask_len;
+                    CUDA_CHECK(cudaMalloc(&tmp_A_map, sizeof(BMASK_TYPE)*mask_size));
+                    CUDA_CHECK(cudaMalloc(&tmp_B_map, sizeof(BMASK_TYPE)*mask_size));
+                    MPI_Allreduce(A_map, tmp_A_map, mask_size, MPI_BMASK_TYPE, MPI_BOR, grid->node_comm);
+                    MPI_Allgather(B_map, sub_mask_size, MPI_BMASK_TYPE, tmp_B_map, sub_mask_size, MPI_BMASK_TYPE, grid->node_comm);
+                    CUDA_CHECK(cudaFree(A_map));
+                    CUDA_CHECK(cudaFree(B_map));
+                    A_map = tmp_A_map;
+                    B_map = tmp_B_map;
+                }
+
                 MPI_Barrier(MPI_COMM_WORLD);
                 if (world_rank==0) std::cout << "Bitmasks computed" << std::endl; fflush(stdout);
 

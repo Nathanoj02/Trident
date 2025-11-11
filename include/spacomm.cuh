@@ -178,8 +178,8 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
         ASSERT(Acsc->ncols == Bnode_rows, "In 3D mask cols of A must be equal to rows of Bnode");
         ASSERT(grid->row_size == grid->col_size, "The outer 2D grid must be a square");
     }
-    ASSERT((Acsc->ncols % 8) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
-    ASSERT((Bcsr->ncols % 8) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
+    ASSERT((Acsc->ncols % MASK_SIZE) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
+    ASSERT((Bcsr->nrows % MASK_SIZE) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
 
     int Acols = Acsc->ncols;
     int Brows = Bcsr->nrows;
@@ -188,10 +188,12 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     BMASK_TYPE *A_map, *tmp_A_map = SpaComm::gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
     BMASK_TYPE *B_map, *tmp_B_map = SpaComm::gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
 
+#ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
     if (grid->global_rank==0) std::cout << "Local bitmasks computed " << __func__ << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
     sleep(1);
+#endif
 
     if (grid->node_size > 1) {
         int Bnode_mask_size = ((Bnode_rows%MASK_SIZE)==0) ? (Bnode_rows/MASK_SIZE) : ((Bnode_rows/MASK_SIZE)+1) ;
@@ -200,7 +202,7 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
         MPI_Allreduce(tmp_A_map, A_map, A_mask_size, MPI_BMASK_TYPE, MPI_BOR, grid->node_comm);
         MPI_Allgather(tmp_B_map, B_mask_size, MPI_BMASK_TYPE, B_map, B_mask_size, MPI_BMASK_TYPE, grid->node_comm);
 
-        {
+        /*{
             // Just to debug
             BMASK_TYPE *h_tmp_A_map = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * A_mask_size);
             BMASK_TYPE *h_tmp_B_map = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * B_mask_size);
@@ -217,7 +219,11 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
                 printBit_left2right(h_tmp_B_map, B_mask_size,     fp); fprintf(fp, "\n%20s: ", "B_map");
                 printBit_left2right(h_B_map,     Bnode_mask_size, fp); fprintf(fp, "\n");
             )
-        }
+            free(h_tmp_A_map);
+            free(h_tmp_B_map);
+            free(h_A_map);
+            free(h_B_map);
+        }*/
 
         B_mask_size = Bnode_mask_size; // Update B_mask_size
         CUDA_CHECK(cudaFree(tmp_A_map));
@@ -229,10 +235,12 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
         B_map = tmp_B_map;
     }
 
+#ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
     if (grid->global_rank==0) std::cout << "Group bitmasks computed " << __func__ << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
     sleep(1);
+#endif
 
     // ---------- Ghatering all the required maps ----------
     BMASK_TYPE *recv_A_maps;
@@ -243,20 +251,24 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(BMASK_TYPE)*B_mask_size*(grid->col_size)) );
     MPI_Allgather(B_map, sizeof(BMASK_TYPE)*B_mask_size, MPI_BYTE, recv_B_maps, sizeof(BMASK_TYPE)*B_mask_size, MPI_BYTE, grid->col_comm);
 
+#ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
     if (grid->global_rank==0) std::cout << "Bitmasks communicated " << __func__ << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
     sleep(1);
+#endif
 
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
     int mask_size = A_mask_size; // A_mask_size is equal to B_mask_size
     BMASK_TYPE *all_intersections = SpaComm::intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
 
+#ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
     if (grid->global_rank==0) std::cout << "Intersection performed " << __func__ << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
     sleep(1);
+#endif
 
     // ---------- Alltoall data displacement back ----------
     // *col_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->row_size));
@@ -267,10 +279,12 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     CUDA_CHECK( cudaMalloc(row_filters, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
     MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *row_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
 
+#ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
     if (grid->global_rank==0) std::cout << "Bitmasks dispached back " << __func__ << std::endl; fflush(stdout);
     MPI_Barrier(MPI_COMM_WORLD);
     sleep(1);
+#endif
 
 #ifdef DEBUG_SPCOMM
     {
@@ -893,8 +907,9 @@ struct SpaCommHandler
 
 #ifndef DEBUGBITMASKGENERATION
         mask_len = spcomm_2D(csx_A, csx_B, input_grid, &A_column_filters, &B_rows_filters);
+        sub_mask_len = mask_len/(grid->node_size);
+        ASSERT((mask_len % grid->node_size) == 0, "ERROR: grid->node_size should divide mask_len");
 #else
-
         if (grid->global_rank == 0) fprintf(stderr, "DEBUG ONLY MODE: sparsity patter communication is not performed, filters are filled with 1s.\n");
         srand(8);
         int k = csx_A->ncols;
@@ -925,26 +940,31 @@ struct SpaCommHandler
         // Set-up parameters according to A or B operand
         int ptr_size;
         BMASK_TYPE *mask;
+        IT considered_mask_len;
         if (layout == mmio::MajorDim::ROWS) {
             ptr_size = M->nrows+1;
-            mask = B_rows_filters + mask_len*iteration_number;
+            mask = B_rows_filters + mask_len*iteration_number + (grid->node_rank)*(sub_mask_len);
+            considered_mask_len = sub_mask_len;
         } else {
             ptr_size = M->ncols+1;
             mask = A_column_filters + mask_len*iteration_number;
+            considered_mask_len = mask_len;
         }
 
 #ifdef DEBUG_COMPRESSION
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
-        BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_len);
-        CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * mask_len, cudaMemcpyDeviceToHost));
+        BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*considered_mask_len);
+        CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * considered_mask_len, cudaMemcpyDeviceToHost));
         MPI_ALL_PRINT(
             fprintf(fp, "Entered in compression with iterid %d\n", iteration_number);
             fprintf(fp, "Matrix %c has mask: ", matchar);
-            SpaComm::printBit_left2right(h_mask, mask_len, fp);
+            SpaComm::printBit_left2right(h_mask, considered_mask_len, fp);
             fprintf(fp, "\n");
         )
         free(h_mask);
 #endif
+        ASSERT((ptr_size-1) == considered_mask_len*MASK_SIZE, "ptr_size-1 must be equal to considered_mask_len*MASK_SIZE (%d,%d)", ptr_size-1, considered_mask_len*MASK_SIZE);
+
         // Compute compressed value vector
         // NOTE: This one has to happen first, since the others can move
         int num_selected_val = select_entries_cuda<VT, IT>(
@@ -990,9 +1010,9 @@ struct SpaCommHandler
             fprintf(stderr, "M->nnz: %d, M->val: %p, M->idx: %p", M->nnz, M->val, M->idx_vec);
 
             BMASK_TYPE *tmp;
-            CUDA_CHECK(cudaMalloc(&tmp, sizeof(BMASK_TYPE)*mask_len));
-            CUDA_CHECK(cudaMemcpy(tmp, mask, sizeof(BMASK_TYPE)*mask_len, cudaMemcpyDeviceToHost));
-            SpaComm::printBit_left2right(tmp, mask_len, stderr);
+            CUDA_CHECK(cudaMalloc(&tmp, sizeof(BMASK_TYPE)*considered_mask_len));
+            CUDA_CHECK(cudaMemcpy(tmp, mask, sizeof(BMASK_TYPE)*considered_mask_len, cudaMemcpyDeviceToHost));
+            SpaComm::printBit_left2right(tmp, considered_mask_len, stderr);
             MPI_Abort(grid->world_comm, __LINE__);
         }
 
@@ -1049,8 +1069,9 @@ struct SpaCommHandler
     BMASK_TYPE* A_column_filters; // Filters to be applied to A(i,j) matrix before than send to Process (i,k)
     BMASK_TYPE* B_rows_filters;   // Filters to be applied to B(i,j) matrix before than send to Process (k,j)
 
-    IT mask_len;  // This is the len of every single mask (i.e. A-B common dimension / MASK_SIZE)
-    IT nfilters;  // This is the number of filters in each filter collection (i.e. A_column_filters, B_column_filters)
+    IT sub_mask_len; // This is the len of a sub-mask (just in case of 3D partitioning on the CSR operand)
+    IT mask_len;     // This is the len of every single mask (i.e. A-B common dimension / MASK_SIZE)
+    IT nfilters;     // This is the number of filters in each filter collection (i.e. A_column_filters, B_column_filters)
 
 };
 
