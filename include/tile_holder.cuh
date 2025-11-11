@@ -154,10 +154,12 @@ struct TileHolder
                        VT **d_node_vals, IT **d_node_colinds, IT **d_node_rowptrs, CsxBuffers<IT,VT>* buffers=nullptr)
     {
 
+        assert(buffers != nullptr);
 
         const int node_size   = grid->node_size;
         const int total_nrows = node_size * nrows;
 
+        par_print("total_nrows: %d\n", total_nrows);
 
         // Get nnz per tile
         std::vector<int> node_nnz(node_size);

@@ -126,7 +126,8 @@ int main(int argc, char ** argv)
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Aop,
-        false, meta_A
+        false, meta_A,
+        MASK_SIZE
     );
 
     std::string B_mtx_path = (std::string) config->matpathB;
@@ -136,7 +137,8 @@ int main(int argc, char ** argv)
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
-        false, meta_B
+        false, meta_B,
+        MASK_SIZE
     );
 
 

@@ -441,6 +441,7 @@ struct DistCusparseCSX
     {
         using namespace dmmio::partitioning::indextransform;
 
+
         while (dcoo->coo->nrows % (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size * MASK_SIZE) != 0 &&
                 dcoo->coo->nrows % (dcoo->partitioning->grid->row_size * MASK_SIZE))
         {
@@ -455,16 +456,17 @@ struct DistCusparseCSX
 
         IT max_dim = max(dcoo->coo->ncols, dcoo->coo->nrows);
 
-        dcoo->coo->ncols = max_dim;
-        dcoo->coo->nrows = max_dim;
+
         dcoo->coo->nrows /= (dcoo->partitioning->grid->col_size * dcoo->partitioning->grid->node_size);
         dcoo->coo->ncols /= dcoo->partitioning->grid->row_size;
+
 
         for (IT i=0; i<dcoo->coo->nnz; i++)
         {
             dcoo->coo->row[i] = global2local::row(dcoo->partitioning, dcoo->coo->row[i]);
             dcoo->coo->col[i] = global2local::col(dcoo->partitioning, dcoo->coo->col[i]);
         }
+
 
         auto coo = dcoo->coo;
 
