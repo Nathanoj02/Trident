@@ -10,7 +10,7 @@ template <typename IT, typename VT>
 struct TileHolder
 {
 
-    TileHolder(const IT _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
+    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
     {
         d_buf_size = _buf_size;
         comm = _comm;
@@ -265,7 +265,7 @@ struct TileHolder
 
     IT ptr_size;
     IT max_nnz;
-    IT d_buf_size;
+    size_t d_buf_size;
 
     MPI_Comm comm;
     int rank;

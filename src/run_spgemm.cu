@@ -126,7 +126,7 @@ int main(int argc, char ** argv)
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Aop,
-        false, meta_A,
+        true, meta_A,
         MASK_SIZE
     );
 
@@ -137,7 +137,7 @@ int main(int argc, char ** argv)
         world_size, world_rank,
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
-        false, meta_B,
+        true, meta_B,
         MASK_SIZE
     );
 

@@ -41,6 +41,7 @@ CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
         }
     );
 
+
     // First convert the local COO representation to a CSR representation on the host
     std::vector<IT> rowptrs(coo->nrows + 1, 0);
     std::for_each(triples.begin(), triples.end(),
@@ -68,11 +69,9 @@ CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
         }
     );
 
+
     std::inclusive_scan(rowptrs.begin() + 1, rowptrs.end(), rowptrs.begin() + 1);
 
-    //IT * d_rowptrs = h2d_copy(rowptrs.data(), coo->nrows + 1);
-    //IT * d_colinds = h2d_copy(colinds.data(), coo->nnz);
-    //VT * d_vals = h2d_copy(vals.data(), coo->nnz);
 
     // Convert to a mmio row_major CSX matrix (i.e. a csr csx)
     return(CSX_create_contig_device(coo->nrows, coo->ncols, coo->nnz, mmio::MajorDim::ROWS,
@@ -131,12 +130,7 @@ CSX<IT,VT>* coo_to_col_csx_contig(COO<IT, VT> * coo)
     std::inclusive_scan(colptrs.begin() + 1, colptrs.end(), colptrs.begin() + 1);
 
 
-    // Now, copy buffers to the device
-    //IT * d_colptrs = h2d_copy(colptrs.data(), coo->ncols + 1);
-    //IT * d_rowinds = h2d_copy(rowinds.data(), coo->nnz);
-    //VT * d_vals = h2d_copy(vals.data(), coo->nnz);
-
-    // Convert to a kokkos ccs matrix
+    // Convert to a csx matrix
     return(CSX_create_contig_device(coo->nrows, coo->ncols, coo->nnz, mmio::MajorDim::COLS,
                             rowinds.data(), colptrs.data(), vals.data()));
 }
@@ -1166,7 +1160,6 @@ int cusparse_spgemm_mem(cusparseHandle_t * handle,
     CUDA_SYNC(*stream);
     buffers->free_tmp_async(2);
     CUDA_SYNC(*stream);
-
 
     // Allocate compute buffer
     buffers->ensure_tmp_async(buf_size2, 1);
