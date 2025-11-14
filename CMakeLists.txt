@@ -16,8 +16,8 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 
 
 # FIND KOKKOS
-#find_package(Kokkos REQUIRED)
-#find_package(KokkosKernels REQUIRED)
+find_package(Kokkos REQUIRED)
+find_package(KokkosKernels REQUIRED)
 
 
 # ADD INCLUDE DIRECTORY
@@ -65,6 +65,7 @@ target_link_libraries(hns_spgemm PUBLIC
                         MPI::MPI_CXX 
                         dmmio 
                         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                        KokkosKernels::kokkoskernels Kokkos::kokkos
                         Threads::Threads
                         CUDA::cusparse)
 
@@ -77,6 +78,7 @@ macro(add_test name)
                             dmmio 
                             ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
                             hns_spgemm 
+                            KokkosKernels::kokkoskernels Kokkos::kokkos
                             Threads::Threads 
                             CUDA::cusparse)
 endmacro()
@@ -99,6 +101,7 @@ macro(add_src name)
     		MPI::MPI_CXX
     		dmmio
     		ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+            KokkosKernels::kokkoskernels Kokkos::kokkos
     		hns_spgemm
     		Threads::Threads
 		CUDA::cusparse
@@ -135,6 +138,7 @@ macro(add_prof name folder)
         MPI::MPI_CXX
         dmmio
         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+        KokkosKernels::kokkoskernels Kokkos::kokkos
         hns_spgemm
         Threads::Threads
         CUDA::cusparse

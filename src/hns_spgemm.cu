@@ -5,6 +5,11 @@ MPIDataTypeCache mpidtc; //fix linker error
 int here_iteration = 0;
 
 
+__global__ void dumb_kernel(int * x)
+{
+    x[0] = 1;
+}
+
 // Barrier for sync afther thread allocs
 #include <condition_variable>
 SimpleBarrier alloc_sync_point(3);
@@ -210,13 +215,15 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
 
 
+#ifdef KOKKOS
+    LocalMatrix<IT, IT, VT> C_p;
+#else
     // Temporary local SpGEMM buffers
     // TODO: Some other initial size heuristic
     int nbuffers = 6;
     CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, nbuffers, true);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
     CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
-
 
 #ifdef DEBUG_MEM
     par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_prod_buffs: %zu MB\n, \tC_local_buffs: %zu MB\n, \tC_accum_buffs: %zu MB\n",
@@ -235,6 +242,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     CusparseCSX<IT, VT> * C_prod = new CusparseCSX<IT,VT>(C_prod_buffs);
     CusparseCSX<IT, VT> * C_local = new CusparseCSX<IT,VT>(C_local_buffs);
     CusparseCSX<IT, VT> * C_accum = new CusparseCSX<IT,VT>(C_accum_buffs);
+
+#endif
 
 
 #ifdef NVTX_PROFILING
@@ -336,6 +345,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
 
+        //MPI_Win_flush(rowBtoGet, B_queue.msg_win);
+        //MPI_Win_flush(colAtoGet, A_queue.msg_win);
         
         // Wait until I've been sent A and B or copy from the local data
         IT A_tile_nnz, B_tile_nnz;
@@ -456,11 +467,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         CUDA_TIMER_START_DEFAULT(comp_time)
 #endif
 
+
         // This performs C_local += A_remote * B_node
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
+#ifdef KOKKOS
+            LocalMatrix<IT, IT, VT> A_p(A_remote->mat);
+            LocalMatrix<IT, IT, VT> B_p(B_node->mat);
+            LocalMatrix<IT, IT, VT>::sp_mma(A_p, B_p, C_p);
+#else
             int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, mem_efficient);
             done_one_spgemm = did_spgemm || done_one_spgemm;
+#endif
         }
         CUDA_SYNC(stream);
 
@@ -512,7 +530,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #endif
 
     MPI_Barrier(MPI_COMM_WORLD);
+#ifdef KOKKOS
+    int64_t nnz_global = (int64_t)C_p.storage.nnz();
+#else
     int64_t nnz_global = (int64_t)C_local->nnz();
+#endif
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
     if (grid->global_rank==0)
     {

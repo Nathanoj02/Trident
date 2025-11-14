@@ -8,14 +8,9 @@
 #include <cstdint>
 #include <memory>
 
-#include <Kokkos_Core.hpp>
-#include <KokkosSparse_CrsMatrix.hpp>
-#include <KokkosSparse_CcsMatrix.hpp>
-#include <KokkosSparse_CooMatrix.hpp>
-#include <KokkosSparse_coo2crs.hpp>
-#include <KokkosSparse_crs2ccs.hpp>
-#include <KokkosSparse_ccs2crs.hpp>
-#include <KokkosSparse_spadd.hpp>
+//#include <KokkosSparse_coo2crs.hpp>
+//#include <KokkosSparse_crs2ccs.hpp>
+//#include <KokkosSparse_ccs2crs.hpp>
 
 #include <cusparse_v2.h>
 
@@ -333,14 +328,6 @@ namespace KokkosWrap {
 
         using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
         csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
-        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        // KernelHandle kh;
-        // csr_matrix_type product;
-        // kh.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_CUSPARSE); // or SPGEMM_KK_SPEED, SPGEMM_CUSPARSE, etc.
-        // KokkosSparse::spgemm_symbolic(kh, A.storage, false, B.storage, false, product);
-        // KokkosSparse::spgemm_numeric(kh, A.storage, false, B.storage, false, product);
-        // kh.destroy_spgemm_handle();
-
         if (C.initialized == false) {
             C.storage = product;
             C.initialized = true;
