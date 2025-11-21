@@ -2,7 +2,7 @@
 
 set -e
 
-source scripts/variables.sh
+#source scripts/variables.sh
 
 cd comparison
 
@@ -12,10 +12,12 @@ else
   ln -s  ccutils
 fi
 
+
 cmake -S . -B build_trilinos \
     -DCMAKE_CXX_COMPILER=CC \
     -DENABLE_TRILINOS=ON \
-    -DCMAKE_BUILD_TYPE=RELEASE
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DDMMIO_DIR=../distributed_mmio
 
 cd build_trilinos
 make VERBOSE=1 trilinos_spgemm -j16 

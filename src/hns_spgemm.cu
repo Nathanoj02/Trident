@@ -187,11 +187,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     CUSPARSE_CHECK(cusparseSetStream(handle, stream));
 
+#ifndef KOKKOS
     // Mempool setup
     int gpn;
     CUDA_CHECK(cudaGetDeviceCount(&gpn));
     static constexpr size_t mempool_size = UINT64_MAX;
     setup_mempool(mempool_size, grid->global_rank%gpn, &stream); 
+#endif
 
 
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
@@ -218,8 +220,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 #ifdef KOKKOS
     LocalMatrix<IT, IT, VT> C_p;
 #else
-    // Temporary local SpGEMM buffers
-    // TODO: Some other initial size heuristic
     int nbuffers = 6;
     CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, nbuffers, true);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
@@ -553,11 +553,14 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
     delete conversion_buffs;
     delete gather_buffs;
+
+#ifndef KOKKOS
     delete C_prod;
     delete C_accum;
     delete C_local;
-
     teardown_mempool(grid->global_rank % gpn);
+#endif
+
 
     A_comm_thread.get();
     B_comm_thread.get();

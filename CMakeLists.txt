@@ -177,3 +177,6 @@ if(ENABLE_NVTX_PROFILING)
     target_compile_definitions(hns_spgemm PUBLIC NVTX_PROFILING)
 endif()
 
+
+add_subdirectory(comparison)
+

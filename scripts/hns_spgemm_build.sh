@@ -4,10 +4,10 @@ set -e
 
 source scripts/variables.sh
 
-cmake -S . -B build_hns \
-    -DCMAKE_CXX_COMPILER="${NVCC_WRAPPER}" \
-    -DKokkos_DIR="${Kokkos_DIR}" \
-    -DKokkosKernels_DIR="${KokkosKernels_DIR}"
+cmake -S . -B build \
+    -DCMAKE_CXX_COMPILER=CC
 
-cd build_hns
+
+cd build
 make -j16 run_spgemm
+make -j16 trilinos_spgemm

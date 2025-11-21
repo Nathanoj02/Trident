@@ -321,7 +321,7 @@ namespace KokkosWrap {
 
         // Create KokkosKernelHandle
         using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
-            KokkosKernels::default_size_type, KIT, VT,
+            KIT, KIT, VT,
             Kokkos::DefaultExecutionSpace,
             typename Kokkos::DefaultExecutionSpace::memory_space,
             typename Kokkos::DefaultExecutionSpace::memory_space>;

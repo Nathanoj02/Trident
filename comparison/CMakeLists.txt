@@ -1,18 +1,6 @@
 
-cmake_minimum_required(VERSION 3.10)
-set(CMAKE_CUDA_ARCHITECTURES "80")
-set(CMAKE_CXX_STANDARD 20)
-project(comparisons LANGUAGES CXX CUDA)
-
-find_package(CUDAToolkit REQUIRED COMPONENTS cusparse)
 find_package(Trilinos REQUIRED COMPONENTS Teuchos Tpetra)
-find_package(MPI REQUIRED COMPONENTS CXX)
 
-set(CCUTILS_ENABLE_MPI ON CACHE BOOL "Enable MPI support in ccutils")
-set(CCUTILS_ENABLE_CUDA ON CACHE BOOL "Enable CUDA support in ccutils")
-
-get_filename_component(CCUTILS_DIR "${CMAKE_SOURCE_DIR}/ccutils" REALPATH)
-add_subdirectory(${CCUTILS_DIR})
 
 message("\nFound Trilinos! Here are the details: ")
 message("   Trilinos_DIR = ${Trilinos_DIR}")
@@ -33,12 +21,12 @@ find_package(Teuchos REQUIRED Teuchos)
 
 # Targets
 
-set(COMMON_LIBS Tpetra::all_libs Teuchos::all_libs MPI::MPI_CXX ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi)
+set(COMMON_LIBS Tpetra::all_libs Teuchos::all_libs MPI::MPI_CXX ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi dmmio)
 set(COMMON_FALGS -O3) # -target-accel=nvidia80")
 
-# add_executable(trilinos_spgemm trilinos/trilinos_spgemm.cpp)
-# target_link_libraries(trilinos_spgemm PRIVATE ${COMMON_LIBS})
-# target_compile_options(trilinos_spgemm PRIVATE -O3)
+add_executable(trilinos_spgemm trilinos/trilinos_spgemm.cpp)
+target_link_libraries(trilinos_spgemm PRIVATE ${COMMON_LIBS})
+target_compile_options(trilinos_spgemm PRIVATE -O3)
 
 add_executable(trilinos_mcl trilinos/trilinos_mcl.cpp)
 target_link_libraries(trilinos_mcl PRIVATE ${COMMON_LIBS})
