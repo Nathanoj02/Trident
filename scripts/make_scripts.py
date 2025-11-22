@@ -26,7 +26,7 @@ def make_script_hns(nodes):
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
-#SBATCH -C "gpu&hbm80g"
+#SBATCH -C gpu
 #SBATCH -G {GPUS_PER_NODE*nodes}
 #SBATCH -q regular
 #SBATCH -t 0:10:00
@@ -61,10 +61,10 @@ def make_script_trilinos(nodes):
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
-#SBATCH -C "gpu&hbm80g"
+#SBATCH -C gpu
 #SBATCH -G {GPUS_PER_NODE*nodes}
 #SBATCH -q regular
-#SBATCH -t 1:00:00
+#SBATCH -t 0:30:00
 #SBATCH -A m4646_g
     """
 

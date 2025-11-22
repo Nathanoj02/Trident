@@ -167,7 +167,7 @@ endmacro()
 
 
 # --- PROFILING EXECUTABLES (after all libs are defined!) ---
-add_prof(run_spgemm src)
+#add_prof(run_spgemm src)
 add_prof(test_p2pallgatherv test)
 
 

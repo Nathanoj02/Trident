@@ -514,13 +514,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
 #ifdef DETAILED_TIMERS
-        char tmpstr[100];
-        sprintf(tmpstr, "[process %d]", grid->global_rank);
-        TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
-        TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
-        TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
-        TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
-        fflush(stdout);
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", grid->global_rank);
+    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
+    fflush(stdout);
 #endif
 
 
