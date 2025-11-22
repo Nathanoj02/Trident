@@ -12,14 +12,6 @@ using namespace mmio;
 using namespace dmmio;
 
 template <typename IT, typename VT>
-struct Triple
-{
-    IT row;
-    IT col;
-    VT val;
-};
-
-template <typename IT, typename VT>
 CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
 {
     using Tr = Triple<IT, VT>;

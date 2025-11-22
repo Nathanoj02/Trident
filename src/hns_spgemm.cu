@@ -33,9 +33,13 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    int leastPriority, greatestPriority;
+    cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+
+    //cudaStream_t stream = cudaStreamPerThread;
     cudaStream_t stream;
     CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
-    CUDA_CHECK(cudaStreamCreate(&stream));
+    CUDA_CHECK(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority));
 
     SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
@@ -177,21 +181,21 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     NVTX_PUSH_RANGE("Alloc holders & buffers",2);
 #endif
 
+    int gpn;
+    CUDA_CHECK(cudaGetDeviceCount(&gpn));
+    static constexpr size_t mempool_size = UINT64_MAX;
 
     // Set cusparse stream
-    cudaStream_t stream;
-    CUDA_CHECK(cudaStreamCreate(&stream));
+    cudaStream_t stream = cudaStreamPerThread;
+    //CUDA_CHECK(cudaStreamCreate(&stream));
 
     cusparseHandle_t handle;
     CUSPARSE_CHECK(cusparseCreate(&handle));
 
-    CUSPARSE_CHECK(cusparseSetStream(handle, stream));
+    //CUSPARSE_CHECK(cusparseSetStream(handle, stream));
 
 #ifndef KOKKOS
     // Mempool setup
-    int gpn;
-    CUDA_CHECK(cudaGetDeviceCount(&gpn));
-    static constexpr size_t mempool_size = UINT64_MAX;
     setup_mempool(mempool_size, grid->global_rank%gpn, &stream); 
 #endif
 

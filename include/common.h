@@ -10,6 +10,8 @@
 #include <assert.h>
 #include <time.h>
 
+#define CUDA_API_PER_THREAD_DEFAULT_STREAM
+
 #include <cstdint>
 #include <memory>
 #include <iostream>
@@ -42,7 +44,6 @@
 
 #include "MPIType.h"
 
-#define CUDA_API_PER_THREAD_DEFAULT_STREAM
 
 #include <mpi.h>
 #include <cuda.h>
@@ -53,6 +54,7 @@
 #include <cub/cub.cuh>
 
 #define COMP_THRESHOLD 1e8
+//#define COMP_THRESHOLD 1
 
 #define BMASK_TYPE uint8_t
 #define MASK_SIZE 8   // set to 8 in production
