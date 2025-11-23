@@ -29,7 +29,7 @@ def make_script_hns(nodes):
 #SBATCH -C gpu
 #SBATCH -G {GPUS_PER_NODE*nodes}
 #SBATCH -q regular
-#SBATCH -t 0:10:00
+#SBATCH -t 1:00:00
 #SBATCH -A m4646_g
     """
 
@@ -46,10 +46,12 @@ def make_script_hns(nodes):
                     gridproc = GRIDPROCS[j]
                     if int(gridproc) != GPUS_PER_NODE*nodes:
                         continue
-                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {RESULTS_DIR}/hns_strong_{mat}_{nodes}.err ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf}"
-                    outfile = f"{RESULTS_DIR}/hns_{gridproc}_{grid}_{mat}_{conf_str}.out"
+                    fname = f"{RESULTS_DIR}/hns_strong_{gridproc}_{grid}_{mat}_{conf_str}"
+                    outfile = fname + ".out"
+                    errfile = fname + ".err"
                     file.write(f"echo 'HnS {mat}, {conf_str}, {grid}'\n")
-                    file.write(f"{cmd} > {outfile}\n")
+                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf}"
+                    #file.write(f"{cmd} > {outfile}\n")
 
     with open(f"./scripts/sbatch_scripts/hns_strong_all_{nodes}.sh", "w") as file:
         for mat in DATASETS:
@@ -64,7 +66,7 @@ def make_script_trilinos(nodes):
 #SBATCH -C gpu
 #SBATCH -G {GPUS_PER_NODE*nodes}
 #SBATCH -q regular
-#SBATCH -t 0:30:00
+#SBATCH -t 1:00:00
 #SBATCH -A m4646_g
     """
 
@@ -75,10 +77,12 @@ def make_script_trilinos(nodes):
             file.write(header + "\n")
             matpath = f"{MAT_DIR}/{GROUPS[k]}/{mat}/{mat}.mtx"
             gridproc = nodes * GPUS_PER_NODE
-            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {RESULTS_DIR}/trilinos_strong_{mat}_{nodes}.err ./build/comparison/trilinos_spgemm --matA={matpath} --matB={matpath}"
-            outfile = f"{RESULTS_DIR}/trilinos_{gridproc}_{mat}.out"
+            fname = f"{RESULTS_DIR}/trilinos_strong_{mat}_{gridproc}"
+            outfile = fname + ".out"
+            errfile = fname + ".err"
+            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/comparison/trilinos_spgemm --matA={matpath} --matB={matpath}"
             file.write(f"echo 'Trilinos {mat}, {gridproc}'\n")
-            file.write(f"{cmd} > {outfile}\n")
+            #file.write(f"{cmd} > {outfile}\n")
 
     with open(f"./scripts/sbatch_scripts/trilinos_strong_all_{nodes}.sh", "w") as file:
         for mat in DATASETS:
