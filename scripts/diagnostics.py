@@ -1,16 +1,9 @@
 import os
 import argparse
+import re
 
+from colors import *
 
-HEADER = "\033[95m"
-OKBLUE = "\033[94m"
-OKCYAN = "\033[96m"
-OKGREEN = "\033[92m"
-WARNING = "\033[93m"
-FAIL = "\033[91m"
-ENDC = "\033[0m"
-BOLD = "\033[1m"
-UNDERLINE = "\033[4m"
 
 
 def diagnose_hns(args):
@@ -24,6 +17,14 @@ def diagnose_hns(args):
     bad = []
     for filename in files:
         param_str = filename.split(".out")[0]
+        griddims = re.search(r"\dx\d", param_str)[0]
+        dim = int(griddims.split("x")[0])
+        nprocs = int(re.search(r"_\d+_", param_str)[0].replace("_", ""))
+        
+        # spcomm + 3D does not work
+        if dim**2 != nprocs and "nospcomm" not in param_str:
+            continue
+
         with open(args.dir + "/" + filename, "r") as file:
             content = file.read()
             if "spgemm round: 5" in content:

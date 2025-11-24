@@ -55,6 +55,7 @@ find_package(OpenMP REQUIRED)
 
 # CUDA FLAGS
 set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
+#set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr")
 
 
 # MAIN HNS_SPGEMM LIBRARY

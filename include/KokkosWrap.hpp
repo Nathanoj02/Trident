@@ -317,7 +317,8 @@ namespace KokkosWrap {
     : LocalMatrix(csx_gen<DIT, VT>((nrows, ncols, nnz, ptrvec, idxvec, values, layout))) { }
 
     template <typename KIT, typename DIT, typename VT>
-    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
+    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) 
+    {
 
         CUDA_TIMER_DEF(spadd_time);
         CUDA_TIMER_DEF(spm_time);
@@ -334,10 +335,14 @@ namespace KokkosWrap {
         CUDA_TIMER_START_DEFAULT(spm_time)
         csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
         CUDA_TIMER_STOP(spm_time);
-        if (C.initialized == false) {
+
+        if (C.initialized == false) 
+        {
             C.storage = product;
             C.initialized = true;
-        } else {
+        } 
+        else 
+        {
             csr_matrix_type accumulator;
 
             CUDA_TIMER_START_DEFAULT(spadd_time)
@@ -351,13 +356,13 @@ namespace KokkosWrap {
             C.storage = accumulator;
             CUDA_TIMER_STOP(spadd_time);
 
-            int rank;
-            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-            char tmpstr[100];
-            sprintf(tmpstr, "[process %d]", rank);
-            TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
-            TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
         }
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", rank);
+        TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
     }
 
 

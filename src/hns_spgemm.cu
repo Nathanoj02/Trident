@@ -214,7 +214,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
 
     // Temporary allgather buffers
-    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols(), &stream, 1, false);
+    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size * 1.2, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols(), &stream, 1, false);
 
 
     // Temporary csc->csr buffers
@@ -428,6 +428,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
                                                                 conversion_buffs);
         CUDA_SYNC(stream);
 
+
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(A_conversion)
 #endif
@@ -443,6 +444,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
 
         CusparseCSX<IT, VT> * B_node = new CusparseCSX<IT, VT>(B_holder.node_allgather_mmiocsx(dist_B->csx->nrows(), dist_B->csx->ncols(), B_tile_nnz, grid, gather_buffs));
         CUDA_SYNC(stream);
+
 
 #ifdef DETAILED_TIMERS
         CUDA_TIMER_STOP(intranode_comm)
@@ -476,8 +478,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
 #ifdef KOKKOS
+
             LocalMatrix<IT, IT, VT> A_p(A_remote->mat);
             LocalMatrix<IT, IT, VT> B_p(B_node->mat);
+
             LocalMatrix<IT, IT, VT>::sp_mma(A_p, B_p, C_p);
 #else
             int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, mem_efficient);

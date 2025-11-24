@@ -101,6 +101,12 @@ struct TileHolder
         {
             MPI_Irecv(d_buf, sizes[1], MPI_CHAR, src, 1, comm, recv_req);
         }
+        else
+        {
+            // Have to do this so rowptrs array is valid for a nnz=0 matrix
+            CHECK_CUDA(cudaMemsetAsync(d_ptrs_buf, 0, sizeof(IT) * (ptr_size + 1), cudaStreamPerThread));
+            CUDA_SYNC(cudaStreamPerThread);
+        }
 
         return(sizes[0]);
     }
@@ -190,10 +196,6 @@ struct TileHolder
         // Manage the case of singleton with a direct D2D copy
         if (node_size == 1) 
         {
-            //*d_node_vals = d_vals_buf;
-            //*d_node_colinds = d_inds_buf;
-            //*d_node_rowptrs = d_ptrs_buf;
-
             CUDA_CHECK(cudaMemcpyAsync(*d_node_vals,    d_vals_buf,       nnz * sizeof(VT), cudaMemcpyDeviceToDevice, *stream));
             CUDA_CHECK(cudaMemcpyAsync(*d_node_colinds, d_inds_buf,       nnz * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
             CUDA_CHECK(cudaMemcpyAsync(*d_node_rowptrs, d_ptrs_buf, (nrows+1) * sizeof(IT), cudaMemcpyDeviceToDevice, *stream));
@@ -202,8 +204,6 @@ struct TileHolder
         }
 
         // Convert rowtprs to nnz per row
-        // TODO: These need to use a separate stream
-        // AND they malloc normally right now
         rowptrs_to_rownnz(d_ptrs_buf, nrows, *stream, &(buffers->tmp_buffers[0]));
 
 

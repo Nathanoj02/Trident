@@ -4,8 +4,8 @@ import os
 
 GPUS_PER_NODE = 4
 
-DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "cage15", "isolates_subgraph4", "uk-2002", "archaea")
-GROUPS = ( "Fluorem", "Belcastro", "Schenk", "vanHeukelum", "mcl", "LAW", "mcl")
+DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "cage15", "isolates_subgraph4", "uk-2002", "archaea", "dielFilterV3real")
+GROUPS = ( "Fluorem", "Belcastro", "Schenk", "vanHeukelum", "mcl", "LAW", "mcl", "Dziekonski")
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
@@ -51,7 +51,7 @@ def make_script_hns(nodes):
                     errfile = fname + ".err"
                     file.write(f"echo 'HnS {mat}, {conf_str}, {grid}'\n")
                     cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf}"
-                    #file.write(f"{cmd} > {outfile}\n")
+                    file.write(f"{cmd}\n")
 
     with open(f"./scripts/sbatch_scripts/hns_strong_all_{nodes}.sh", "w") as file:
         for mat in DATASETS:
@@ -76,13 +76,17 @@ def make_script_trilinos(nodes):
         with open(f"./scripts/sbatch_scripts/trilinos_strong_{mat}_{nodes}.sh", "w") as file:
             file.write(header + "\n")
             matpath = f"{MAT_DIR}/{GROUPS[k]}/{mat}/{mat}.mtx"
+
+            if mat == "cage15":
+                matpath = "/global/cfs/projectdirs/m4646/hns_spgemm_matrices/known_squaring_nnz/vanHeukelum/cage15_/cage15.mtx"
+
             gridproc = nodes * GPUS_PER_NODE
             fname = f"{RESULTS_DIR}/trilinos_strong_{mat}_{gridproc}"
             outfile = fname + ".out"
             errfile = fname + ".err"
             cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/comparison/trilinos_spgemm --matA={matpath} --matB={matpath}"
             file.write(f"echo 'Trilinos {mat}, {gridproc}'\n")
-            #file.write(f"{cmd} > {outfile}\n")
+            file.write(f"{cmd}\n")
 
     with open(f"./scripts/sbatch_scripts/trilinos_strong_all_{nodes}.sh", "w") as file:
         for mat in DATASETS:
