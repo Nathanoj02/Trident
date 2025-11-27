@@ -27,7 +27,7 @@ def diagnose_hns(args):
 
         with open(args.dir + "/" + filename, "r") as file:
             content = file.read()
-            if "spgemm round: 5" in content:
+            if content.count("spgemm round: 5")==1 and content.count("A stored in CSC") == 1:
                 print("\t" + OKGREEN + param_str + " complete" + ENDC)
             else:
                 bad.append(param_str)
@@ -50,7 +50,7 @@ def diagnose_trilinos(args):
         param_str = filename.split(".out")[0]
         with open(args.dir + "/" + filename, "r") as file:
             content = file.read()
-            if "Done spgemm" in content:
+            if content.count("Done spgemm") == 1:
                 print("\t" + OKGREEN + param_str + " complete" + ENDC)
             else:
                 bad.append(param_str)

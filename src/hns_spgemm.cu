@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include <condition_variable>
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -11,7 +12,6 @@ __global__ void dumb_kernel(int * x)
 }
 
 // Barrier for sync afther thread allocs
-#include <condition_variable>
 SimpleBarrier alloc_sync_point(3);
 SimpleBarrier free_sync_point(3);
 
