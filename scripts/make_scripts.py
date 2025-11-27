@@ -13,7 +13,7 @@ GRIDS=("4x4", "2x2", "8x8", "4x4")
 
 GRIDPROCS=("16", "16", "64", "64")
 
-CONFIGURATIONS=("--impl sendrecv ", "--impl sendrecv --Acsc --spcomm ")
+CONFIGURATIONS=("--impl async ", "--impl async --Acsc --spcomm ")
 
 CONFIGURATIONS_STR=( "kokkos_nospcomm", "kokkos_spcomm")
 

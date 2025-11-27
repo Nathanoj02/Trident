@@ -25,6 +25,15 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
         return( nnz * (sizeof(VT) + sizeof(IT)) + compute_ptrv_size<IT>(ptr_size) );
 }
 
+
+
+/* /////////////////////////////////////////
+ *
+ *                COMM THREAD 
+ *
+ * ///////////////////////////////////////// */
+
+
 template <typename IT, typename VT>
 void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, 
                           const Implementation impl, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, 
@@ -138,11 +147,255 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 }
 
 
+
+
+/* /////////////////////////////////////////
+ *
+ *                WORKSTEALING
+ *
+ * ///////////////////////////////////////// */
+
 template <typename IT, typename VT>
-DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
-                                         const Implementation impl, ThreadPool& pool,
-                                         SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                         bool skipspgemm, bool mem_efficient)
+DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
+                                                 const Implementation impl, ThreadPool& pool,
+                                                 SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                                 bool skipspgemm, bool mem_efficient)
+{
+
+    // Process grid info
+    dmmio::ProcessGrid * grid = dist_A->partitioning->grid;
+    int node_size        = grid->node_size;                     // NOTE: every grid must have the same node size!!
+    int common_grid_size = dist_A->partitioning->grid->row_size; // This must be equal to dist_B->...->col_size
+
+
+    // Number of iterations (i.e. number of tile to fetch to complete the global SpGEMM)
+    const int n_iters = common_grid_size;
+
+
+    // A CSC or CSR?
+    mmio::MajorDim majordim = dist_A->csx->mat->majordim; 
+
+
+    // Indices of tiles to fetch in the first iteration from each communicator
+    int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stragger left
+    int rowBtoGet = (grid->col_rank + grid->row_rank) % common_grid_size; // Stragger down
+
+
+    // Message queue setup -- these will contain indices of the processes that request tiles of A and tiles of B
+    MessageQueue<int> A_queue(n_iters, grid->world_comm);
+    MessageQueue<int> B_queue(n_iters, grid->world_comm);
+
+
+    // Get max nnz for A and B tiles (to allocate recv buffers once)
+    IT A_max_nnz = (dist_A->getLocalNnz()); 
+    MPI_Allreduce(MPI_IN_PLACE, &A_max_nnz, 1, MPI_UINT32_T, MPI_MAX, grid->world_comm);
+
+    IT B_max_nnz = (dist_B->getLocalNnz());
+    MPI_Allreduce(MPI_IN_PLACE, &B_max_nnz, 1, MPI_UINT32_T, MPI_MAX, grid->world_comm);
+
+
+    int gpn;
+    CUDA_CHECK(cudaGetDeviceCount(&gpn));
+
+
+    // Stream handling
+    cudaStream_t stream = cudaStreamPerThread;
+    cusparseHandle_t handle;
+    CUSPARSE_CHECK(cusparseCreate(&handle));
+
+
+
+    // Tile holders for A and B -- these are buffers that remote processes will write tiles to
+    size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*1.5, majordim);
+    size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
+
+#ifdef DEBUG_MEM
+    print_gpu_mem(true);
+    par_print("A size: %zu MB, B size: %zu MB\n", A_buf_size/(1<<20), B_buf_size/(1<<20));
+#endif
+
+    TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
+    TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm);
+
+
+    // Temporary allgather buffers
+    CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size * 1.2, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols(), &stream, 1, false);
+
+
+    // Temporary csc->csr buffers
+    CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
+
+
+    // Store local partition of C
+    LocalMatrix<IT, IT, VT> C_p;
+
+#ifdef DEBUG_MEM
+    par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_prod_buffs: %zu MB\n, \tC_local_buffs: %zu MB\n, \tC_accum_buffs: %zu MB\n",
+    A_holder.d_buf_size/(1<<20),
+    B_holder.d_buf_size/(1<<20),
+    gather_buffs->total_size()/(1<<20),
+    conversion_buffs->total_size()/(1<<20),
+    C_prod_buffs->total_size()/(1<<20),
+    C_local_buffs->total_size()/(1<<20),
+    C_accum_buffs->total_size()/(1<<20));
+    print_gpu_mem(true);
+#endif
+
+
+
+    // Local partitions of A and B
+    CSX<IT, VT> * A_loc = dist_A->csx->mat;
+    CSX<IT, VT> * B_loc = dist_B->csx->mat;
+
+
+    int dev_id; // To be sure each thread on the same process is assigned to the same GPU
+    CUDA_CHECK(cudaGetDevice(&dev_id));
+
+
+
+
+    // Launch comm threads
+    std::mutex mpi_mutex;
+    auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
+                            std::ref(A_queue), std::ref(A_holder), A_loc, 
+                            impl, spcomm, dev_id, 
+                            grid->row_rank, std::ref(mpi_mutex), 0);
+    auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
+                            std::ref(B_queue), std::ref(B_holder), B_loc, 
+                            impl, spcomm, dev_id, 
+                            grid->col_rank, std::ref(mpi_mutex), 1);
+
+
+    // Row and column rank 
+    int* row_rank = new int(grid->row_rank);
+    int* col_rank = new int(grid->col_rank);
+
+
+#ifdef DETAILED_TIMERS
+    CPU_TIMER_DEF(wait_for_input)
+    CUDA_TIMER_DEF(intranode_comm)
+    CUDA_TIMER_DEF(comp_time)
+    CUDA_TIMER_DEF(A_conversion)
+#endif
+
+
+    // Build task queue
+    TaskQueue<LocalSpGEMMTask> queue(grid, row_rank, col_rank);
+
+
+    CPU_TIMER_DEF(spgemm);
+
+
+    // Main loop
+    alloc_sync_point.arrive_and_wait();
+    CPU_TIMER_START(spgemm);
+    for (int iter = 0; iter < n_iters; iter++)
+    {
+        // Pop local tasks
+        LocalSpGEMMTask * task = queue.pop_local_task(iter); 
+
+        if (task != nullptr)
+        {
+            LocalMatrix<IT, IT, VT> C_prod = task->execute(
+                          dist_A, dist_B, 
+                          A_holder, B_holder,
+                          A_queue, B_queue,
+                          *row_rank, *col_rank,
+                          grid,
+                          stream,
+                          conversion_buffs,
+                          gather_buffs
+            );
+
+            LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
+            delete task;
+        }
+
+    }
+
+
+    // Begin workstealing
+    int ntasks_done = queue.check_n_complete();
+    while (ntasks_done < queue.ntasks)
+    {
+        LocalSpGEMMTask * task = queue.pop_random_task();
+        if (task != nullptr)
+        {
+            LocalMatrix<IT, IT, VT> C_prod = task->execute(
+                          dist_A, dist_B, 
+                          A_holder, B_holder,
+                          A_queue, B_queue,
+                          *row_rank, *col_rank,
+                          grid,
+                          stream,
+                          conversion_buffs,
+                          gather_buffs
+            );
+
+                
+        }
+
+
+        ntasks_done = queue.check_n_complete();
+    }
+
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    CPU_TIMER_STOP(spgemm);
+
+
+#ifdef DETAILED_TIMERS
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", grid->global_rank);
+    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
+    fflush(stdout);
+#endif
+
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    int64_t nnz_global = (int64_t)C_p.storage.nnz();
+    MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+    if (grid->global_rank==0)
+    {
+        std::cout<<"NNZ C: "<<nnz_global<<std::endl;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+
+    if (grid->global_rank==0)
+    {
+        TIMER_PRINT_LAST(spgemm);
+    }
+
+
+    free_sync_point.arrive_and_wait();
+
+    delete conversion_buffs;
+    delete gather_buffs;
+
+
+    A_comm_thread.get();
+    B_comm_thread.get();
+    return nullptr;
+}
+
+
+
+
+/* /////////////////////////////////////////
+ *
+ *                ASYNCHRONOUS 
+ *
+ * ///////////////////////////////////////// */
+
+template <typename IT, typename VT>
+DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
+                                          const Implementation impl, ThreadPool& pool,
+                                          SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                          bool skipspgemm, bool mem_efficient)
 {
 
     // Process grid info
@@ -575,4 +828,31 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     return nullptr;
 }
 
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false, bool mem_efficient=false);
+
+template <typename IT, typename VT>
+DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
+                                         const Implementation impl, ThreadPool& pool,
+                                         SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                         bool skipspgemm, bool mem_efficient)
+{
+
+    DistCusparseCSX<IT, VT> * C;
+    switch(impl)
+    {
+        case Implementation::ASYNC:
+            C = hns_spgemm_async(dist_A, dist_B, impl, pool, spcomm, skipspgemm, mem_efficient);
+            break;
+        case Implementation::WORKSTEALING:
+            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm, mem_efficient);
+            break;
+        default:
+            assert(false && "Unreachable\n");
+            break;
+    }
+
+    return nullptr;
+}
+
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_async(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);

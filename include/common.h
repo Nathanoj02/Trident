@@ -71,11 +71,9 @@ extern FILE * logfile;
 #include <atomic>
 
 enum Implementation {
-    SENDRECV,
-    PUT,
-    GET
+    ASYNC,
+    WORKSTEALING
 };
-#define STDIMPL Implementation::SENDRECV
 
 #include "spacomm.cuh"
 

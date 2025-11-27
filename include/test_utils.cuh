@@ -150,13 +150,11 @@ void parse_args(int argc, char ** argv, Config * config)
 
     }
 
-    if (!strcmp(config->impl_str, "get")) config->impl = Implementation::GET;
-    else if (!strcmp(config->impl_str, "put")) config->impl = Implementation::PUT;
-    else if (!strcmp(config->impl_str, "sendrecv")) config->impl = Implementation::SENDRECV;
-    else if (!strcmp(config->impl_str, "none")) config->impl = STDIMPL;
+    if (!strcmp(config->impl_str, "async")) config->impl = Implementation::ASYNC;
+    else if (!strcmp(config->impl_str, "workstealing")) config->impl = Implementation::WORKSTEALING;
     else {
         fprintf(stdout, "Error: unrecognized implementation %s, valid implementations are:\n\t%s\n\t%s\n\t%s\n",
-                config->impl_str, "get", "put", "sendrecv");
+                config->impl_str, "workstealing", "async");
         exit(__LINE__);
     }
 

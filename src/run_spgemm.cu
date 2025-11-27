@@ -180,7 +180,6 @@ int main(int argc, char ** argv)
 
         CPU_TIMER_START(spacomm);
 
-        // Puting this inside the loop produce craches on the start of second iteration; we don't know why
         SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
         if (config->spcomm) 
         {
