@@ -1,9 +1,7 @@
 #pragma once
 
-
-
-#include "common.h"
 #include "KokkosWrap.hpp"
+#include "cusparse_helpers.cuh"
 
 using namespace KokkosWrap;
 
@@ -14,64 +12,92 @@ struct LocalSpGEMMTask
     using LocalMatrix = LocalMatrix<IT, IT, VT>;
     using KokkosCrs = LocalMatrix::KokkosCrs;
 
-    MPI_Datatype MPI_TASK = MPIType<LocalSpGEMMTask<IT, VT>>; 
+    MPI_Datatype MPI_TASK; 
 
-    int colAtoGet;
-    int rowBtoGet;
+    int row_rank_A;
+    int col_rank_A;
+    int row_rank_B;
+    int col_rank_B;
+    int owner;
     int iter;
 
 
     LocalSpGEMMTask():
-        colAtoGet(-1),
-        rowBtoGet(-1),
-        iter(-1),
+        row_rank_A(-1),
+        col_rank_A(-1),
+        row_rank_B(-1),
+        col_rank_B(-1),
+        MPI_TASK(MPIType<LocalSpGEMMTask<IT, VT>>())
     {}
 
 
 
-    LocalMatrix execute(DistCusparse<IT, VT> * A, DistCusparse<IT, VT> * B,
+    inline int ranks_to_global(dmmio::ProcessGrid * grid, int row_rank, int col_rank)
+    {
+        return (row_rank) * (grid->node_size * grid->col_size) + (col_rank * grid->node_size) + grid->node_rank;
+    }
+
+
+    inline int ranks_to_global_A(dmmio::ProcessGrid * grid)
+    {
+        return ranks_to_global(grid, row_rank_A, col_rank_A);
+    }
+
+
+
+    inline int ranks_to_global_B(dmmio::ProcessGrid * grid)
+    {
+        return ranks_to_global(grid, row_rank_B, col_rank_B);
+    }
+
+
+
+    LocalMatrix execute(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B,
                         TileHolder<IT, VT>& A_holder, TileHolder<IT, VT>& B_holder,
                         MessageQueue<int>& A_queue, MessageQueue<int>& B_queue,
-                        int row_rank, int col_rank, 
                         dmmio::ProcessGrid * grid, 
                         cudaStream_t& stream,
+                        cusparseHandle_t& handle,
                         CsxBuffers<IT, VT>* conversion_buffs,
                         CsxBuffers<IT, VT>* gather_buffs)
     {
 
+        int A_rank = ranks_to_global_A(grid);
+        int B_rank = ranks_to_global_B(grid);
+
         // Ask for remote tile
-        A_queue.notify(&row_rank, colAtoGet, iter);
-        B_queue.notify(&col_rank, rowBtoGet, iter);
+        A_queue.notify(&(grid->global_rank), A_rank, iter);
+        B_queue.notify(&(grid->global_rank), B_rank, iter);
 
 
         // Receive remote tiles
         IT A_tile_nnz, B_tile_nnz;
         MPI_Request reqs[2];
-        if (rowBtoGet != grid->col_rank) 
+        if (B_rank != grid->global_rank) 
         {
-            B_tile_nnz = B_holder.recv_tile_contig(rowBtoGet, &reqs[1]);
+            B_tile_nnz = B_holder.recv_tile_contig(B_rank, &reqs[1]);
         } 
         else 
         {
             B_tile_nnz = B_holder.copy_device_local_csx(B->csx->mat, stream);
         }
 
-        if (colAtoGet != grid->row_rank) 
+        if (A_rank != grid->global_rank) 
         {
-            A_tile_nnz = A_holder.recv_tile_contig(colAtoGet, &reqs[0]);
+            A_tile_nnz = A_holder.recv_tile_contig(A_rank, &reqs[0]);
         } 
         else 
         {
             A_tile_nnz = A_holder.copy_device_local_csx(A->csx->mat, stream);
         }
 
-        if (rowBtoGet != grid->col_rank && B_tile_nnz > 0)
+        if (grid->global_rank != B_rank && B_tile_nnz > 0)
         {
             MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
         }
 
 
-        if (colAtoGet != grid->row_rank && A_tile_nnz > 0)
+        if (grid->global_rank != A_rank && A_tile_nnz > 0)
         {
             MPI_Wait(&reqs[0], MPI_STATUS_IGNORE);
         }
@@ -84,7 +110,7 @@ struct LocalSpGEMMTask
                                                                 A_holder.form_mmiocsx(A->csx->nrows(), 
                                                                                       A->csx->ncols(), 
                                                                                       A_tile_nnz, 
-                                                                                      dist_A->csx->mat->majordim), 
+                                                                                      A->csx->mat->majordim), 
                                                                 conversion_buffs);
         CUDA_SYNC(stream);
 
@@ -95,15 +121,15 @@ struct LocalSpGEMMTask
 
 
         // Local partition of C
-        LocalMatrix<IT, IT, VT> C_p;
+        LocalMatrix C_p;
 
 
         // Local SpGEMM
         if (A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
-            LocalMatrix<IT, IT, VT> A_p(A_remote->mat);
-            LocalMatrix<IT, IT, VT> B_p(B_node->mat);
-            LocalMatrix<IT, IT, VT>::spgemm(A_p, B_p, C_p);
+            LocalMatrix A_p(A_remote->mat);
+            LocalMatrix B_p(B_node->mat);
+            C_p = LocalMatrix::spgemm(A_p, B_p);
         }
         CUDA_SYNC(stream);
 
@@ -122,22 +148,22 @@ struct TaskQueue
 {
     int ntasks;
     int local_ntasks;
-    int * ncompleted;
+    int * ncomplete;
     Task * tasks;
     int * claimed;
     dmmio::ProcessGrid * grid;
     MPI_Win task_win;
     MPI_Win claimed_win;
-    MPI_Win ncompleted_win;
+    MPI_Win ncomplete_win;
 
-    static constexpr ncomplete_owner = 0;
-    static constexpr coordinator_rank = 0;
+    static constexpr int ncomplete_owner = 0;
+    static constexpr int coordinator_rank = 0;
 
 
     TaskQueue(dmmio::ProcessGrid * grid, int row_rank, int col_rank):
         ntasks(grid->global_size * grid->row_size), local_ntasks(grid->row_size), 
-        tasks(new Tasks[grid->row_size]), claimed(new int[grid->row_size]),
-        grid(grid),
+        tasks(new Task[grid->row_size]), claimed(new int[grid->row_size]),
+        grid(grid)
     {
         // Initialize my tasks
         // TODO: This is not general
@@ -145,9 +171,12 @@ struct TaskQueue
         int row_id = (grid->row_rank + grid->col_rank) % grid->row_size;
         for (int i=0; i<local_ntasks; i++)
         {
-            tasks[i].colAtoGet = col_id;
-            tasks[i].rowBtoGet = row_id;
+            tasks[i].col_rank_A = col_rank; //rank in process column
+            tasks[i].row_rank_A = col_id; //rank in process row
+            tasks[i].col_rank_B = row_id; 
+            tasks[i].row_rank_B = row_rank;
             tasks[i].iter = i;
+            tasks[i].owner = grid->global_rank;
             col_id = (col_id + 1) % grid->row_size;
             row_id = (row_id + 1) % grid->row_size;
             claimed[i] = -1;
@@ -159,13 +188,13 @@ struct TaskQueue
 
 
         ntasks = local_ntasks * grid->global_size;
-        ncompleted = new int(0);
+        ncomplete = new int(0);
 
 
         // Create MPI Windows 
         MPI_Win_create(tasks, sizeof(Task) * local_ntasks, sizeof(Task), MPI_INFO_NULL, grid->world_comm, &task_win);
         MPI_Win_create(claimed, sizeof(int) * local_ntasks, sizeof(int), MPI_INFO_NULL, grid->world_comm, &claimed_win);
-        MPI_Win_create(ncompleted, sizeof(int), sizeof(int), MPI_INFO_NULL, grid->world_comm, &claimed_win);
+        MPI_Win_create(ncomplete, sizeof(int), sizeof(int), MPI_INFO_NULL, grid->world_comm, &ncomplete_win);
 
         MPI_Barrier(grid->world_comm);
     }
@@ -223,7 +252,7 @@ struct TaskQueue
         {
             result = new Task;
         }
-        MPI_Bcast(result, 1, MPI_TASK, 0, grid->node_comm);
+        MPI_Bcast(result, 1, result->MPI_TASK, 0, grid->node_comm);
         return result;
     }
 
@@ -256,13 +285,13 @@ struct TaskQueue
 
         // Get the task
         MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, task_win);
-        Task * result = new Task;
-        MPI_Get(result, 1, MPI_TASK, rank, offset, 1, MPI_TASK, task_win);
+        Task * task = new Task;
+        MPI_Get(task, 1, task->MPI_TASK, rank, offset, 1, task->MPI_TASK, task_win);
         MPI_Win_unlock(rank, task_win);
 
 
         // Done
-        return result;
+        return task;
     }
 
 

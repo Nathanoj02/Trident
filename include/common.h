@@ -33,6 +33,7 @@
 #include <ccutils/macros.h>
 #include <ccutils/cuda/cuda_macros.h>
 #include <ccutils/cuda/cuda_utils.hpp>
+#include <ccutils/cuda/cuda_timers.h>
 
 #include <mmio/io.h>
 #include <mmio/mmio.h>

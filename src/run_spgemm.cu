@@ -84,22 +84,9 @@ int main(int argc, char ** argv)
 
     // Checks on the input params
     {
-        if (config->impl == Implementation::PUT)
-        {
-            if (world_rank == 0) fprintf(stderr, "Error: --impl put is no longer supported\n");
-            MPI_Barrier(MPI_COMM_WORLD);
-            MPI_Abort(MPI_COMM_WORLD, __LINE__);
-        }
-
         if (config->spcomm && (!config->Acsc)) 
         {
             if (world_rank == 0) fprintf(stderr, "Error: --spcomm requires --Acsc\n");
-            MPI_Barrier(MPI_COMM_WORLD);
-            MPI_Abort(MPI_COMM_WORLD, __LINE__);
-        }
-        if ((config->impl == Implementation::GET) && (config->Acsc || config->spcomm)) 
-        {
-            if (world_rank == 0) fprintf(stderr, "Error: --spcomm and --Acsc are not supported with --impl get\n");
             MPI_Barrier(MPI_COMM_WORLD);
             MPI_Abort(MPI_COMM_WORLD, __LINE__);
         }
@@ -222,7 +209,7 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm, config->mem_efficient);
+            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
             MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef NVTX_PROFILING

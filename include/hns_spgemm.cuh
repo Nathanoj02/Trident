@@ -2,11 +2,13 @@
 #include "common.h"
 #include "message_queue.cuh"
 #include "tile_holder.cuh"
+#include "task_queue.cuh"
 #include "mempool.cuh"
 #include "cusparse_helpers.cuh"
 
 #include <ccutils/cuda/cuda_timers.h>
 
+#include <condition_variable>
 
 #define DEBUG_MAIN 0
 #define DETAILED_TIMERS

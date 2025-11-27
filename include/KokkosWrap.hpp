@@ -8,10 +8,6 @@
 #include <cstdint>
 #include <memory>
 
-//#include <KokkosSparse_coo2crs.hpp>
-//#include <KokkosSparse_crs2ccs.hpp>
-//#include <KokkosSparse_ccs2crs.hpp>
-
 #include <cusparse_v2.h>
 
 #include "kokkos_helpers.cuh"
@@ -337,7 +333,7 @@ namespace KokkosWrap {
             typename Kokkos::DefaultExecutionSpace::memory_space,
             typename Kokkos::DefaultExecutionSpace::memory_space>;
 
-        CUDA_TIMER_START_DEFAULT(spm_time)
+        CUDA_TIMER_START_DEFAULT(spm_time);
         csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
         CUDA_TIMER_STOP(spm_time);
 
@@ -350,7 +346,7 @@ namespace KokkosWrap {
         {
             csr_matrix_type accumulator;
 
-            CUDA_TIMER_START_DEFAULT(spadd_time)
+            CUDA_TIMER_START_DEFAULT(spadd_time);
             KernelHandle kh;
             kh.create_spadd_handle(false);
 
@@ -379,8 +375,8 @@ namespace KokkosWrap {
 
         LocalMatrix<KIT, DIT, VT> result;
 
-        CUDA_TIMER_START_DEFAULT(spm_time)
-        LocalMatrix<KIT, DIT, VT>::KokkosCrs product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+        CUDA_TIMER_START_DEFAULT(spm_time);
+        LocalMatrix<KIT, DIT, VT>::KokkosCrs product = KokkosSparse::spgemm<LocalMatrix<KIT,DIT,VT>::KokkosCrs>(A.storage, false, B.storage, false);
         CUDA_TIMER_STOP(spm_time);
 
         result.storage = product;

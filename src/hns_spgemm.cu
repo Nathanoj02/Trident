@@ -1,5 +1,4 @@
 #include "hns_spgemm.cuh"
-#include <condition_variable>
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -159,8 +158,10 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                                  const Implementation impl, ThreadPool& pool,
                                                  SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                                 bool skipspgemm, bool mem_efficient)
+                                                 bool skipspgemm)
 {
+
+    using LocalSpGEMMTask = LocalSpGEMMTask<IT, VT>;
 
     // Process grid info
     dmmio::ProcessGrid * grid = dist_A->partitioning->grid;
@@ -280,7 +281,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
 
     // Build task queue
-    TaskQueue<LocalSpGEMMTask> queue(grid, row_rank, col_rank);
+    TaskQueue<LocalSpGEMMTask> queue(grid, *row_rank, *col_rank);
 
 
     CPU_TIMER_DEF(spgemm);
@@ -300,9 +301,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
                           dist_A, dist_B, 
                           A_holder, B_holder,
                           A_queue, B_queue,
-                          *row_rank, *col_rank,
                           grid,
-                          stream,
+                          stream, handle,
                           conversion_buffs,
                           gather_buffs
             );
@@ -325,19 +325,22 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
                           dist_A, dist_B, 
                           A_holder, B_holder,
                           A_queue, B_queue,
-                          *row_rank, *col_rank,
                           grid,
-                          stream,
+                          stream, handle,
                           conversion_buffs,
                           gather_buffs
             );
 
+            // TODO: Push C_prod to queue of task->owner
                 
         }
 
 
         ntasks_done = queue.check_n_complete();
     }
+
+
+    // TODO: Pop C_prods from my queue and sum them into C_p
 
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -395,7 +398,7 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                           const Implementation impl, ThreadPool& pool,
                                           SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                          bool skipspgemm, bool mem_efficient)
+                                          bool skipspgemm)
 {
 
     // Process grid info
@@ -833,17 +836,17 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                          const Implementation impl, ThreadPool& pool,
                                          SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                         bool skipspgemm, bool mem_efficient)
+                                         bool skipspgemm)
 {
 
     DistCusparseCSX<IT, VT> * C;
     switch(impl)
     {
         case Implementation::ASYNC:
-            C = hns_spgemm_async(dist_A, dist_B, impl, pool, spcomm, skipspgemm, mem_efficient);
+            C = hns_spgemm_async(dist_A, dist_B, impl, pool, spcomm, skipspgemm);
             break;
         case Implementation::WORKSTEALING:
-            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm, mem_efficient);
+            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm);
             break;
         default:
             assert(false && "Unreachable\n");
