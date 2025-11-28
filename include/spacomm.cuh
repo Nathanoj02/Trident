@@ -781,6 +781,8 @@ __global__ void select_entries_kernel(const VT* input_vec, int n, const PT* ptr_
     if (threadIdx.x == 0) selected_vals[blockIdx.x] = block_aggregate;
 }
 
+// #define DEBUG_SELECT_ENTRIES_CUDA
+
 template<typename VT>
 __global__ void compact_select_entries_kernel(const VT* partial_output, int n, const int *selected_vals_psum, int m, int nselected, VT *output) {
     int tid = blockDim.x*blockIdx.x + threadIdx.x;
@@ -791,14 +793,17 @@ __global__ void compact_select_entries_kernel(const VT* partial_output, int n, c
     for (int i=0; i < ITEM_PER_THREAD; i++) { // full grid coalesent access
         if (access_point < nselected) {
             int mydispl_idx = locate_segment_by_pos(access_point, m, selected_vals_psum);
+
+#ifdef DEBUG_SELECT_ENTRIES_CUDA
+            if (mydispl_idx > n) printf("Error, I'm accessing %d > %d\n", mydispl_idx, n);
+#endif
+
             int mydispl_val = selected_vals_psum[mydispl_idx];
             output[access_point] = partial_output[(chunk_size * mydispl_idx) + (access_point - mydispl_val)];
         }
         access_point += blockDim.x*gridDim.x;
     }
 }
-
-// #define DEBUG_SELECT_ENTRIES_CUDA
 
 template<typename ET, typename IT, typename VT>
 int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, const BMASK_TYPE* mask, SpaCommBuffers<IT,VT> *buffs,
@@ -827,6 +832,7 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
 
     CUDA_CHECK(cudaMemcpyAsync(h_selected_per_block, selected_per_block, sizeof(int)*grid_size, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaGetLastError());
 
     int *h_displ = (int*)malloc(sizeof(int)*(grid_size + 1));
     h_displ[0] = 0;
@@ -845,13 +851,37 @@ int select_entries_cuda(const ET* input_vec, int n, const IT* ptr_vec, int m, co
         free(h_displ);
 
         int *d_displ = selected_per_block;
-        CUDA_CHECK(cudaMemcpyAsync(d_displ, h_selected_per_block, sizeof(int)*grid_size, cudaMemcpyHostToDevice, stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_CUDA_CHECK(cudaMemcpyAsync(d_displ, h_selected_per_block, sizeof(int)*grid_size, cudaMemcpyHostToDevice, stream));
+        MPI_CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_CUDA_CHECK(cudaGetLastError());
+
+#ifdef DEBUG_SELECT_ENTRIES_CUDA
+        {
+            int rank;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            fprintf(stdout, "From process %d grid_size is %d and nselected is %d\n", rank, grid_size, nselected);
+
+            ET *tmp_host = (ET*)malloc(sizeof(ET)*n);
+            CUDA_CHECK(cudaMemcpy(tmp_host, partial_output, sizeof(ET)*n, cudaMemcpyDefault));
+            fprintf(stdout, "Process %d checked partial_output buffer\n", rank);
+            free(tmp_host);
+
+            tmp_host = (ET*)malloc(sizeof(ET)*grid_size);
+            CUDA_CHECK(cudaMemcpy(tmp_host, d_displ, sizeof(ET)*grid_size, cudaMemcpyDefault));
+            for (int i=0; i<grid_size; i++)
+                if (tmp_host[i]>n) {
+                    fprintf(stderr, "Error at process %d: element %d exeed n (%d>%d)\n", rank, i, tmp_host[i], n);
+                    MPI_Abort(MPI_COMM_WORLD, __LINE__);
+                }
+            fprintf(stdout, "Process %d checked d_displ buffer\n", rank);
+            free(tmp_host);
+        }
+#endif
 
         int new_grid_size = (nselected + (BLOCK_SIZE*ITEM_PER_THREAD-1)) / (BLOCK_SIZE*ITEM_PER_THREAD);
         compact_select_entries_kernel<<<new_grid_size, BLOCK_SIZE, 0, stream>>>(partial_output, n, d_displ, grid_size, nselected, output);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_CUDA_CHECK(cudaStreamSynchronize(stream));
+        MPI_CUDA_CHECK(cudaGetLastError());
     }
 
 
@@ -960,7 +990,8 @@ struct SpaCommHandler
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
         BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*considered_mask_len);
         CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * considered_mask_len, cudaMemcpyDeviceToHost));
-        MPI_COMMUNICATOR_PRINT( comm,
+        // MPI_COMMUNICATOR_PRINT( comm,
+        MPI_ALL_PRINT(
             fprintf(fp, "Entered in compression with iterid %d\n", iteration_number);
             fprintf(fp, "Matrix %c has mask: ", matchar);
             SpaComm::printBit_left2right(h_mask, considered_mask_len, fp);

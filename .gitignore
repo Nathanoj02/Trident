@@ -17,6 +17,7 @@ interactive_results_2/
 small_matrices/
 kokkos/
 kokkos-kernels/
+Trilinos/
 
 *.out
 *.bmtx

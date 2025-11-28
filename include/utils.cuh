@@ -9,6 +9,18 @@
     }                                                                \
 } while(0)
 
+#define MPI_CUSPARSE_CHECK(call) do {                                    \
+    int inmacro_myid, inmacro_ntask;                                     \
+    MPI_Comm_rank(MPI_COMM_WORLD, &inmacro_myid);                        \
+    MPI_Comm_size(MPI_COMM_WORLD, &inmacro_ntask);                       \
+    cusparseStatus_t err = call;                                     \
+    if (err != CUSPARSE_STATUS_SUCCESS) {                            \
+        fprintf(stderr, "[%d] cuSPARSE error in file '%s' in line %i : %s.\n", \
+                inmacro_myid, __FILE__, __LINE__, cusparseGetErrorString(err));    \
+        exit(EXIT_FAILURE);                                          \
+    }                                                                \
+} while(0)
+
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
 #define CHECK_PTR(PT, IT) {  \
@@ -38,7 +50,7 @@
     }  \
 }
 
-#define CUDA_SYNC(STR) CUDA_CHECK(cudaStreamSynchronize(STR));
+#define CUDA_SYNC(STR) MPI_CUDA_CHECK(cudaStreamSynchronize(STR));
 
 typedef struct {
     int rowidx;

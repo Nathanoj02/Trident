@@ -11,6 +11,7 @@
 #define DETAILED_TIMERS
 //#define DEBUG_MEM
 //#define VERBOSE
+#define BULK_SYNC
 
 
 template <typename IT, typename VT>

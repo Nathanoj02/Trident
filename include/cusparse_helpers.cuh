@@ -590,7 +590,7 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t* handle, CSX<IT, VT> * csc, C
         d_buff = buffers->tmp_buffers[0].tmp_buffer;
     }
 
-    CUSPARSE_CHECK(cusparseCsr2cscEx2(*handle,
+    MPI_CUSPARSE_CHECK(cusparseCsr2cscEx2(*handle,
                                     ncols, nrows,
                                     nnz,
                                     d_vals,

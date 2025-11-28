@@ -168,6 +168,13 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
+        /*MPI_ALL_PRINT(
+            fprintf(fp, "local A is %dx%d\n", dist_A->csx->mat->nrows, dist_A->csx->mat->ncols);
+            fprintf(fp, "local B is %dx%d\n", dist_B->csx->mat->nrows, dist_B->csx->mat->ncols);
+        )*/
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+
 
         CPU_TIMER_DEF(spgemm);
         CPU_TIMER_DEF(spacomm);
