@@ -76,6 +76,7 @@ int main(int argc, char ** argv)
       std::cout << "Chosen implementation: " << config->impl_str << "(main use MPI_Put)" << std::endl;
       std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
+      std::cout << "Compression threshold: " << COMP_THRESHOLD << " B" << std::endl;
     }
 
     // Checks on the input params

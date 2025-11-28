@@ -52,7 +52,8 @@
 
 #include <cub/cub.cuh>
 
-#define COMP_THRESHOLD 1e8
+// #define COMP_THRESHOLD 1e8
+#define COMP_THRESHOLD 0
 
 #define BMASK_TYPE uint8_t
 #define MASK_SIZE 8   // set to 8 in production
