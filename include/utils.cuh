@@ -597,6 +597,22 @@ struct CsxBuffers
     }
 
 
+    mmio::CSX<IT, VT> * to_mmio_csx()
+    {
+        mmio::CSX<IT, VT> *csx = (mmio::CSX<IT, VT>*)malloc(sizeof(mmio::CSX<IT, VT>));
+        csx->majordim = mmio::MajorDim::ROWS;
+        csx->nnz      = nnz;
+        csx->nrows    = ptr_dim - 1;
+        csx->ncols    = other_dim;
+        csx->val      = d_node_vals;
+        csx->ptr_vec  = d_node_rowptrs;
+        csx->idx_vec  = d_node_colinds;
+
+        return csx;
+    }
+
+
+
     void ensure(uint64_t input_nnz, uint64_t input_ptr_dim, uint64_t _other_dim) 
     {
         assert(!async_csx);

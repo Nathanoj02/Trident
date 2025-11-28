@@ -2,26 +2,40 @@
 #include "common.h"
 #include "utils.cuh"
 #include "cusparse_helpers.cuh"
+#include "KokkosWrap.hpp"
 
 #define DEBUG_HOLDER 0
+
+using namespace KokkosWrap;
 
 
 template <typename IT, typename VT>
 struct TileHolder
 {
 
-    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
+    using LocalMatrix = KokkosWrap::LocalMatrix<IT,IT,VT>;
+
+    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm, const bool _window=false)
     {
         d_buf_size = _buf_size;
         comm = _comm;
         max_nnz  = nnz_size;
         ptr_size = _ptr_size;
+        window = _window;
+
+        current_nnz = 0;
 
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
         CUDA_CHECK(cudaMalloc(&d_buf, d_buf_size));
         CUDA_CHECK(cudaMemset(d_buf, 0, d_buf_size));
+
+        if (window)
+        {
+            MPI_Win_create(d_buf, d_buf_size, sizeof(char), MPI_INFO_NULL, comm, &buf_win);
+            MPI_Win_create(&current_nnz, sizeof(int), sizeof(int), MPI_INFO_NULL, comm, &current_nnz_win);
+        }
 
     }
 
@@ -253,8 +267,81 @@ struct TileHolder
     }
 
 
+
+    void aggregate_remote_tile(LocalMatrix& mat, const int target, CsxBuffers<IT, VT> * landing_zone)
+    {
+        assert(window);
+
+        // To make things easier
+        mmio::CSX<IT, VT> * csx = rawptr_get(mat);
+
+
+        // Get remote tile
+        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, 0, buf_win);
+        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, target, 0, current_nnz_win);
+
+
+        // NNZ in remote tile
+        IT remote_nnz;
+        MPI_Get(&remote_nnz, 1, MPIType<IT>(), target, 0, 1, MPIType<IT>(), current_nnz_win);
+        MPI_Win_flush_local(target, current_nnz_win);
+
+
+        // Simple, just put the product onto the tile window without aggregation
+        if (remote_nnz == 0)
+        {
+            MPI_Accumulate(&(csx->nnz), 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, current_nnz_win);
+            put_tile(csx, target);
+        }
+
+
+        // Aggregate locally 
+        landing_zone->ensure_async(remote_nnz, csx->nrows + 1, csx->ncols);
+        get_tile(landing_zone, remote_nnz, csx->nrows, target);
+        mmio::CSX<IT, VT> * landing_zone_csx = landing_zone->to_mmio_csx();
+        LocalMatrix remote_C(landing_zone_csx);
+        LocalMatrix::spadd(mat, remote_C);
+
+
+        // Put aggregated remote tile back
+        MPI_Accumulate(&(landing_zone_csx->nnz), 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, current_nnz_win);
+        put_tile(landing_zone_csx, target);
+
+
+        // Cleanup
+        MPI_Win_unlock(current_nnz_win, target);
+        MPI_Win_unlock(buf_win, target);
+    }
+
+
+
+    void get_tile(CsxBuffers<IT,VT> * landing_zone, const IT remote_nnz, const IT remote_nrows, const int target)
+    {
+        assert(window);
+        MPI_Get(landing_zone->d_node_vals, remote_nnz, MPIType<VT>(), target, 0, remote_nnz, MPIType<VT>(), buf_win);
+        MPI_Get(landing_zone->d_node_colinds, remote_nnz, MPIType<IT>(), target, remote_nnz, remote_nnz, MPIType<IT>(), buf_win);
+        MPI_Get(landing_zone->d_node_rowptrs, remote_nrows + 1, MPIType<IT>(), target, remote_nnz * 2, remote_nrows+1, MPIType<IT>(), buf_win);
+    }
+
+
+
+    void put_tile(mmio::CSX<IT, VT> * csx, const int target)
+    {
+        assert(window);
+        MPI_Put(csx->val, csx->nnz, MPIType<VT>(), target, 0, csx->nnz, MPIType<VT>(), buf_win);
+        MPI_Put(csx->idx_vec, csx->nnz, MPIType<IT>(), target, csx->nnz, csx->nnz, MPIType<IT>(), buf_win);
+        MPI_Put(csx->ptr_vec, csx->nrows + 1, MPIType<IT>(), target, csx->nnz + csx->nnz, csx->nrows + 1, MPIType<IT>(), buf_win);
+    }
+
+
+
     ~TileHolder()
     {
+        if (window)
+        {
+            MPI_Win_free(&buf_win);
+            MPI_Win_free(&current_nnz_win);
+        }
         CUDA_FREE_SAFE(d_buf);
     }
 
@@ -265,10 +352,15 @@ struct TileHolder
 
     IT ptr_size;
     IT max_nnz;
+    IT current_nnz;
     size_t d_buf_size;
 
     MPI_Comm comm;
     int rank;
     int world_rank;
+
+    bool window;
+    MPI_Win buf_win;
+    MPI_Win current_nnz_win;
 
 };

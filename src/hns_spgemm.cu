@@ -209,22 +209,23 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*1.5, majordim);
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
-
-#ifdef DEBUG_MEM
-    print_gpu_mem(true);
-    par_print("A size: %zu MB, B size: %zu MB\n", A_buf_size/(1<<20), B_buf_size/(1<<20));
-#endif
+    size_t C_remote_size = A_buf_size; //TODO: Tune
 
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
     TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm);
+    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), (IT)A_max_nnz*1.5, grid->world_comm, true);
 
 
     // Temporary allgather buffers
     CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size * 1.2, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols(), &stream, 1, false);
 
-
     // Temporary csc->csr buffers
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
+
+
+    // Temporary buffers to hold remote in-progress aggregated tiles of C
+    CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>(A_max_nnz * 1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+
 
 
     // Store local partition of C
@@ -309,6 +310,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
             LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
             delete task;
+
+            queue.inc_n_complete();
         }
 
     }
@@ -318,9 +321,16 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     int ntasks_done = queue.check_n_complete();
     while (ntasks_done < queue.ntasks)
     {
+
+        // Grab a random task
         LocalSpGEMMTask * task = queue.pop_random_task();
+
+        
+        // If task is valid
         if (task != nullptr)
         {
+            
+            // Local SpGEMM
             LocalMatrix<IT, IT, VT> C_prod = task->execute(
                           dist_A, dist_B, 
                           A_holder, B_holder,
@@ -331,16 +341,19 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
                           gather_buffs
             );
 
-            // TODO: Push C_prod to queue of task->owner
-                
+            
+            // Aggregate on remote tile
+            C_remote_holder.aggregate_remote_tile(C_prod, task->owner, C_remote_buffs); 
+
+
+            // Increment completed task count    
+            queue.inc_n_complete();
         }
 
 
+        // Update local completed task count
         ntasks_done = queue.check_n_complete();
     }
-
-
-    // TODO: Pop C_prods from my queue and sum them into C_p
 
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -378,6 +391,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
     delete conversion_buffs;
     delete gather_buffs;
+    delete C_remote_buffs;
 
 
     A_comm_thread.get();

@@ -270,17 +270,10 @@ struct TaskQueue
         MPI_Compare_and_swap(&(rank), &negone, &result, MPI_INT, rank, offset, claimed_win);
         MPI_Win_unlock(rank, claimed_win);
 
-        if (result == -1)
+        if (result != -1)
         {
             return nullptr;
         }
-
-
-        // Increment global complete task count
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, ncomplete_owner, 0, ncomplete_win);
-        int one = 1;
-        MPI_Accumulate(&one, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, MPI_SUM, ncomplete_win);
-        MPI_Win_unlock(ncomplete_owner, ncomplete_win);
 
 
         // Get the task
@@ -292,6 +285,17 @@ struct TaskQueue
 
         // Done
         return task;
+    }
+
+
+
+    void inc_n_complete()
+    {
+        // Increment global complete task count
+        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, ncomplete_owner, 0, ncomplete_win);
+        int one = 1;
+        MPI_Accumulate(&one, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, MPI_SUM, ncomplete_win);
+        MPI_Win_unlock(ncomplete_owner, ncomplete_win);
     }
 
 
