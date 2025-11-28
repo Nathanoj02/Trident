@@ -59,6 +59,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 
     int sendround = 0;
     int compression_flag = (spacomm != nullptr && tilebuffersize >= COMP_THRESHOLD);
+
+    // if (spacomm->grid->node_size>1) {
+    //     int tmp_compression_flag = compression_flag;
+    //     MPI_Allreduce(&tmp_compression_flag, &compression_flag, 1, MPI_INT, MPI_LOR, spacomm->grid->node_comm);
+    // }
+
     while (true)
     {
 
@@ -92,7 +98,8 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         if (compression_flag)
         {
             CUDA_TIMER_START(compression_time, stream)
-            compressed = spacomm->Compress(csx, target, compression_buffers, stream);
+            // NOTE: here communicator is provided just for debug prints
+            compressed = spacomm->Compress(csx, target, compression_buffers, stream, spacomm->grid->node_comm);
             CUDA_TIMER_STOP(compression_time)
             CUDA_CHECK(cudaStreamSynchronize(stream));
         }

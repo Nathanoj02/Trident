@@ -178,8 +178,8 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
         ASSERT(Acsc->ncols == Bnode_rows, "In 3D mask cols of A must be equal to rows of Bnode");
         ASSERT(grid->row_size == grid->col_size, "The outer 2D grid must be a square");
     }
-    ASSERT((Acsc->ncols % MASK_SIZE) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
-    ASSERT((Bcsr->nrows % MASK_SIZE) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
+    ASSERT((Acsc->ncols % MASK_SIZE) == 0, "The columns of A (%d) must divide the bit in a world of the bitmask (i.e. 8 bit)", Acsc->ncols);
+    ASSERT((Bcsr->nrows % MASK_SIZE) == 0, "The rows of B (%d) must divide the bit in a world of the bitmask (i.e. 8 bit)", Bcsr->nrows);
 
     int Acols = Acsc->ncols;
     int Brows = Bcsr->nrows;
@@ -228,12 +228,11 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
         B_mask_size = Bnode_mask_size; // Update B_mask_size
         CUDA_CHECK(cudaFree(tmp_A_map));
         CUDA_CHECK(cudaFree(tmp_B_map));
-
-        ASSERT(A_mask_size == B_mask_size, "In 3D mask, the resulting B_mask_size must be equal to the A_mask_size (%d,%d)", A_mask_size, B_mask_size);
     } else {
         A_map = tmp_A_map;
         B_map = tmp_B_map;
     }
+    ASSERT(A_mask_size == B_mask_size, "The resulting B_mask_size must be equal to the A_mask_size (%d,%d)", A_mask_size, B_mask_size);
 
 #ifdef DEBUG_SPCOMM
     MPI_Barrier(MPI_COMM_WORLD);
@@ -930,12 +929,18 @@ struct SpaCommHandler
 
     }
 
-    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number, SpaCommBuffers<IT,VT>* buffs, cudaStream_t stream = 0) {
+    mmio::CSX<IT,VT>* Compress (const mmio::CSX<IT,VT> *M, int iteration_number, SpaCommBuffers<IT,VT>* buffs, cudaStream_t stream = 0, MPI_Comm comm=MPI_COMM_WORLD) {
 
         ASSERT(iteration_number < nfilters, "ERROR: provided an invalid iteration number");
         mmio::MajorDim layout = M->majordim;
 
         buffs->tmp_buff.stream = &stream;
+
+        // NOTE: just for debug, to remove
+        // MPI_COMMUNICATOR_PRINT(comm,
+        //     char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
+        //     fprintf(fp, "[%c] Entered in compression function for iterartion %d\n", matchar, iteration_number);
+        // )
 
         // Set-up parameters according to A or B operand
         int ptr_size;
@@ -955,7 +960,7 @@ struct SpaCommHandler
         char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
         BMASK_TYPE *h_mask = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*considered_mask_len);
         CHECK_CUDA(cudaMemcpy(h_mask, mask, sizeof(BMASK_TYPE) * considered_mask_len, cudaMemcpyDeviceToHost));
-        MPI_ALL_PRINT(
+        MPI_COMMUNICATOR_PRINT( comm,
             fprintf(fp, "Entered in compression with iterid %d\n", iteration_number);
             fprintf(fp, "Matrix %c has mask: ", matchar);
             SpaComm::printBit_left2right(h_mask, considered_mask_len, fp);
@@ -964,6 +969,12 @@ struct SpaCommHandler
         free(h_mask);
 #endif
         ASSERT((ptr_size-1) == considered_mask_len*MASK_SIZE, "ptr_size-1 must be equal to considered_mask_len*MASK_SIZE (%d,%d)", ptr_size-1, considered_mask_len*MASK_SIZE);
+
+        // NOTE: just for debug, to remove
+        // MPI_COMMUNICATOR_PRINT(comm,
+        //     char matchar = (layout == mmio::MajorDim::ROWS) ? ('B') : ('A') ;
+        //     fprintf(fp, "[%c] considered_mask_len: %d, ptr_size: %d\n", matchar, considered_mask_len, ptr_size);
+        // )
 
         // Compute compressed value vector
         // NOTE: This one has to happen first, since the others can move
@@ -1010,9 +1021,10 @@ struct SpaCommHandler
             fprintf(stderr, "M->nnz: %d, M->val: %p, M->idx: %p", M->nnz, M->val, M->idx_vec);
 
             BMASK_TYPE *tmp;
-            CUDA_CHECK(cudaMalloc(&tmp, sizeof(BMASK_TYPE)*considered_mask_len));
-            CUDA_CHECK(cudaMemcpy(tmp, mask, sizeof(BMASK_TYPE)*considered_mask_len, cudaMemcpyDeviceToHost));
+            tmp = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*considered_mask_len);
+            CUDA_CHECK(cudaMemcpy(tmp, mask, sizeof(BMASK_TYPE)*considered_mask_len, cudaMemcpyDefault));
             SpaComm::printBit_left2right(tmp, considered_mask_len, stderr);
+            free(tmp);
             MPI_Abort(grid->world_comm, __LINE__);
         }
 
