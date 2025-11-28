@@ -18,6 +18,7 @@ struct config
     const char * impl_str;
     Implementation impl;
     bool skip_spgemm;
+    bool verbose;
     bool spcomm;
     bool Acsc;
     bool mem_efficient;
@@ -73,9 +74,10 @@ char* extract_matrix_name(const char* filepath)
 void parse_args(int argc, char ** argv, Config * config)
 {
     config->skip_spgemm = false;
-    config->spcomm = false;
-    config->Acsc = false;
-    config->impl_str = "none";
+    config->verbose     = false;
+    config->spcomm      = false;
+    config->Acsc        = false;
+    config->impl_str  = "none";
     config->nprocrows = 1;
     config->nproccols = 1;
     config->mem_efficient = false;
@@ -114,6 +116,11 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--skip-spgemm"))
         {
             config->skip_spgemm = true;
+            inc = 1;
+        }
+        else if (!strcmp(argname, "--verbose"))
+        {
+            config->verbose = true;
             inc = 1;
         }
         else if (!strcmp(argname, "--impl"))
