@@ -331,9 +331,10 @@ mmio::CSX<IT, VT>* gen_syntetic_matrix(SynteticMatrixSeed seed, dmmio::ProcessGr
     vec_ptr[0] = 0;
     IT nnz = 0;
 
-    for (int i=0; i<nrows; i++) {
-        if (empty_row_condition(i)) {
-            int grp_i = (grid->node_rank)*scale_factor + i;
+    int iter_dim = (layout == mmio::MajorDim::ROWS) ? nrows : ncols ;
+    for (int i=0; i<iter_dim; i++) {
+        int grp_i = (grid->node_rank)*scale_factor + i;
+        if (empty_row_condition(grp_i)) {
             IT row_nnz = (grp_i<(ncols/2)) ? (grp_i+1) : (ncols-grp_i);
             vec_ptr[i+1] = vec_ptr[i] + row_nnz;
             nnz += row_nnz;
@@ -656,11 +657,13 @@ int main(int argc, char ** argv) {
     simulated_spgemm:
     {
         if (world_rank==0) std::cout << "-------------------- Simulation part --------------------" << std::endl; fflush(stdout);
+        dmmio::utils::ProcessGrid_graph(grid, stdout);
+
         // Simulated inputs
-        int scale_factor = 16;
+        int scale_factor = 16/(grid->node_size);
         SynteticMatrixSeed Aseed = static_cast<SynteticMatrixSeed>( grid->col_rank%2);
         SynteticMatrixSeed Bseed = static_cast<SynteticMatrixSeed>((grid->row_rank%3) + 2);
-        mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(Aseed, grid, scale_factor, mmio::MajorDim::COLS);
+        mmio::CSX<int,float> *A_csx = gen_syntetic_matrix<int,float>(Aseed, grid, scale_factor, mmio::MajorDim::COLS, true);
         mmio::CSX<int,float> *B_csx = gen_syntetic_matrix<int,float>(Bseed, grid, scale_factor, mmio::MajorDim::ROWS);
 
         MPI_Barrier(MPI_COMM_WORLD);
@@ -668,7 +671,7 @@ int main(int argc, char ** argv) {
         MPI_Barrier(MPI_COMM_WORLD);
         sleep(1);
 
-        if (config->verbose) {
+        if (config->verbose > 1) {
             mmio::CSX<int,float> *h_A_csx = cpmat_d2h(A_csx);
             mmio::CSX<int,float> *h_B_csx = cpmat_d2h(B_csx);
             MPI_Barrier(MPI_COMM_WORLD);
@@ -695,8 +698,8 @@ int main(int argc, char ** argv) {
             {
                 printf("----- Repetition %d out of %d -----\n", repetition, NREP);
             }
-            sleep(1);
             MPI_Barrier(MPI_COMM_WORLD);
+            sleep(1);
 
             int common_grid_size = grid->row_size; // This must be equal to kwd_B->...->col_size
             const int n_iters = common_grid_size;
@@ -730,6 +733,7 @@ int main(int argc, char ** argv) {
 
                 if ( config->verbose ) {
                     MPI_ALL_PRINT(
+                        fprintf(fp, "Aseed: %s, Bseed: %s\n", to_string(Aseed), to_string(Bseed));
                         fprintf(fp, "Filters %d: (%d,%d)\n", k, checkA, checkB);
                         SpaComm::printBit_left2right(Afilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedA);
                         SpaComm::printBit_left2right(Bfilter, mask_size, fp); fprintf(fp, " exp %d\n", expectedB);
@@ -740,6 +744,8 @@ int main(int argc, char ** argv) {
             }
             MPI_Allreduce(&output_check, &global_check, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
             if (world_rank==0) { if(global_check) fprintf(stdout, "Check passed\n"); else fprintf(stderr, "ERROR on check\n"); }
+
+            MPI_Abort(MPI_COMM_WORLD, __LINE__);
             // ------------------------------
 
             SpaComm::SpaCommBuffers<int32_t, float> *buffA = new SpaComm::SpaCommBuffers<int32_t, float>(A_csx);
@@ -748,7 +754,6 @@ int main(int argc, char ** argv) {
             // Main loop
             for (int iter = 0; iter < n_iters; iter++)
             {
-
                 if (grid->global_rank == 0)
                 {
                     std::cout<<"--- Iteration " << iter << " ---" << std::endl;

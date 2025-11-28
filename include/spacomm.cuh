@@ -93,7 +93,7 @@ BMASK_TYPE* gen_bitmask(const IT* ptr_d, int n, int mask_size) {
     CUDA_CHECK(cudaFree(d_temp_storage));
 
     BMASK_TYPE* result_bytes;
-    cudaMalloc(&result_bytes, sizeof(BMASK_TYPE) * num_segments);
+    CUDA_CHECK(cudaMalloc(&result_bytes, sizeof(BMASK_TYPE) * num_segments));
 
 // --------------------------
 // NOTE: I don't know why but the device cast not works, if someone is able to fix it I will offer him/her/it a beer
@@ -165,33 +165,100 @@ struct LogicAnd {
 template<typename IT, typename VT>
 int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGrid *grid,
                 BMASK_TYPE** col_filters, BMASK_TYPE** row_filters) {
+
+    int Bnode_rows;
     ASSERT(Acsc->majordim==mmio::MajorDim::COLS, "A must be a CSC");
     ASSERT(Bcsr->majordim==mmio::MajorDim::ROWS, "B must be a CSR");
-    ASSERT(Acsc->ncols == Bcsr->nrows, "In 2D mask cols of A must be equal to rows of B");
-    ASSERT(grid->row_size == grid->col_size, "The 2D grid must be a square");
-    ASSERT(grid->node_size == 1, "The spcomm 2D do not support node size > 1");
+    // ASSERT(grid->node_size == 1, "The spcomm 2D do not support node size > 1");
+    if (grid->node_size == 1) {
+        ASSERT(Acsc->ncols == Bcsr->nrows, "In 2D mask cols of A must be equal to rows of B");
+        ASSERT(grid->row_size == grid->col_size, "The 2D grid must be a square");
+    } else {
+        MPI_Allreduce(&(Bcsr->nrows), &Bnode_rows, 1, MPI_INT, MPI_SUM, grid->node_comm);
+        ASSERT(Acsc->ncols == Bnode_rows, "In 3D mask cols of A must be equal to rows of Bnode");
+        ASSERT(grid->row_size == grid->col_size, "The outer 2D grid must be a square");
+    }
     ASSERT((Acsc->ncols % 8) == 0, "The columns of A must divide the bit in a world of the bitmask (i.e. 8 bit)");
     ASSERT((Bcsr->ncols % 8) == 0, "The rows of B must divide the bit in a world of the bitmask (i.e. 8 bit)");
 
-    int k = Acsc->ncols;
-    int mask_size = ((k%MASK_SIZE)==0) ? (k/MASK_SIZE) : ((k/MASK_SIZE)+1) ;
-    BMASK_TYPE *A_map = SpaComm::gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
-    BMASK_TYPE *B_map = SpaComm::gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
+    int Acols = Acsc->ncols;
+    int Brows = Bcsr->nrows;
+    int A_mask_size = ((Acols%MASK_SIZE)==0) ? (Acols/MASK_SIZE) : ((Acols/MASK_SIZE)+1) ;
+    int B_mask_size = ((Brows%MASK_SIZE)==0) ? (Brows/MASK_SIZE) : ((Brows/MASK_SIZE)+1) ;
+    BMASK_TYPE *A_map, *tmp_A_map = SpaComm::gen_bitmask(Acsc->ptr_vec, Acsc->ncols, MASK_SIZE);
+    BMASK_TYPE *B_map, *tmp_B_map = SpaComm::gen_bitmask(Bcsr->ptr_vec, Bcsr->nrows, MASK_SIZE);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Local bitmasks computed " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
+
+    if (grid->node_size > 1) {
+        int Bnode_mask_size = ((Bnode_rows%MASK_SIZE)==0) ? (Bnode_rows/MASK_SIZE) : ((Bnode_rows/MASK_SIZE)+1) ;
+        CUDA_CHECK(cudaMalloc(&A_map, sizeof(BMASK_TYPE)*A_mask_size));
+        CUDA_CHECK(cudaMalloc(&B_map, sizeof(BMASK_TYPE)*Bnode_mask_size));
+        MPI_Allreduce(tmp_A_map, A_map, A_mask_size, MPI_BMASK_TYPE, MPI_BOR, grid->node_comm);
+        MPI_Allgather(tmp_B_map, B_mask_size, MPI_BMASK_TYPE, B_map, B_mask_size, MPI_BMASK_TYPE, grid->node_comm);
+
+        {
+            // Just to debug
+            BMASK_TYPE *h_tmp_A_map = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * A_mask_size);
+            BMASK_TYPE *h_tmp_B_map = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * B_mask_size);
+            BMASK_TYPE *h_A_map     = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * A_mask_size);
+            BMASK_TYPE *h_B_map     = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE) * Bnode_mask_size);
+            CHECK_CUDA(cudaMemcpy(h_tmp_A_map, tmp_A_map, sizeof(BMASK_TYPE) * A_mask_size,     cudaMemcpyDefault));
+            CHECK_CUDA(cudaMemcpy(h_tmp_B_map, tmp_B_map, sizeof(BMASK_TYPE) * B_mask_size,     cudaMemcpyDefault));
+            CHECK_CUDA(cudaMemcpy(h_A_map,     A_map,     sizeof(BMASK_TYPE) * A_mask_size,     cudaMemcpyDefault));
+            CHECK_CUDA(cudaMemcpy(h_B_map,     B_map,     sizeof(BMASK_TYPE) * Bnode_mask_size, cudaMemcpyDefault));
+            MPI_ALL_PRINT(
+                fprintf(fp, "%20s: ", "tmp_A_map");
+                printBit_left2right(h_tmp_A_map, A_mask_size,     fp); fprintf(fp, "\n%20s: ", "A_map");
+                printBit_left2right(h_A_map,     A_mask_size,     fp); fprintf(fp, "\n%20s: ", "tmp_B_map");
+                printBit_left2right(h_tmp_B_map, B_mask_size,     fp); fprintf(fp, "\n%20s: ", "B_map");
+                printBit_left2right(h_B_map,     Bnode_mask_size, fp); fprintf(fp, "\n");
+            )
+        }
+
+        B_mask_size = Bnode_mask_size; // Update B_mask_size
+        CUDA_CHECK(cudaFree(tmp_A_map));
+        CUDA_CHECK(cudaFree(tmp_B_map));
+
+        ASSERT(A_mask_size == B_mask_size, "In 3D mask, the resulting B_mask_size must be equal to the A_mask_size (%d,%d)", A_mask_size, B_mask_size);
+    } else {
+        A_map = tmp_A_map;
+        B_map = tmp_B_map;
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Group bitmasks computed " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
 
     // ---------- Ghatering all the required maps ----------
     BMASK_TYPE *recv_A_maps;
-    CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
-    MPI_Allgather(A_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_A_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
+    CUDA_CHECK( cudaMalloc(&recv_A_maps, sizeof(BMASK_TYPE)*A_mask_size*(grid->row_size)) );
+    MPI_Allgather(A_map, sizeof(BMASK_TYPE)*A_mask_size, MPI_BYTE, recv_A_maps, sizeof(BMASK_TYPE)*A_mask_size, MPI_BYTE, grid->row_comm);
 
     BMASK_TYPE *recv_B_maps;
-    CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
-    MPI_Allgather(B_map, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, recv_B_maps, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
+    CUDA_CHECK( cudaMalloc(&recv_B_maps, sizeof(BMASK_TYPE)*B_mask_size*(grid->col_size)) );
+    MPI_Allgather(B_map, sizeof(BMASK_TYPE)*B_mask_size, MPI_BYTE, recv_B_maps, sizeof(BMASK_TYPE)*B_mask_size, MPI_BYTE, grid->col_comm);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Bitmasks communicated " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
 
     // ---------- Performing the mask intersection ----------
     // since mapsizes are equal, we can comput all the intersections togheter
+    int mask_size = A_mask_size; // A_mask_size is equal to B_mask_size
     BMASK_TYPE *all_intersections = SpaComm::intersect_bitmasks(recv_A_maps, recv_B_maps, mask_size * grid->row_size); // grid->row_size == grid->col_size
 
-    // ---------- Alltoall data sisplacement back ----------
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Intersection performed " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
+
+    // ---------- Alltoall data displacement back ----------
     // *col_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->row_size));
     CUDA_CHECK( cudaMalloc(col_filters, sizeof(BMASK_TYPE)*mask_size*(grid->row_size)) );
     MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *col_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->row_comm);
@@ -199,6 +266,11 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     // *row_filters = (BMASK_TYPE*)malloc(sizeof(BMASK_TYPE)*mask_size*(grid->col_size));
     CUDA_CHECK( cudaMalloc(row_filters, sizeof(BMASK_TYPE)*mask_size*(grid->col_size)) );
     MPI_Alltoall(all_intersections, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, *row_filters, sizeof(BMASK_TYPE)*mask_size, MPI_BYTE, grid->col_comm);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Bitmasks dispached back " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
 
 #ifdef DEBUG_SPCOMM
     {
@@ -257,6 +329,11 @@ int spcomm_2D (mmio::CSX<IT,VT> *Acsc, mmio::CSX<IT,VT> *Bcsr, dmmio::ProcessGri
     CUDA_CHECK(cudaFree(recv_B_maps));
     CUDA_CHECK(cudaFree(A_map));
     CUDA_CHECK(cudaFree(B_map));
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (grid->global_rank==0) std::cout << "Buffers freed " << __func__ << std::endl; fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    sleep(1);
 
     return(mask_size);
 }
@@ -806,9 +883,10 @@ struct SpaCommHandler
 
     SpaCommHandler(mmio::CSX<IT,VT>* csx_A, mmio::CSX<IT,VT>* csx_B, dmmio::ProcessGrid* input_grid)
     {
-
+        IT node_rows;
+        MPI_Allreduce(&(csx_B->nrows), &node_rows, 1, MPI_INT, MPI_SUM, input_grid->node_comm); // BUG: MPI type is hard-coded
         ASSERT(input_grid->row_size == input_grid->col_size, "Process grid must be squared");
-        ASSERT(csx_A->ncols == csx_B->nrows, "A cols must be equal to B rows");
+        ASSERT(csx_A->ncols == node_rows, "A cols must be equal to B node-rows (%d, %d)", csx_A->ncols, node_rows);
 
         grid     = input_grid;
         nfilters = input_grid->row_size;
@@ -890,16 +968,16 @@ struct SpaCommHandler
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
-            print_d_arr(M->idx_vec, M->nnz,       "Old idx: ");
-            print_d_arr(new_idx,    num_selected, "New idx: ");
+            print_d_arr(M->idx_vec, M->nnz,                      "Old idx: ");
+            print_d_arr(buffs->compressed_indices, num_selected, "New idx: ");
         }
 #endif
 
 
 #ifdef DEBUG_COMPRESSION
         if (grid->global_rank==0 && layout == mmio::MajorDim::COLS) {
-            print_d_arr(M->val,  M->nnz,           "Old val: ");
-            print_d_arr(new_val, num_selected_val, "New val: ");
+            print_d_arr(M->val,  M->nnz,                            "Old val: ");
+            print_d_arr(buffs->compressed_values, num_selected_val, "New val: ");
         }
 #endif
 

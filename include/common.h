@@ -56,6 +56,7 @@
 #define COMP_THRESHOLD 0
 
 #define BMASK_TYPE uint8_t
+#define MPI_BMASK_TYPE MPI_UINT8_T
 #define MASK_SIZE 8   // set to 8 in production
 
 extern FILE * logfile;
