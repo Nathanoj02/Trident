@@ -32,7 +32,6 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
  *
  * ///////////////////////////////////////// */
 
-
 template <typename IT, typename VT>
 void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, mmio::CSX<IT, VT> * csx, 
                           const Implementation impl, SpaComm::SpaCommHandler<IT,VT>* spacomm, int dev_id, 
@@ -292,7 +291,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
-        break;
         // Pop local tasks
         LocalSpGEMMTask * task = queue.pop_local_task(iter); 
 
@@ -308,16 +306,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
                           gather_buffs
             );
 
+
             LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
+
 
             queue.inc_n_complete();
         }
 
         // force some workstealing
-        //if (iter >= (int)sqrt(n_iters)) 
-        //{
-        //    break;
-        //}
+        if (iter >= (int)sqrt(n_iters)) 
+        {
+            break;
+        }
 
         delete task;
 
@@ -330,7 +330,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     while (ntasks_done < queue.ntasks)
     {
 
-
         //if (skipws) break;
 
         // Grab a random task
@@ -341,7 +340,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
         if (task->owner != -1)
         {
             
-            print_rkn("Got task, %d\n", ntasks_done);
+            //print_rkn("Got task, %d\n", ntasks_done);
 
             // Local SpGEMM
             LocalMatrix<IT, IT, VT> C_prod = task->execute(
@@ -370,18 +369,20 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
         ntasks_done = queue.check_n_complete();
     }
 
-    print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), C_remote_holder.current_nnz);
+    //print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), C_remote_holder.current_nnz);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
+    C_remote_holder.set_csx_ptrs();
+    mmio::CSX<IT,VT> * C_remote_csx = C_remote_holder.form_mmiocsx(dist_A->getLocalNrows(), dist_B->getLocalNcols(), 
+                                                                   *(C_remote_holder.current_nnz), 
+                                                                   mmio::MajorDim::ROWS);
+
     // Final aggregation
-    LocalMatrix<IT,IT,VT> C_remote(C_remote_holder.form_mmiocsx(dist_A->getLocalNrows(), dist_B->getLocalNcols(), 
-                                                                C_remote_holder.current_nnz, 
-                                                                mmio::MajorDim::ROWS));
+    LocalMatrix<IT,IT,VT> C_remote(C_remote_csx);
     
     if (C_p.initialized)
     {
-        print_rkn("added\n");
         LocalMatrix<IT,IT,VT>::spadd(C_remote, C_p);
     }
     else

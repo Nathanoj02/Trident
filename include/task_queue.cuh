@@ -168,6 +168,7 @@ struct TaskQueue
 {
     int ntasks;
     int local_ntasks;
+    int start_task_idx;
     int * ncomplete;
     Task * tasks;
     int * claimed;
@@ -185,7 +186,7 @@ struct TaskQueue
     TaskQueue(dmmio::ProcessGrid * grid, int row_rank, int col_rank):
         ntasks(grid->global_size * grid->row_size), local_ntasks(grid->row_size), 
         tasks(new Task[grid->row_size]), claimed(new int[grid->row_size]),
-        grid(grid)
+        grid(grid), start_task_idx(grid->global_rank / grid->node_size)
     {
         // Initialize my tasks
         // TODO: This is not general
@@ -251,7 +252,7 @@ struct TaskQueue
         int offset;
         if (is_coordinator())
         {
-            target_rank = get_random_coordinator();
+            target_rank = start_task_idx;
             offset = rand() % grid->row_size;
 
             // Draw a reasonable amount of trials until I find one I haven't seen before
@@ -262,12 +263,12 @@ struct TaskQueue
                 {
                     break;
                 }
-                target_rank = get_random_coordinator();
-                offset = rand() % grid->row_size;
+                target_rank = (target_rank + 1) % grid->global_size;
+                offset = (offset + 1) % grid->row_size;
             }
         }
 
-        int payload[2] = {target_rank, offset};
+        int payload[2] = {grid->node_size * (target_rank / grid->node_size), offset};
         MPI_Bcast(payload, 2, MPI_INT, coordinator_rank, grid->node_comm);
 
         target_rank = payload[0];
@@ -280,7 +281,7 @@ struct TaskQueue
 
     Task * pop_local_task(int offset)
     {
-        return pop_task(grid->global_rank, offset);
+        return pop_task((grid->global_rank / grid->node_size) * grid->node_size, offset);
     }
 
 
@@ -289,6 +290,7 @@ struct TaskQueue
     {
         assert(rank < grid->global_size);
         assert(offset < grid->row_size);
+        assert(is_coordinator(rank));
 
 
         Task * result;

@@ -25,7 +25,7 @@ struct TileHolder
         ptr_size = _ptr_size;
         window = _window;
 
-        current_nnz = 0;
+        current_nnz = new uint64_t(0);
 
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -36,13 +36,19 @@ struct TileHolder
         if (window)
         {
             MPI_Win_create(d_buf, d_buf_size, sizeof(char), MPI_INFO_NULL, comm, &buf_win);
-            MPI_Win_create(&current_nnz, sizeof(uint64_t), sizeof(uint64_t), MPI_INFO_NULL, comm, &current_nnz_win);
+            MPI_Win_create(current_nnz, sizeof(uint64_t), sizeof(uint64_t), MPI_INFO_NULL, comm, &current_nnz_win);
         }
 
     }
 
 
     TileHolder(){}
+
+
+    void set_csx_ptrs()
+    {
+        set_csx_ptrs(*current_nnz);
+    }
 
 
     void set_csx_ptrs(const IT nnz)
@@ -311,6 +317,8 @@ struct TileHolder
             landing_zone->ensure(remote_nnz, csx->nrows + 1, csx->ncols);
             get_tile(landing_zone, remote_nnz, csx->nrows, target);
             mmio::CSX<IT, VT> * landing_zone_csx = landing_zone->to_mmio_csx();
+
+
             LocalMatrix remote_C(landing_zone_csx);
             LocalMatrix::spadd(mat, remote_C);
 
@@ -347,6 +355,7 @@ struct TileHolder
                 remote_nnz * sizeof(IT), MPI_CHAR, buf_win);
         MPI_Get(landing_zone->d_node_rowptrs, (remote_nrows + 1) * sizeof(IT), MPI_CHAR, target, remote_nnz * sizeof(VT) + remote_nnz * sizeof(IT), 
                 (remote_nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Win_flush_local(target, buf_win);
     }
 
 
@@ -360,6 +369,7 @@ struct TileHolder
                 csx->nnz * sizeof(IT), MPI_CHAR, buf_win);
         MPI_Put(csx->ptr_vec, (csx->nrows + 1) * sizeof(IT), MPI_CHAR, target, csx->nnz * sizeof(VT) + csx->nnz * sizeof(IT), 
                 (csx->nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Win_flush_local(target, buf_win);
     }
 
 
@@ -372,6 +382,7 @@ struct TileHolder
             MPI_Win_free(&current_nnz_win);
         }
         CUDA_FREE_SAFE(d_buf);
+        delete current_nnz;
     }
 
 
@@ -381,7 +392,7 @@ struct TileHolder
 
     IT ptr_size;
     IT max_nnz;
-    IT current_nnz;
+    uint64_t * current_nnz;
     size_t d_buf_size;
 
     MPI_Comm comm;
