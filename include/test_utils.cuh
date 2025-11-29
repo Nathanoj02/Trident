@@ -21,6 +21,7 @@ struct config
     bool spcomm;
     bool Acsc;
     bool mem_efficient;
+    bool skip_ws;
 
     int nprocrows;
     int nproccols;
@@ -114,6 +115,11 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--skip-spgemm"))
         {
             config->skip_spgemm = true;
+            inc = 1;
+        }
+        else if (!strcmp(argname, "--skip-ws"))
+        {
+            config->skip_ws = true;
             inc = 1;
         }
         else if (!strcmp(argname, "--impl"))

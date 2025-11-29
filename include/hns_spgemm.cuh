@@ -11,8 +11,8 @@
 #include <condition_variable>
 
 #define DEBUG_MAIN 0
-#define DETAILED_TIMERS
-//#define DEBUG_MEM
+//#define DETAILED_TIMERS
+#define DEBUG_MEM
 //#define VERBOSE
 #define KOKKOS
 
@@ -25,7 +25,7 @@ using namespace KokkosWrap;
 #endif
 
 template <typename IT, typename VT>
-DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * kwd_A, DistCusparseCSX<IT, VT> * kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<IT, VT> *spcomm,  bool skipspgemm=false);
+DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * kwd_A, DistCusparseCSX<IT, VT> * kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<IT, VT> *spcomm,  bool skipspgemm=false, bool skipws=false);
 
 
 template <typename IT, typename VT>
@@ -33,4 +33,4 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * kwd_A, DistC
 
 
 template <typename IT, typename VT>
-DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * kwd_A, DistCusparseCSX<IT, VT> * kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<IT, VT> *spcomm,  bool skipspgemm=false);
+DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * kwd_A, DistCusparseCSX<IT, VT> * kwd_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<IT, VT> *spcomm,  bool skipspgemm=false, bool skipws=false);

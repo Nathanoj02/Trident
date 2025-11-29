@@ -19,6 +19,7 @@
 #include <vector>
 #include <algorithm>
 #include <numeric>
+#include <utility>
 #include <thread>
 
 // #define NVTX_PROFILING

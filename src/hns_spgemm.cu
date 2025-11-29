@@ -158,7 +158,7 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                                  const Implementation impl, ThreadPool& pool,
                                                  SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                                 bool skipspgemm)
+                                                 bool skipspgemm, bool skipws)
 {
 
     using LocalSpGEMMTask = LocalSpGEMMTask<IT, VT>;
@@ -209,11 +209,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*1.5, majordim);
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
-    size_t C_remote_size = A_buf_size; //TODO: Tune
+    size_t C_remote_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*20, majordim); //TODO: Tune
 
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
     TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm);
-    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), (IT)A_max_nnz*1.5, grid->world_comm, true);
+    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), (uint64_t)A_max_nnz*20, grid->world_comm, true);
 
 
     // Temporary allgather buffers
@@ -224,7 +224,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
 
     // Temporary buffers to hold remote in-progress aggregated tiles of C
-    CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>(A_max_nnz * 1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+    CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>((uint64_t)A_max_nnz * 20, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, false);
 
 
 
@@ -232,14 +232,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     LocalMatrix<IT, IT, VT> C_p;
 
 #ifdef DEBUG_MEM
-    par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_prod_buffs: %zu MB\n, \tC_local_buffs: %zu MB\n, \tC_accum_buffs: %zu MB\n",
+    par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tC_remote_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_remote_buffs: %zu MB\n",
     A_holder.d_buf_size/(1<<20),
     B_holder.d_buf_size/(1<<20),
+    C_remote_holder.d_buf_size/(1<<20),
     gather_buffs->total_size()/(1<<20),
     conversion_buffs->total_size()/(1<<20),
-    C_prod_buffs->total_size()/(1<<20),
-    C_local_buffs->total_size()/(1<<20),
-    C_accum_buffs->total_size()/(1<<20));
+    C_remote_buffs->total_size()/(1<<20));
     print_gpu_mem(true);
 #endif
 
@@ -261,11 +260,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     auto A_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(A_queue), std::ref(A_holder), A_loc, 
                             impl, spcomm, dev_id, 
-                            grid->row_rank, std::ref(mpi_mutex), 0);
+                            grid->global_rank, std::ref(mpi_mutex), 0);
     auto B_comm_thread = pool.enqueue(comm_thread_loop_csx<IT, VT>,
                             std::ref(B_queue), std::ref(B_holder), B_loc, 
                             impl, spcomm, dev_id, 
-                            grid->col_rank, std::ref(mpi_mutex), 1);
+                            grid->global_rank, std::ref(mpi_mutex), 1);
 
 
     // Row and column rank 
@@ -293,10 +292,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
+        break;
         // Pop local tasks
         LocalSpGEMMTask * task = queue.pop_local_task(iter); 
 
-        if (task != nullptr)
+        if (task->owner != -1)
         {
             LocalMatrix<IT, IT, VT> C_prod = task->execute(
                           dist_A, dist_B, 
@@ -309,27 +309,40 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
             );
 
             LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
-            delete task;
 
             queue.inc_n_complete();
         }
 
+        // force some workstealing
+        //if (iter >= (int)sqrt(n_iters)) 
+        //{
+        //    break;
+        //}
+
+        delete task;
+
     }
 
 
+    // TODO: Spawn separate thread to merge as soon as all of mine are done
     // Begin workstealing
     int ntasks_done = queue.check_n_complete();
     while (ntasks_done < queue.ntasks)
     {
+
+
+        //if (skipws) break;
 
         // Grab a random task
         LocalSpGEMMTask * task = queue.pop_random_task();
 
         
         // If task is valid
-        if (task != nullptr)
+        if (task->owner != -1)
         {
             
+            print_rkn("Got task, %d\n", ntasks_done);
+
             // Local SpGEMM
             LocalMatrix<IT, IT, VT> C_prod = task->execute(
                           dist_A, dist_B, 
@@ -350,9 +363,30 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
             queue.inc_n_complete();
         }
 
+        delete task;
+
 
         // Update local completed task count
         ntasks_done = queue.check_n_complete();
+    }
+
+    print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), C_remote_holder.current_nnz);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Final aggregation
+    LocalMatrix<IT,IT,VT> C_remote(C_remote_holder.form_mmiocsx(dist_A->getLocalNrows(), dist_B->getLocalNcols(), 
+                                                                C_remote_holder.current_nnz, 
+                                                                mmio::MajorDim::ROWS));
+    
+    if (C_p.initialized)
+    {
+        print_rkn("added\n");
+        LocalMatrix<IT,IT,VT>::spadd(C_remote, C_p);
+    }
+    else
+    {
+        C_p = C_remote;
     }
 
 
@@ -360,15 +394,15 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     CPU_TIMER_STOP(spgemm);
 
 
-#ifdef DETAILED_TIMERS
-    char tmpstr[100];
-    sprintf(tmpstr, "[process %d]", grid->global_rank);
-    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
-    fflush(stdout);
-#endif
+//#ifdef DETAILED_TIMERS
+//    char tmpstr[100];
+//    sprintf(tmpstr, "[process %d]", grid->global_rank);
+//    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+//    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+//    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
+//    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
+//    fflush(stdout);
+//#endif
 
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -850,7 +884,7 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                          const Implementation impl, ThreadPool& pool,
                                          SpaComm::SpaCommHandler<IT, VT> *spcomm, 
-                                         bool skipspgemm)
+                                         bool skipspgemm, bool skipws)
 {
 
     DistCusparseCSX<IT, VT> * C;
@@ -860,7 +894,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
             C = hns_spgemm_async(dist_A, dist_B, impl, pool, spcomm, skipspgemm);
             break;
         case Implementation::WORKSTEALING:
-            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm);
+            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm, skipws);
             break;
         default:
             assert(false && "Unreachable\n");
@@ -870,6 +904,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     return nullptr;
 }
 
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false, bool skipws=false);
 template DistCusparseCSX<int32_t,float> *  hns_spgemm_async(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false, bool skipws=false);

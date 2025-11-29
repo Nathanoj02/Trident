@@ -89,9 +89,8 @@ void print_rkn(dmmio::ProcessGrid * grid, const char * msg, Args... args)
 template <typename... Args>
 void print_rkn(int rank, const char * msg, Args... args)
 {
-    fprintf(stdout, "\n" GREEN "Process %d --- " RESET, rank);
+    fprintf(stdout, GREEN "Process %d --- " RESET, rank);
     fprintf(stdout, msg, args...);
-    fprintf(stdout, "\n");
     FLUSH_WAIT(500000);
 }
 
@@ -876,3 +875,16 @@ inline void mutex_MPI_Wintest(MPI_Win win, std::mutex& mpi_mutex) {
         MPI_Win_test(win, &ready);
     }
 }
+
+
+
+struct PairHash {
+    template <class T1, class T2>
+    std::size_t operator()(std::pair<T1, T2> const& p) const noexcept {
+        std::size_t h1 = std::hash<T1>()(p.first);
+        std::size_t h2 = std::hash<T2>()(p.second);
+        // A common hash combine trick:
+        return h1 ^ (h2 + 0x9e3779b97f4a7c15ull + (h1 << 6) + (h1 >> 2));
+    }
+};
+

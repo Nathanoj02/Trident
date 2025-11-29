@@ -209,7 +209,7 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm);
+            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm, config->skip_ws);
             MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef NVTX_PROFILING

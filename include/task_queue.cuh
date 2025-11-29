@@ -3,6 +3,8 @@
 #include "KokkosWrap.hpp"
 #include "cusparse_helpers.cuh"
 
+#include <unordered_set>
+
 using namespace KokkosWrap;
 
 template <typename IT, typename VT>
@@ -27,6 +29,8 @@ struct LocalSpGEMMTask
         col_rank_A(-1),
         row_rank_B(-1),
         col_rank_B(-1),
+        owner(-1),
+        iter(-1),
         MPI_TASK(MPIType<LocalSpGEMMTask<IT, VT>>())
     {}
 
@@ -34,7 +38,7 @@ struct LocalSpGEMMTask
 
     inline int ranks_to_global(dmmio::ProcessGrid * grid, int row_rank, int col_rank)
     {
-        return (row_rank) * (grid->node_size * grid->col_size) + (col_rank * grid->node_size) + grid->node_rank;
+        return (col_rank) * (grid->node_size * grid->row_size) + (row_rank * grid->node_size) + grid->node_rank;
     }
 
 
@@ -65,6 +69,7 @@ struct LocalSpGEMMTask
         int A_rank = ranks_to_global_A(grid);
         int B_rank = ranks_to_global_B(grid);
 
+
         // Ask for remote tile
         A_queue.notify(&(grid->global_rank), A_rank, iter);
         B_queue.notify(&(grid->global_rank), B_rank, iter);
@@ -91,6 +96,7 @@ struct LocalSpGEMMTask
             A_tile_nnz = A_holder.copy_device_local_csx(A->csx->mat, stream);
         }
 
+
         if (grid->global_rank != B_rank && B_tile_nnz > 0)
         {
             MPI_Wait(&reqs[1], MPI_STATUS_IGNORE);
@@ -101,6 +107,7 @@ struct LocalSpGEMMTask
         {
             MPI_Wait(&reqs[0], MPI_STATUS_IGNORE);
         }
+
 
         CUDA_SYNC(stream);
 
@@ -123,6 +130,7 @@ struct LocalSpGEMMTask
         // Local partition of C
         LocalMatrix C_p;
 
+        //print_rkn("Doing local spgemm\n");
 
         // Local SpGEMM
         if (A_remote->nnz() > 0 && B_node->nnz() > 0)
@@ -138,6 +146,18 @@ struct LocalSpGEMMTask
         return C_p;
     }
                  
+
+    std::string to_str()
+    {
+        std::stringstream ss;
+        ss << "\tOwner: " << owner << "\n"
+           << "\tRowRankA: " << row_rank_A << "\n"
+           << "\tColRankA: " << col_rank_A << "\n"
+           << "\tRowRankB: " << row_rank_B << "\n"
+           << "\tColRankB: " << col_rank_B << "\n"
+           << "\tIteration: " << iter << "\n";
+        return ss.str();
+    }
 
 
 };
@@ -155,6 +175,8 @@ struct TaskQueue
     MPI_Win task_win;
     MPI_Win claimed_win;
     MPI_Win ncomplete_win;
+
+    std::unordered_set<std::pair<int, int>, PairHash> seen_pairs;
 
     static constexpr int ncomplete_owner = 0;
     static constexpr int coordinator_rank = 0;
@@ -184,10 +206,10 @@ struct TaskQueue
 
 
         // Seed RNG
-        srand( (unsigned)time(NULL) ); 
+        srand( (unsigned)time(NULL) + grid->global_rank ); 
 
 
-        ntasks = local_ntasks * grid->global_size;
+        ntasks = local_ntasks * grid->row_size * grid->col_size;
         ncomplete = new int(0);
 
 
@@ -225,8 +247,32 @@ struct TaskQueue
 
     Task * pop_random_task()
     {
-        int target_rank = get_random_coordinator();
-        int offset = rand() % grid->row_size;
+        int target_rank;
+        int offset;
+        if (is_coordinator())
+        {
+            target_rank = get_random_coordinator();
+            offset = rand() % grid->row_size;
+
+            // Draw a reasonable amount of trials until I find one I haven't seen before
+            for (int i=0; i<ntasks; i++)
+            {
+                std::pair<int, int> p{target_rank, offset};
+                if (!(seen_pairs.contains(p)))
+                {
+                    break;
+                }
+                target_rank = get_random_coordinator();
+                offset = rand() % grid->row_size;
+            }
+        }
+
+        int payload[2] = {target_rank, offset};
+        MPI_Bcast(payload, 2, MPI_INT, coordinator_rank, grid->node_comm);
+
+        target_rank = payload[0];
+        offset = payload[1];
+
         return pop_task(target_rank, offset);
     }
 
@@ -243,16 +289,21 @@ struct TaskQueue
     {
         assert(rank < grid->global_size);
         assert(offset < grid->row_size);
+
+
         Task * result;
         if (is_coordinator())
         {
+            seen_pairs.emplace(rank, offset);
             result = pop_task_coordinator(rank, offset);
         }
         else
         {
             result = new Task;
         }
-        MPI_Bcast(result, 1, result->MPI_TASK, 0, grid->node_comm);
+
+        MPI_Bcast(result, 1, result->MPI_TASK, coordinator_rank, grid->node_comm);
+        result->owner += (result->owner == -1) ? 0 : grid->node_rank;
         return result;
     }
 
@@ -263,6 +314,8 @@ struct TaskQueue
 
         assert(is_coordinator(rank));
 
+        Task * task = new Task;
+
         // Claim a task, if no one else already has
         MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, claimed_win);
         int negone = -1;
@@ -272,13 +325,12 @@ struct TaskQueue
 
         if (result != -1)
         {
-            return nullptr;
+            return task;
         }
 
 
         // Get the task
         MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, task_win);
-        Task * task = new Task;
         MPI_Get(task, 1, task->MPI_TASK, rank, offset, 1, task->MPI_TASK, task_win);
         MPI_Win_unlock(rank, task_win);
 
@@ -292,10 +344,13 @@ struct TaskQueue
     void inc_n_complete()
     {
         // Increment global complete task count
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, ncomplete_owner, 0, ncomplete_win);
-        int one = 1;
-        MPI_Accumulate(&one, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, MPI_SUM, ncomplete_win);
-        MPI_Win_unlock(ncomplete_owner, ncomplete_win);
+        if (is_coordinator())
+        {
+            MPI_Win_lock(MPI_LOCK_EXCLUSIVE, ncomplete_owner, 0, ncomplete_win);
+            int one = 1;
+            MPI_Accumulate(&one, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, MPI_SUM, ncomplete_win);
+            MPI_Win_unlock(ncomplete_owner, ncomplete_win);
+        }
     }
 
 
@@ -303,9 +358,13 @@ struct TaskQueue
     int check_n_complete()
     {
         int result;
-        MPI_Win_lock(MPI_LOCK_SHARED, ncomplete_owner, MPI_MODE_NOCHECK, ncomplete_win);
-        MPI_Get(&result, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, ncomplete_win);
-        MPI_Win_unlock(ncomplete_owner, ncomplete_win);
+        if (is_coordinator())
+        {
+            MPI_Win_lock(MPI_LOCK_EXCLUSIVE, ncomplete_owner, 0, ncomplete_win);
+            MPI_Get(&result, 1, MPI_INT, ncomplete_owner, 0, 1, MPI_INT, ncomplete_win);
+            MPI_Win_unlock(ncomplete_owner, ncomplete_win);
+        }
+        MPI_Bcast(&result, 1, MPI_INT, coordinator_rank, grid->node_comm);
         return result;
     }
 

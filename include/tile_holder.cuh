@@ -17,6 +17,8 @@ struct TileHolder
 
     TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm, const bool _window=false)
     {
+        static_assert(sizeof(IT) == sizeof(VT));
+
         d_buf_size = _buf_size;
         comm = _comm;
         max_nnz  = nnz_size;
@@ -34,7 +36,7 @@ struct TileHolder
         if (window)
         {
             MPI_Win_create(d_buf, d_buf_size, sizeof(char), MPI_INFO_NULL, comm, &buf_win);
-            MPI_Win_create(&current_nnz, sizeof(int), sizeof(int), MPI_INFO_NULL, comm, &current_nnz_win);
+            MPI_Win_create(&current_nnz, sizeof(uint64_t), sizeof(uint64_t), MPI_INFO_NULL, comm, &current_nnz_win);
         }
 
     }
@@ -282,45 +284,69 @@ struct TileHolder
 
 
         // NNZ in remote tile
-        IT remote_nnz;
-        MPI_Get(&remote_nnz, 1, MPIType<IT>(), target, 0, 1, MPIType<IT>(), current_nnz_win);
+        uint64_t remote_nnz;
+        MPI_Get(&remote_nnz, 1, MPI_UINT64_T, target, 0, 1, MPI_UINT64_T, current_nnz_win);
         MPI_Win_flush_local(target, current_nnz_win);
 
 
+        // TODO: memory pool?
         // Simple, just put the product onto the tile window without aggregation
         if (remote_nnz == 0)
         {
-            MPI_Accumulate(&(csx->nnz), 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, current_nnz_win);
+
+            if (csx->nnz >= max_nnz)
+            {
+                std::cerr << RED << csx->nnz << ">" << max_nnz << RESET << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+
+            uint64_t accum_nnz = (uint64_t)csx->nnz;
+            MPI_Accumulate(&(accum_nnz), 1, MPI_UINT64_T, target, 0, 1, MPI_UINT64_T, MPI_REPLACE, current_nnz_win);
             put_tile(csx, target);
+
+        }
+        else
+        {
+            // Aggregate locally 
+            landing_zone->ensure(remote_nnz, csx->nrows + 1, csx->ncols);
+            get_tile(landing_zone, remote_nnz, csx->nrows, target);
+            mmio::CSX<IT, VT> * landing_zone_csx = landing_zone->to_mmio_csx();
+            LocalMatrix remote_C(landing_zone_csx);
+            LocalMatrix::spadd(mat, remote_C);
+
+
+            mmio::CSX<IT,VT> * agg_csx = rawptr_get(remote_C);
+
+            if (agg_csx->nnz >= max_nnz)
+            {
+                std::cerr << agg_csx->nnz << ">" << max_nnz << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+
+
+            // Put aggregated remote tile back
+            uint64_t agg_nnz = agg_csx->nnz;
+            MPI_Accumulate(&(agg_nnz), 1, MPI_UINT64_T, target, 0, 1, MPI_UINT64_T, MPI_REPLACE, current_nnz_win);
+            put_tile(agg_csx, target);
         }
 
-
-        // Aggregate locally 
-        landing_zone->ensure_async(remote_nnz, csx->nrows + 1, csx->ncols);
-        get_tile(landing_zone, remote_nnz, csx->nrows, target);
-        mmio::CSX<IT, VT> * landing_zone_csx = landing_zone->to_mmio_csx();
-        LocalMatrix remote_C(landing_zone_csx);
-        LocalMatrix::spadd(mat, remote_C);
-
-
-        // Put aggregated remote tile back
-        MPI_Accumulate(&(landing_zone_csx->nnz), 1, MPI_INT32_T, target, 0, 1, MPI_INT32_T, MPI_REPLACE, current_nnz_win);
-        put_tile(landing_zone_csx, target);
-
-
         // Cleanup
-        MPI_Win_unlock(current_nnz_win, target);
-        MPI_Win_unlock(buf_win, target);
+        MPI_Win_unlock(target, current_nnz_win);
+        MPI_Win_unlock(target, buf_win);
     }
 
 
 
-    void get_tile(CsxBuffers<IT,VT> * landing_zone, const IT remote_nnz, const IT remote_nrows, const int target)
+    void get_tile(CsxBuffers<IT,VT> * landing_zone, const uint64_t remote_nnz, const IT remote_nrows, const int target)
     {
         assert(window);
-        MPI_Get(landing_zone->d_node_vals, remote_nnz, MPIType<VT>(), target, 0, remote_nnz, MPIType<VT>(), buf_win);
-        MPI_Get(landing_zone->d_node_colinds, remote_nnz, MPIType<IT>(), target, remote_nnz, remote_nnz, MPIType<IT>(), buf_win);
-        MPI_Get(landing_zone->d_node_rowptrs, remote_nrows + 1, MPIType<IT>(), target, remote_nnz * 2, remote_nrows+1, MPIType<IT>(), buf_win);
+
+        MPI_Get(landing_zone->d_node_vals, remote_nnz * sizeof(VT), MPI_CHAR, target, 0, 
+                remote_nnz * sizeof(VT), MPI_CHAR, buf_win);
+        MPI_Get(landing_zone->d_node_colinds, remote_nnz * sizeof(IT) , MPI_CHAR, target, remote_nnz * sizeof(VT), 
+                remote_nnz * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Get(landing_zone->d_node_rowptrs, (remote_nrows + 1) * sizeof(IT), MPI_CHAR, target, remote_nnz * sizeof(VT) + remote_nnz * sizeof(IT), 
+                (remote_nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
     }
 
 
@@ -328,9 +354,12 @@ struct TileHolder
     void put_tile(mmio::CSX<IT, VT> * csx, const int target)
     {
         assert(window);
-        MPI_Put(csx->val, csx->nnz, MPIType<VT>(), target, 0, csx->nnz, MPIType<VT>(), buf_win);
-        MPI_Put(csx->idx_vec, csx->nnz, MPIType<IT>(), target, csx->nnz, csx->nnz, MPIType<IT>(), buf_win);
-        MPI_Put(csx->ptr_vec, csx->nrows + 1, MPIType<IT>(), target, csx->nnz + csx->nnz, csx->nrows + 1, MPIType<IT>(), buf_win);
+        MPI_Put(csx->val, csx->nnz * sizeof(VT), MPI_CHAR, target, 0, 
+                csx->nnz * sizeof(VT), MPI_CHAR, buf_win);
+        MPI_Put(csx->idx_vec, csx->nnz * sizeof(IT), MPI_CHAR, target, csx->nnz * sizeof(VT), 
+                csx->nnz * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Put(csx->ptr_vec, (csx->nrows + 1) * sizeof(IT), MPI_CHAR, target, csx->nnz * sizeof(VT) + csx->nnz * sizeof(IT), 
+                (csx->nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
     }
 
 

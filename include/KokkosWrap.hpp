@@ -73,17 +73,8 @@ namespace KokkosWrap {
         void freeBuffers();
         ~LocalMatrix();
     };
-/*
-    // These two function are exposed temporary for the test_kokkos C matrix
-    template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr);
 
-    template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CcsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csc);
 
-    template<typename KIT, typename VT>
-    mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr);
-*/
     template <typename IT, typename VT>
     struct Triple
     {
@@ -91,6 +82,7 @@ namespace KokkosWrap {
         IT col;
         VT val;
     };
+
 
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr) {
@@ -383,11 +375,11 @@ namespace KokkosWrap {
         result.initialized = true;
 
 
-        int rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        char tmpstr[100];
-        sprintf(tmpstr, "[process %d]", rank);
-        TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
+        //int rank;
+        //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        //char tmpstr[100];
+        //sprintf(tmpstr, "[process %d]", rank);
+        //TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
 
         return result;
     }
@@ -396,6 +388,14 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::spadd(const LocalMatrix& A, LocalMatrix& C) 
     {
+        if (!C.initialized)
+        {
+            C.storage = A.storage;
+            C.initialized = true;
+            return;
+        }
+            
+
         // Create KokkosKernelHandle
         using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
             KIT, KIT, VT,
@@ -416,6 +416,7 @@ namespace KokkosWrap {
         kh.destroy_spadd_handle();
 
         C.storage = accumulator;
+        C.initialized = true;
         CUDA_TIMER_STOP(spadd_time);
     }
 
