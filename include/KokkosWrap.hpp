@@ -388,6 +388,12 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::spadd(const LocalMatrix& A, LocalMatrix& C) 
     {
+
+        if (A.storage.nnz() == 0)
+        {
+            return;
+        }
+
         if (!C.initialized)
         {
             C.storage = A.storage;

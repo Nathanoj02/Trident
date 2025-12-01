@@ -80,6 +80,7 @@ void parse_args(int argc, char ** argv, Config * config)
     config->nprocrows = 1;
     config->nproccols = 1;
     config->mem_efficient = false;
+    config->skip_ws = false;
 
     int inc = 2;
     for (int i=1; i<argc; i+=inc)

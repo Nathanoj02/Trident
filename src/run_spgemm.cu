@@ -77,9 +77,17 @@ int main(int argc, char ** argv)
       std::cout << "Number of processes per row: "  << nprocrows     << std::endl;
       std::cout << "Number of processes per col: "  << nproccols     << std::endl;
       std::cout << "Number of processes per node: " << nprocpergroup << std::endl;
-      std::cout << "Chosen implementation: " << config->impl_str << "(main use MPI_Put)" << std::endl;
+      std::cout << "Chosen implementation: " << config->impl_str <<  std::endl;
       std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
+    }
+
+    if (config->skip_ws)
+    {
+        if (world_rank == 0)
+        {
+            std::cout << "Workstealing skipped" << std::endl;
+        }
     }
 
     // Checks on the input params

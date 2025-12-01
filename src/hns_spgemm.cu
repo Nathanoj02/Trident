@@ -208,11 +208,12 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*1.5, majordim);
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
-    size_t C_remote_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*20, majordim); //TODO: Tune
+    size_t C_remote_size = 1e9 * 6; //TODO: Tune
+    size_t C_remote_nnz = (C_remote_size - (sizeof(IT) * (dist_A->getLocalNrows() + 1))) / (sizeof(VT) * sizeof(IT));
 
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
     TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm);
-    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), (uint64_t)A_max_nnz*20, grid->world_comm, true);
+    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), C_remote_nnz, grid->world_comm, true);
 
 
     // Temporary allgather buffers
@@ -223,7 +224,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
 
     // Temporary buffers to hold remote in-progress aggregated tiles of C
-    CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>((uint64_t)A_max_nnz * 20, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, false);
+    CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>((uint64_t)A_max_nnz * 1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, false);
 
 
 
@@ -292,7 +293,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     for (int iter = 0; iter < n_iters; iter++)
     {
         // Pop local tasks
-        LocalSpGEMMTask * task = queue.pop_local_task(iter); 
+        LocalSpGEMMTask * task = queue.pop_local_task(); 
 
         if (task->owner != -1)
         {
@@ -330,17 +331,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     while (ntasks_done < queue.ntasks)
     {
 
-        //if (skipws) break;
+        if (skipws) break;
 
         // Grab a random task
         LocalSpGEMMTask * task = queue.pop_random_task();
 
         
-        // If task is valid
-        if (task->owner != -1)
+        if (task->is_valid())
         {
             
-            //print_rkn("Got task, %d\n", ntasks_done);
+#ifdef DEBUG_WS
+            print_rkn("Got task, %d\n", ntasks_done);
+#endif
 
             // Local SpGEMM
             LocalMatrix<IT, IT, VT> C_prod = task->execute(
@@ -355,7 +357,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
             
             // Aggregate on remote tile
-            C_remote_holder.aggregate_remote_tile(C_prod, task->owner, C_remote_buffs); 
+            if (C_prod.storage.nnz() > 0)
+            {
+                C_remote_holder.aggregate_remote_tile(C_prod, task->owner, C_remote_buffs); 
+            }
 
 
             // Increment completed task count    
@@ -369,7 +374,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
         ntasks_done = queue.check_n_complete();
     }
 
-    //print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), C_remote_holder.current_nnz);
+#ifdef DEBUG_WS
+    print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), *(C_remote_holder.current_nnz));
+#endif
 
     MPI_Barrier(MPI_COMM_WORLD);
 
