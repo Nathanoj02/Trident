@@ -11,6 +11,7 @@
 #include <KokkosSparse_CooMatrix.hpp>
 #include <KokkosSparse_spadd.hpp>
 
+#include "KokkosWrapTriple.hpp"
 
 template <typename IT, typename VT>
 struct KokkosTypes 
@@ -51,7 +52,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix csr_to_kokkos_crs(const IT nrows, const 
 template <typename IT, typename VT>
 typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     // Sort by row
@@ -124,7 +125,7 @@ typename KokkosTypes<IT, VT>::CrsMatrix coo_to_kokkos_crs(mmio::COO<IT, VT> * co
 template <typename IT, typename VT>
 mmio::CSX<IT,VT>* coo_to_row_csx(mmio::COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     // Sort by row
@@ -206,7 +207,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix csc_to_kokkos_ccs(const IT nrows, const 
 template <typename IT, typename VT>
 typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     // Sort by row
@@ -279,7 +280,7 @@ typename KokkosTypes<IT, VT>::CcsMatrix coo_to_kokkos_ccs(mmio::COO<IT, VT> * co
 template <typename IT, typename VT>
 mmio::CSX<IT,VT>* coo_to_col_csx(mmio::COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
     using KokkosCRS = typename KokkosTypes<IT, VT>::CrsMatrix;
 
     // Sort by row

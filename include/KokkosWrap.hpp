@@ -14,6 +14,8 @@
 
 #include <cusparse_v2.h>
 
+
+#include "KokkosWrapTriple.hpp"
 #include "kokkos_helpers.cuh"
 
 
@@ -82,14 +84,7 @@ namespace KokkosWrap {
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(LocalMatrix<KIT, KIT, VT>& kokkos_csr);
 */
-    template <typename IT, typename VT>
-    struct Triple
-    {
-        IT row;
-        IT col;
-        VT val;
-    };
-
+    
     template<typename KIT, typename VT>
     mmio::CSX<KIT, VT>* rawptr_get(KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>& kokkos_csr) {
         auto val_view     = kokkos_csr.values;
