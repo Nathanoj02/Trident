@@ -2,8 +2,72 @@
 #include <Tpetra_CrsMatrix.hpp>
 #include <MatrixMarket_Tpetra.hpp>
 #include <TpetraExt_MatrixMatrix.hpp>
+
 #include <ccutils/timers.h>
+
+//#include <dmmio/dmmio.h>
+//#include <dmmio/dio.h>
+//#include <dmmio/partitioning.h>
+
 #include "unistd.h"
+
+#define MASK_SIZE 8
+
+
+using scalar_t = float; // Tpetra::CrsMatrix<>::scalar_type;
+using matrix_t = Tpetra::CrsMatrix<float, int32_t, long long>;
+using graph_t = Tpetra::CrsGraph<int32_t, long long>;
+using GO = long long;
+using SC = float;
+using LO = int32_t;
+using Teuchos::RCP;
+using Teuchos::rcp;
+using Teuchos::Comm;
+using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
+//using mmio_csr_t = mmio::CSR<int32_t, scalar_t>;
+//using mmio_coo_t = mmio::COO<int32_t, scalar_t>;
+//using mmio_dcoo_t = dmmio::DCOO<int32_t, scalar_t>;
+
+//Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::Comm<int>& comm)
+//{
+//
+//    int np, rank;
+//    rank = comm.getRank();
+//    np = comm.getSize();
+//
+//
+//    mmio_dcoo_t * dcoo = dmmio::DCOO_read(filename, np, rank, np, 1, 1, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, nullptr, MASK_SIZE);
+//
+//    mmio_coo_t * coo = dcoo->coo;
+//    mmio_csr_t * csr = mmio::COO2CSR(coo);
+//
+//    matrix_t mat(
+//
+//    Teuchos::RCP<matrix_t> mat;
+//    
+//}
+
+RCP<matrix_t> read_trilinos(const char * matpath, RCP<const Comm<int>>& comm)
+{
+    // First, is it a pattern matrix?
+    std::ifstream ifs;
+    ifs.open(matpath);
+    std::string banner;
+    std::getline(ifs, banner);
+    if (banner.find("pattern") != std::string::npos)
+    {
+        RCP<graph_t> A_graph = reader_t::readSparseGraphFile(matpath, comm);
+        RCP<matrix_t> A_result = rcp(new matrix_t(A_graph));
+        A_result->fillComplete();
+        A_result->setAllToScalar((SC)1.0);
+        return A_result;
+    }
+
+    return reader_t::readSparseFile(matpath, comm);
+}
+
+
+
 
 // Return a pointer (RCP is like std::shared_ptr) to an output stream.
 // It prints on Process 0 of the given MPI communicator, but ignores
@@ -30,8 +94,9 @@ int main(int narg, char *arg[]) {
     int world_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
     // Get a default communicator:  MPI_COMM_WORLD
-    const Teuchos::RCP<const Teuchos::Comm<int> > comm = Tpetra::getDefaultComm();
+    Teuchos::RCP<const Teuchos::Comm<int> > comm = Tpetra::getDefaultComm();
 
     // Output stream 'out' will ignore output not from Process 0.
     Teuchos::RCP<Teuchos::FancyOStream> pOut = getOutputStream(*comm);
@@ -81,9 +146,9 @@ int main(int narg, char *arg[]) {
     using matrix_t = Tpetra::CrsMatrix<scalar_t>;
     Teuchos::RCP<matrix_t> Amat, Bmat;
     try {
-      using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
-      Amat = reader_t::readSparseFile(filenameA, comm, params);
-      Bmat = reader_t::readSparseFile(filenameB, comm, params);
+      //using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
+      Amat = read_trilinos(filenameA.c_str(), comm);
+      Bmat = read_trilinos(filenameB.c_str(), comm);
     } catch (std::exception &e) {
       out << ":  matrix reading failed " << filenameA << std::endl;
       out << e.what() << std::endl;

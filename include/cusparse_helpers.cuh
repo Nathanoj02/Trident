@@ -12,14 +12,6 @@ using namespace mmio;
 using namespace dmmio;
 
 template <typename IT, typename VT>
-struct Triple
-{
-    IT row;
-    IT col;
-    VT val;
-};
-
-template <typename IT, typename VT>
 CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
 {
     using Tr = Triple<IT, VT>;
@@ -267,20 +259,43 @@ struct CusparseCSX
 
         // Validate rowptrs
         bool rowptrs_valid = true;
+        bool invalid_contig = false;
+        std::string invalid_str;
         for (IT i=0; i<mat->nrows; i++)
         {
             if (i==0)
             {
                 rowptrs_valid = (h_rowptrs[0] == 0);
+                if (!rowptrs_valid)
+                {
+                    invalid_str += "rowptrs[0] = " + std::to_string(h_rowptrs[0]) + ", ";
+                }
             }
+
             rowptrs_valid = (h_rowptrs[i] <= h_rowptrs[i+1]) && rowptrs_valid;
+
+            if (h_rowptrs[i] > h_rowptrs[i+1] && !invalid_contig)
+            {
+                invalid_contig = true;
+                invalid_str += "rowptrs[i] = " + std::to_string(h_rowptrs[i]) + " -- rowptrs[i+1] = " + std::to_string(h_rowptrs[i+1]) + ", ";
+            }
         }
+
         rowptrs_valid = rowptrs_valid && (h_rowptrs[mat->nrows] == mat->nnz);
 
+        if (h_rowptrs[mat->nrows] != mat->nnz)
+        {
+            invalid_str += "rowptrs[m] = " + std::to_string(h_rowptrs[mat->nrows]) + " -- nnz = " + std::to_string(mat->nnz);
+        }
 
 
-        printf("Colinds valid: %d, rowptrs_valid: %d\n", colinds_valid, rowptrs_valid);
-        fflush(stdout);
+        if (!(colinds_valid && rowptrs_valid))
+        {
+            // consistency
+            printf(RED "Colinds valid: %d, rowptrs_valid: %d\n" RESET, colinds_valid, rowptrs_valid);
+            std::cout << invalid_str << std::endl;
+            fflush(stdout);
+        }
 
 
         free(h_colinds);

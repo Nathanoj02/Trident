@@ -16,6 +16,10 @@
 
 int main(int argc, char ** argv)
 {
+#ifdef KOKKOS
+    Kokkos::initialize(argc, argv);
+    {
+#endif
     const char* env = std::getenv("SLURM_LOCALID");
     int slurm_local_id = (env != nullptr) ? std::atoi(env) : 0;
 
@@ -256,4 +260,8 @@ int main(int argc, char ** argv)
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
+#ifdef KOKKOS
+    }
+    Kokkos::finalize();
+#endif
 }

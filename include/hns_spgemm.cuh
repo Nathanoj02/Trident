@@ -2,16 +2,27 @@
 #include "common.h"
 #include "message_queue.cuh"
 #include "tile_holder.cuh"
-#include "cusparse_helpers.cuh"
 #include "mempool.cuh"
+#include "cusparse_helpers.cuh"
 
 #include <ccutils/cuda/cuda_timers.h>
+
 
 #define DEBUG_MAIN 0
 #define DETAILED_TIMERS
 //#define DEBUG_MEM
 //#define VERBOSE
-#define BULK_SYNC
+#define KOKKOS
+
+#ifdef KOKKOS
+#include "KokkosWrap.hpp"
+#endif
+
+#ifdef KOKKOS
+using namespace KokkosWrap;
+#endif
+
+
 
 
 template <typename IT, typename VT>

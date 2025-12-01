@@ -8,14 +8,9 @@
 #include <cstdint>
 #include <memory>
 
-#include <Kokkos_Core.hpp>
-#include <KokkosSparse_CrsMatrix.hpp>
-#include <KokkosSparse_CcsMatrix.hpp>
-#include <KokkosSparse_CooMatrix.hpp>
-#include <KokkosSparse_coo2crs.hpp>
-#include <KokkosSparse_crs2ccs.hpp>
-#include <KokkosSparse_ccs2crs.hpp>
-#include <KokkosSparse_spadd.hpp>
+//#include <KokkosSparse_coo2crs.hpp>
+//#include <KokkosSparse_crs2ccs.hpp>
+//#include <KokkosSparse_ccs2crs.hpp>
 
 #include <cusparse_v2.h>
 
@@ -322,31 +317,35 @@ namespace KokkosWrap {
     : LocalMatrix(csx_gen<DIT, VT>((nrows, ncols, nnz, ptrvec, idxvec, values, layout))) { }
 
     template <typename KIT, typename DIT, typename VT>
-    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) {
+    void LocalMatrix<KIT,DIT,VT>::sp_mma(const LocalMatrix& A, const LocalMatrix& B, LocalMatrix& C) 
+    {
+
+        CUDA_TIMER_DEF(spadd_time);
+        CUDA_TIMER_DEF(spm_time);
 
         // Create KokkosKernelHandle
         using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
-            KokkosKernels::default_size_type, KIT, VT,
+            KIT, KIT, VT,
             Kokkos::DefaultExecutionSpace,
             typename Kokkos::DefaultExecutionSpace::memory_space,
             typename Kokkos::DefaultExecutionSpace::memory_space>;
 
         using csr_matrix_type = typename KokkosSparse::CrsMatrix<VT, KIT, Kokkos::DefaultExecutionSpace, void, KIT>;
-        csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
-        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        // KernelHandle kh;
-        // csr_matrix_type product;
-        // kh.create_spgemm_handle(KokkosSparse::SPGEMMAlgorithm::SPGEMM_CUSPARSE); // or SPGEMM_KK_SPEED, SPGEMM_CUSPARSE, etc.
-        // KokkosSparse::spgemm_symbolic(kh, A.storage, false, B.storage, false, product);
-        // KokkosSparse::spgemm_numeric(kh, A.storage, false, B.storage, false, product);
-        // kh.destroy_spgemm_handle();
 
-        if (C.initialized == false) {
+        CUDA_TIMER_START_DEFAULT(spm_time)
+        csr_matrix_type product = KokkosSparse::spgemm<csr_matrix_type>(A.storage, false, B.storage, false);
+        CUDA_TIMER_STOP(spm_time);
+
+        if (C.initialized == false) 
+        {
             C.storage = product;
             C.initialized = true;
-        } else {
+        } 
+        else 
+        {
             csr_matrix_type accumulator;
 
+            CUDA_TIMER_START_DEFAULT(spadd_time)
             KernelHandle kh;
             kh.create_spadd_handle(false);
 
@@ -355,7 +354,15 @@ namespace KokkosWrap {
             kh.destroy_spadd_handle();
 
             C.storage = accumulator;
+            CUDA_TIMER_STOP(spadd_time);
+
         }
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", rank);
+        TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
     }
 
 

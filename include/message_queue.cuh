@@ -43,6 +43,7 @@ struct MessageQueue
     {
         while (serviced < size)
         {
+            MPI_Win_flush_all(msg_win);
             MPI_Win_sync(msg_win);
             for (int i=0; i<size; i++)
             {

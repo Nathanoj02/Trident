@@ -10,6 +10,8 @@
 #include <assert.h>
 #include <time.h>
 
+#define CUDA_API_PER_THREAD_DEFAULT_STREAM
+
 #include <cstdint>
 #include <memory>
 #include <iostream>
@@ -42,7 +44,6 @@
 
 #include "MPIType.h"
 
-#define CUDA_API_PER_THREAD_DEFAULT_STREAM
 
 #include <mpi.h>
 #include <cuda.h>

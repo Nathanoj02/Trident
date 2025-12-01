@@ -2,6 +2,16 @@
 #include "common.h"
 #include "utils.cuh"
 
+
+#include <Kokkos_Core.hpp>
+#include <KokkosSparse_CrsMatrix.hpp>
+#include <KokkosSparse_CcsMatrix.hpp>
+#include <KokkosSparse_spgemm.hpp>
+#include <KokkosSparse_spadd.hpp>
+#include <KokkosSparse_CooMatrix.hpp>
+#include <KokkosSparse_spadd.hpp>
+
+
 template <typename IT, typename VT>
 struct KokkosTypes 
 {
@@ -15,14 +25,6 @@ struct KokkosTypes
     using UM = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
 };
 
-
-template <typename IT, typename VT>
-struct Triple
-{
-    IT row;
-    IT col;
-    VT val;
-};
 
 // NOTE: we should be able to remove this
 template <typename IT, typename VT>

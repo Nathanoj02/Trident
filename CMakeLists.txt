@@ -16,8 +16,8 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 
 
 # FIND KOKKOS
-#find_package(Kokkos REQUIRED)
-#find_package(KokkosKernels REQUIRED)
+find_package(Kokkos REQUIRED)
+find_package(KokkosKernels REQUIRED)
 
 
 # ADD INCLUDE DIRECTORY
@@ -55,6 +55,7 @@ find_package(OpenMP REQUIRED)
 
 # CUDA FLAGS
 set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
+#set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr")
 
 
 # MAIN HNS_SPGEMM LIBRARY
@@ -65,6 +66,7 @@ target_link_libraries(hns_spgemm PUBLIC
                         MPI::MPI_CXX 
                         dmmio 
                         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                        KokkosKernels::kokkoskernels Kokkos::kokkos
                         Threads::Threads
                         CUDA::cusparse)
 
@@ -77,6 +79,7 @@ macro(add_test name)
                             dmmio 
                             ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
                             hns_spgemm 
+                            KokkosKernels::kokkoskernels Kokkos::kokkos
                             Threads::Threads 
                             CUDA::cusparse)
 endmacro()
@@ -99,6 +102,7 @@ macro(add_src name)
     		MPI::MPI_CXX
     		dmmio
     		ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+            KokkosKernels::kokkoskernels Kokkos::kokkos
     		hns_spgemm
     		Threads::Threads
 		CUDA::cusparse
@@ -135,6 +139,7 @@ macro(add_prof name folder)
         MPI::MPI_CXX
         dmmio
         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+        KokkosKernels::kokkoskernels Kokkos::kokkos
         hns_spgemm
         Threads::Threads
         CUDA::cusparse
@@ -163,7 +168,7 @@ endmacro()
 
 
 # --- PROFILING EXECUTABLES (after all libs are defined!) ---
-add_prof(run_spgemm src)
+#add_prof(run_spgemm src)
 add_prof(test_p2pallgatherv test)
 
 
@@ -172,4 +177,7 @@ option(ENABLE_NVTX_PROFILING "Enable NVTX profiling" OFF)
 if(ENABLE_NVTX_PROFILING)
     target_compile_definitions(hns_spgemm PUBLIC NVTX_PROFILING)
 endif()
+
+
+add_subdirectory(comparison)
 
