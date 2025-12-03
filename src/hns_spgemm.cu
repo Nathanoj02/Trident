@@ -219,13 +219,35 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm, grid->node_comm);
     TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->col_comm, grid->node_comm);
 
-
     // Temporary allgather buffers
     CsxBuffers<IT,VT> * gather_buffs = new CsxBuffers<IT,VT>(B_max_nnz * node_size * 1.2, dist_B->getLocalNrows() * node_size + 1, dist_B->getLocalNcols(), &stream, 1, false);
 
-
     // Temporary csc->csr buffers
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
+
+    // NCCL warmup
+#ifdef NCCL_ALLGATHERV
+    {
+        int *tmp;
+        CUDA_CHECK(cudaMalloc(&tmp, sizeof(int)));
+        char *d_buf_A = A_holder.d_buf;
+        char *d_buf_B = A_holder.d_buf;
+        ncclGroupStart();
+        for (int dest = 0; dest < node_size; dest++) {
+                ncclSend(tmp,     1, ncclInt32, dest, A_holder.ncclNodecomm, 0);
+                ncclSend(d_buf_A, 1, ncclChar,  dest, A_holder.ncclNodecomm, 0);
+                ncclSend(d_buf_B, 1, ncclChar,  dest, B_holder.ncclNodecomm, 0);
+        }
+        for (int src = 0; src < node_size; src++) {
+                ncclRecv(tmp,     1, ncclInt32, src, A_holder.ncclNodecomm, 0);
+                ncclRecv(d_buf_A, 1, ncclChar,  src, A_holder.ncclNodecomm, 0);
+                ncclRecv(d_buf_B, 1, ncclChar,  src, B_holder.ncclNodecomm, 0);
+        }
+        ncclGroupEnd();
+        cudaDeviceSynchronize();
+        CUDA_CHECK(cudaFree(tmp));
+    }
+#endif
 
 
 #ifdef KOKKOS
