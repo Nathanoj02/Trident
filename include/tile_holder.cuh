@@ -10,7 +10,7 @@ template <typename IT, typename VT>
 struct TileHolder
 {
 
-    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm)
+    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm, MPI_Comm _nodecomm=MPI_COMM_NULL)
     {
         d_buf_size = _buf_size;
         comm = _comm;
@@ -22,6 +22,33 @@ struct TileHolder
 
         CUDA_CHECK(cudaMalloc(&d_buf, d_buf_size));
         CUDA_CHECK(cudaMemset(d_buf, 0, d_buf_size));
+
+#ifdef NCCL_ALLGATHERV
+        ncclUniqueId id;
+
+        int mpi_rank, mpi_size;
+        MPI_Comm_rank(_nodecomm, &mpi_rank);
+        MPI_Comm_size(_nodecomm, &mpi_size);
+
+        // Step 1: unique ID created by rank 0
+        if (mpi_rank == 0) {
+            ncclGetUniqueId(&id);
+        }
+
+        // Step 2: send ID to all others using MPI
+        MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, _nodecomm);
+
+        // MPI_ALL_PRINT(
+        //     for (int i = 0; i < NCCL_UNIQUE_ID_BYTES; ++i) {
+        //         fprintf(fp, "%02x", static_cast<unsigned char>(id.internal[i]));
+        //     }
+        // )
+
+        // Step 3: create NCCL communicator
+        ncclCommInitRank(&ncclNodecomm, mpi_size, id, mpi_rank);
+#else
+        ncclNodecomm = nullptr;
+#endif
 
     }
 
@@ -209,7 +236,7 @@ struct TileHolder
 
         // Allgatherv each buffer
         // Values
-#ifndef ALLGATHERV_OFF
+#ifndef MPI_ALLGATHERV_OFF
         MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
                        MPIType<VT>(), grid->node_comm);
@@ -220,6 +247,7 @@ struct TileHolder
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
 #else
+#ifndef NCCL_ALLGATHERV
         MPI_Request *send_request;
         send_request = (MPI_Request*)malloc(sizeof(MPI_Request)*node_size*2);
 
@@ -241,6 +269,19 @@ struct TileHolder
         MPI_Waitall(2*node_size, send_request, MPI_STATUS_IGNORE);
         free(send_request);
         free(recv_request);
+#else
+        ncclGroupStart();
+        for (int dest = 0; dest < node_size; dest++) {
+            ncclSend(d_vals_buf, nnz, NCCLType<VT>(), dest, ncclNodecomm, *stream);
+            ncclSend(d_inds_buf, nnz, NCCLType<IT>(), dest, ncclNodecomm, *stream);
+        }
+        for (int src = 0; src < node_size; src++) {
+            ncclRecv((*d_node_vals)    + displs[src], node_nnz[src], NCCLType<VT>(), src, ncclNodecomm, *stream);
+            ncclRecv((*d_node_colinds) + displs[src], node_nnz[src], NCCLType<IT>(), src, ncclNodecomm, *stream);
+        }
+        ncclGroupEnd();
+        cudaStreamSynchronize(*stream);
+#endif
 #endif
 
         // Rowptrs
@@ -292,6 +333,7 @@ struct TileHolder
     size_t d_buf_size;
 
     MPI_Comm comm;
+    ncclComm_t ncclNodecomm;
     int rank;
     int world_rank;
 
