@@ -209,6 +209,7 @@ struct TileHolder
 
         // Allgatherv each buffer
         // Values
+#ifndef ALLGATHERV_OFF
         MPI_Allgatherv(d_vals_buf, nnz, MPIType<VT>(),
                        *d_node_vals, node_nnz.data(), displs.data(),
                        MPIType<VT>(), grid->node_comm);
@@ -218,6 +219,29 @@ struct TileHolder
         MPI_Allgatherv(d_inds_buf, nnz, MPIType<IT>(),
                        *d_node_colinds, node_nnz.data(), displs.data(),
                        MPIType<IT>(), grid->node_comm);
+#else
+        MPI_Request *send_request;
+        send_request = (MPI_Request*)malloc(sizeof(MPI_Request)*node_size*2);
+
+        #pragma unroll
+        for (int dest=0; dest<node_size; dest++) {
+            MPI_Isend(d_vals_buf, nnz, MPIType<VT>(), dest, 0, grid->node_comm, &(send_request[dest]));
+            MPI_Isend(d_inds_buf, nnz, MPIType<IT>(), dest, 1, grid->node_comm, &(send_request[node_size + dest]));
+        }
+
+        MPI_Request *recv_request;
+        recv_request = (MPI_Request*)malloc(sizeof(MPI_Request)*node_size*2);
+
+        #pragma unroll
+        for (int src=0; src<node_size; src++) {
+            MPI_Irecv((*d_node_vals) + displs[src], node_nnz[src], MPIType<VT>(), src, 0, grid->node_comm, &(recv_request[src]));
+            MPI_Irecv((*d_node_colinds) + displs[src], node_nnz[src], MPIType<IT>(), src, 1, grid->node_comm, &(recv_request[node_size + src]));
+        }
+        MPI_Waitall(2*node_size, recv_request, MPI_STATUS_IGNORE);
+        MPI_Waitall(2*node_size, send_request, MPI_STATUS_IGNORE);
+        free(send_request);
+        free(recv_request);
+#endif
 
         // Rowptrs
         MPI_Allgather(d_ptrs_buf + 1, nrows, MPIType<IT>(),

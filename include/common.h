@@ -55,6 +55,7 @@
 
 // #define COMP_THRESHOLD 1e8
 #define COMP_THRESHOLD 0
+#define ALLGATHERV_OFF
 
 #define BMASK_TYPE uint8_t
 #define MPI_BMASK_TYPE MPI_UINT8_T
