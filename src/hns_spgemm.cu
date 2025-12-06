@@ -280,7 +280,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     CPU_TIMER_DEF(main_loop)
     CPU_TIMER_DEF(ws_loop)
     CPU_TIMER_DEF(tile_agg)
-    CPU_TIMER_DEF(task_queue)
+    CPU_TIMER_DEF(task_queue_checkn)
+    CPU_TIMER_DEF(task_queue_incn)
+    CPU_TIMER_DEF(task_queue_pop)
 
 
     // Build task queue
@@ -297,9 +299,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     for (int iter = 0; iter < n_iters; iter++)
     {
         // Pop local tasks
-        CPU_TIMER_START(task_queue);
+        CPU_TIMER_START(task_queue_pop);
         LocalSpGEMMTask * task = queue.pop_local_task(); 
-        CPU_TIMER_STOP(task_queue);
+        CPU_TIMER_STOP(task_queue_pop);
 
         if (task->owner != -1)
         {
@@ -317,9 +319,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
             LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
 
 
-            CPU_TIMER_START(task_queue);
+            CPU_TIMER_START(task_queue_incn);
             queue.inc_n_complete();
-            CPU_TIMER_STOP(task_queue);
+            CPU_TIMER_STOP(task_queue_incn);
         }
 
         delete task;
@@ -332,18 +334,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // TODO: Spawn separate thread to merge as soon as all of mine are done
     // Begin workstealing
     CPU_TIMER_START(ws_loop);
-    CPU_TIMER_START(task_queue);
+    CPU_TIMER_START(task_queue_checkn);
     int ntasks_done = queue.check_n_complete();
-    CPU_TIMER_STOP(task_queue);
+    CPU_TIMER_STOP(task_queue_checkn);
     while (ntasks_done < queue.ntasks)
     {
 
         if (skipws) break;
 
         // Grab a random task
-        CPU_TIMER_START(task_queue);
+        CPU_TIMER_START(task_queue_pop);
         LocalSpGEMMTask * task = queue.pop_random_task();
-        CPU_TIMER_STOP(task_queue);
+        CPU_TIMER_STOP(task_queue_pop);
 
         
         if (task->is_valid())
@@ -377,18 +379,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
 
             // Increment completed task count    
-            CPU_TIMER_START(task_queue);
+            CPU_TIMER_START(task_queue_incn);
             queue.inc_n_complete();
-            CPU_TIMER_STOP(task_queue);
+            CPU_TIMER_STOP(task_queue_incn);
         }
 
         delete task;
 
 
         // Update local completed task count
-        CPU_TIMER_START(task_queue);
+        CPU_TIMER_START(task_queue_checkn);
         ntasks_done = queue.check_n_complete();
-        CPU_TIMER_STOP(task_queue);
+        CPU_TIMER_STOP(task_queue_checkn);
     }
 
     CPU_TIMER_STOP(ws_loop);
@@ -426,12 +428,12 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 #ifdef DETAILED_TIMERS
     char tmpstr[100];
     sprintf(tmpstr, "[process %d]", grid->global_rank);
-    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
     TIMER_PRINT_WPREFIX_STR(tile_agg, tmpstr)
     TIMER_PRINT_WPREFIX_STR(main_loop, tmpstr)
     TIMER_PRINT_WPREFIX_STR(ws_loop, tmpstr)
-    TIMER_PRINT_WPREFIX_STR(task_queue, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(task_queue_checkn, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(task_queue_incn, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(task_queue_pop, tmpstr)
     fprintf(stdout, "<[process %d]>[nstolen] %d\n", grid->global_rank, nstolen);
     fflush(stdout);
 #endif

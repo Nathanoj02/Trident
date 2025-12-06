@@ -70,6 +70,8 @@ struct LocalSpGEMMTask
                         CsxBuffers<IT, VT>* conversion_buffs,
                         CsxBuffers<IT, VT>* gather_buffs)
     {
+        CPU_TIMER_DEF(wait_for_input)
+        CUDA_TIMER_DEF(intranode_comm)
 
         int A_rank = ranks_to_global_A(grid);
         int B_rank = ranks_to_global_B(grid);
@@ -79,6 +81,8 @@ struct LocalSpGEMMTask
         A_queue.notify(&(grid->global_rank), A_rank, iter);
         B_queue.notify(&(grid->global_rank), B_rank, iter);
 
+
+        CPU_TIMER_START(wait_for_input)
 
         // Receive remote tiles
         IT A_tile_nnz, B_tile_nnz;
@@ -115,6 +119,7 @@ struct LocalSpGEMMTask
 
 
         CUDA_SYNC(stream);
+        CPU_TIMER_STOP(wait_for_input)
 
 
         // Make remote A
@@ -128,8 +133,10 @@ struct LocalSpGEMMTask
 
 
         // Make remote B
+        CUDA_TIMER_START_DEFAULT(intranode_comm)
         CusparseCSX<IT, VT> * B_node = new CusparseCSX<IT, VT>(B_holder.node_allgather_mmiocsx(B->csx->nrows(), B->csx->ncols(), B_tile_nnz, grid, gather_buffs));
         CUDA_SYNC(stream);
+        CUDA_TIMER_STOP(intranode_comm)
 
 
         // Local partition of C
@@ -146,6 +153,11 @@ struct LocalSpGEMMTask
         }
         CUDA_SYNC(stream);
 
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", grid->global_rank);
+        TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+        TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+        fflush(stdout);
 
         // Return result
         return C_p;
@@ -215,11 +227,17 @@ struct TaskQueue
 
         ntasks = local_ntasks * grid->row_size * grid->col_size;
 
+        finished_ranks.reserve(grid->row_size * grid->col_size);
+
 
         // Create MPI Windows 
         MPI_Win_create(tasks, sizeof(Task) * local_ntasks, sizeof(Task), MPI_INFO_NULL, grid->world_comm, &task_win);
         MPI_Win_create(&ncomplete, sizeof(int), sizeof(int), MPI_INFO_NULL, grid->world_comm, &ncomplete_win);
         MPI_Win_create(&local_offset, sizeof(int), sizeof(int), MPI_INFO_NULL, grid->world_comm, &local_offset_win);
+
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, local_offset_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, ncomplete_win);
+        MPI_Win_lock_all(MPI_MODE_NOCHECK, task_win);
 
         MPI_Barrier(grid->world_comm);
     }
@@ -254,7 +272,7 @@ struct TaskQueue
         if (is_coordinator())
         {
             // Try to get a rank that, to my knowledge, is not done
-            for (int i=0; i<grid->global_size; i++)
+            for (int i=0; i<grid->row_size * grid->col_size; i++)
             {
                 target_rank = get_random_coordinator();
                 if (!finished_ranks.contains(target_rank))
@@ -307,11 +325,12 @@ struct TaskQueue
         Task * task = new Task;
 
         // Claim task at the top of rank's queue
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, local_offset_win);
+        //MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, local_offset_win);
         int one = 1;
         int offset;
         MPI_Fetch_and_op(&one, &offset, MPI_INT, rank, 0, MPI_SUM, local_offset_win);
-        MPI_Win_unlock(rank, local_offset_win);
+        MPI_Win_flush_local(rank, local_offset_win);
+        //MPI_Win_unlock(rank, local_offset_win);
 
         
         // If not less than local task count, it's invalid
@@ -328,9 +347,10 @@ struct TaskQueue
 
 
         // Get the task
-        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, task_win);
+        //MPI_Win_lock(MPI_LOCK_SHARED, rank, 0, task_win);
         MPI_Get(task, 1, task->MPI_TASK, rank, offset, 1, task->MPI_TASK, task_win);
-        MPI_Win_unlock(rank, task_win);
+        MPI_Win_flush_local(rank, task_win);
+        //MPI_Win_unlock(rank, task_win);
 
 
         // Done
@@ -344,10 +364,11 @@ struct TaskQueue
         // Increment global complete task count
         if (is_coordinator())
         {
-            MPI_Win_lock(MPI_LOCK_EXCLUSIVE, master_rank, 0, ncomplete_win);
+            //MPI_Win_lock(MPI_LOCK_EXCLUSIVE, master_rank, 0, ncomplete_win);
             int one = 1;
             MPI_Accumulate(&one, 1, MPI_INT, master_rank, 0, 1, MPI_INT, MPI_SUM, ncomplete_win);
-            MPI_Win_unlock(master_rank, ncomplete_win);
+            MPI_Win_flush_local(master_rank, ncomplete_win);
+            //MPI_Win_unlock(master_rank, ncomplete_win);
         }
     }
 
@@ -358,9 +379,10 @@ struct TaskQueue
         int result;
         if (is_coordinator())
         {
-            MPI_Win_lock(MPI_LOCK_EXCLUSIVE, master_rank, 0, ncomplete_win);
+            //MPI_Win_lock(MPI_LOCK_EXCLUSIVE, master_rank, 0, ncomplete_win);
             MPI_Get(&result, 1, MPI_INT, master_rank, 0, 1, MPI_INT, ncomplete_win);
-            MPI_Win_unlock(master_rank, ncomplete_win);
+            MPI_Win_flush_local(master_rank, ncomplete_win);
+            //MPI_Win_unlock(master_rank, ncomplete_win);
         }
         MPI_Bcast(&result, 1, MPI_INT, coordinator_rank, grid->node_comm);
         return result;
@@ -370,6 +392,9 @@ struct TaskQueue
 
     ~TaskQueue()
     {
+        MPI_Win_unlock_all(task_win);
+        MPI_Win_unlock_all(ncomplete_win);
+        MPI_Win_unlock_all(local_offset_win);
         MPI_Win_free(&task_win);
         MPI_Win_free(&ncomplete_win);
         MPI_Win_free(&local_offset_win);

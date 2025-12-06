@@ -9,7 +9,7 @@ GPUS_PER_NODE = 4
 DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
 GROUPS = ( "Fluorem", "Schenk", "LAW" )
 
-SIZES = [15, 15, 15]
+SIZES = [10, 10, 10]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
