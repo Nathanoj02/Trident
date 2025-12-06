@@ -23,3 +23,6 @@ Trilinos/
 *.bmtx
 CMakeCache.txt
 CMakeFiles/
+
+plots_wave4/
+results_wave4/
