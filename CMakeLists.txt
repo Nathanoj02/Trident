@@ -14,11 +14,31 @@ include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 # FIND MPI 
 find_package(MPI REQUIRED COMPONENTS CXX)
 
-
 # FIND KOKKOS
 find_package(Kokkos REQUIRED)
 find_package(KokkosKernels REQUIRED)
 
+set(NCCL_ROOT "/global/common/software/nersc9/nccl/2.24.3")
+
+set(NCCL_INCLUDE_DIR "${NCCL_ROOT}/include")
+set(NCCL_LIBRARY "${NCCL_ROOT}/lib/libnccl.so")
+
+if(NOT EXISTS "${NCCL_INCLUDE_DIR}/nccl.h")
+    message(FATAL_ERROR "NCCL header not found: ${NCCL_INCLUDE_DIR}/nccl.h")
+endif()
+
+if(NOT EXISTS "${NCCL_LIBRARY}")
+    message(FATAL_ERROR "NCCL library not found: ${NCCL_LIBRARY}")
+endif()
+
+message(STATUS "Using NCCL include: ${NCCL_INCLUDE_DIR}")
+message(STATUS "Using NCCL library: ${NCCL_LIBRARY}")
+
+add_library(NCCL::NCCL INTERFACE IMPORTED)
+set_target_properties(NCCL::NCCL PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${NCCL_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES "${NCCL_LIBRARY}"
+)
 
 # ADD INCLUDE DIRECTORY
 include_directories(include)
@@ -68,7 +88,8 @@ target_link_libraries(hns_spgemm PUBLIC
                         ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
                         KokkosKernels::kokkoskernels Kokkos::kokkos
                         Threads::Threads
-                        CUDA::cusparse)
+                        CUDA::cusparse
+			NCCL::NCCL)
 
 
 # MACRO FOR ADDING TESTS
@@ -81,7 +102,8 @@ macro(add_test name)
                             hns_spgemm 
                             KokkosKernels::kokkoskernels Kokkos::kokkos
                             Threads::Threads 
-                            CUDA::cusparse)
+                            CUDA::cusparse
+		    	    NCCL::NCCL)
 endmacro()
 
 
@@ -106,6 +128,7 @@ macro(add_src name)
     		hns_spgemm
     		Threads::Threads
 		CUDA::cusparse
+		NCCL::NCCL
     		${NVTX_LIBRARY}
 	)
     target_compile_options(${name} PRIVATE -O3 -Wall)
@@ -143,6 +166,7 @@ macro(add_prof name folder)
         hns_spgemm
         Threads::Threads
         CUDA::cusparse
+	NCCL::NCCL
         ${NVTX_LIBRARY}
     )
 

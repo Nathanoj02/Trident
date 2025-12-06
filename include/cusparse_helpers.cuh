@@ -6,7 +6,7 @@
 #include <dmmio/dmmio.h>
 #include <dmmio/partitioning.h>
 
-
+#include "KokkosWrapTriple.hpp"
 
 using namespace mmio;
 using namespace dmmio;
@@ -14,7 +14,7 @@ using namespace dmmio;
 template <typename IT, typename VT>
 CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
 
     // Sort by row
     std::vector<Tr> triples(coo->nnz);
@@ -74,7 +74,7 @@ CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
 template <typename IT, typename VT>
 CSX<IT,VT>* coo_to_col_csx_contig(COO<IT, VT> * coo)
 {
-    using Tr = Triple<IT, VT>;
+    using Tr = KokkosWrap::Triple<IT, VT>;
 
     // Sort by row
     std::vector<Tr> triples(coo->nnz);
@@ -605,7 +605,7 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t* handle, CSX<IT, VT> * csc, C
         d_buff = buffers->tmp_buffers[0].tmp_buffer;
     }
 
-    CUSPARSE_CHECK(cusparseCsr2cscEx2(*handle,
+    MPI_CUSPARSE_CHECK(cusparseCsr2cscEx2(*handle,
                                     ncols, nrows,
                                     nnz,
                                     d_vals,

@@ -9,6 +9,18 @@
     }                                                                \
 } while(0)
 
+#define MPI_CUSPARSE_CHECK(call) do {                                    \
+    int inmacro_myid, inmacro_ntask;                                     \
+    MPI_Comm_rank(MPI_COMM_WORLD, &inmacro_myid);                        \
+    MPI_Comm_size(MPI_COMM_WORLD, &inmacro_ntask);                       \
+    cusparseStatus_t err = call;                                     \
+    if (err != CUSPARSE_STATUS_SUCCESS) {                            \
+        fprintf(stderr, "[%d] cuSPARSE error in file '%s' in line %i : %s.\n", \
+                inmacro_myid, __FILE__, __LINE__, cusparseGetErrorString(err));    \
+        exit(EXIT_FAILURE);                                          \
+    }                                                                \
+} while(0)
+
 #define OPSTR(X) ((X == dmmio::Operation::None) ? ("None") : ("Transpose") )
 
 #define CHECK_PTR(PT, IT) {  \
@@ -38,7 +50,7 @@
     }  \
 }
 
-#define CUDA_SYNC(STR) CUDA_CHECK(cudaStreamSynchronize(STR));
+#define CUDA_SYNC(STR) MPI_CUDA_CHECK(cudaStreamSynchronize(STR));
 
 typedef struct {
     int rowidx;
@@ -254,32 +266,33 @@ void print_rk0(const char * msg, Args... args)
 
 
 template<typename IT>
-void move2gpu(IT** ptr, uint64_t size) {
+IT* move2gpu(IT** ptr, uint64_t size, bool freeOrig = true) {
 
     IT *tmp;
     CUDA_CHECK(cudaMalloc(&tmp, sizeof(IT)*size));
     CUDA_CHECK(cudaMemcpy(tmp, *ptr, sizeof(IT)*size, cudaMemcpyHostToDevice));
-    free(*ptr);
-    *ptr = tmp;
+    if (freeOrig) { free(*ptr); }
+    if (freeOrig) { *ptr = tmp; }
+    return(tmp);
 }
 
 
 template<typename IT>
-void move2host(IT** ptr, uint64_t size) {
+IT* move2host(IT** ptr, uint64_t size, bool freeOrig = true) {
 
     IT *tmp = (IT*)malloc(sizeof(IT)*size);
     CUDA_CHECK(cudaMemcpy(tmp, *ptr, sizeof(IT)*size, cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaFree(*ptr));
-    *ptr = tmp;
+    if (freeOrig) { CUDA_CHECK(cudaFree(*ptr)); }
+    if (freeOrig) { *ptr = tmp; }
 }
 
 template<typename IT, typename VT>
-void moveCSX2device (mmio::CSX<IT,VT> *csx) {
+void moveCSX2device (mmio::CSX<IT,VT> *csx, bool freeOrig = true) {
     IT ptrdim = (csx->majordim == mmio::MajorDim::ROWS) ? (csx->ncols+1) : (csx->nrows+1) ;
 
-    move2gpu(&(csx->ptr_vec), ptrdim);
-    move2gpu(&(csx->idx_vec), csx->nnz);
-    move2gpu(&(csx->val), csx->nnz);
+    move2gpu(&(csx->ptr_vec), ptrdim, freeOrig);
+    move2gpu(&(csx->idx_vec), csx->nnz, freeOrig);
+    move2gpu(&(csx->val), csx->nnz, freeOrig);
 }
 
 template<typename IT, typename VT>

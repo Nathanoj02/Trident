@@ -10,6 +10,8 @@
 
 #include <cusparse_v2.h>
 
+
+#include "KokkosWrapTriple.hpp"
 #include "kokkos_helpers.cuh"
 
 

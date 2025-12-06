@@ -55,10 +55,13 @@
 
 #include <cub/cub.cuh>
 
-#define COMP_THRESHOLD 1e8
-//#define COMP_THRESHOLD 1
+// #define COMP_THRESHOLD 1e8
+#define COMP_THRESHOLD 0
+#define MPI_ALLGATHERV_OFF
+#define NCCL_ALLGATHERV
 
 #define BMASK_TYPE uint8_t
+#define MPI_BMASK_TYPE MPI_UINT8_T
 #define MASK_SIZE 8   // set to 8 in production
 
 extern FILE * logfile;
@@ -76,6 +79,31 @@ enum Implementation {
     ASYNC,
     WORKSTEALING
 };
+
+
+#include <nccl.h>
+#include <type_traits>
+
+template <typename T>
+constexpr ncclDataType_t NCCLType() {
+    if constexpr (std::is_same_v<T, int8_t>)  return ncclInt8;
+    else if constexpr (std::is_same_v<T, uint8_t>) return ncclUint8;
+    else if constexpr (std::is_same_v<T, int32_t>) return ncclInt32;
+    else if constexpr (std::is_same_v<T, uint32_t>) return ncclUint32;
+    else if constexpr (std::is_same_v<T, int64_t>) return ncclInt64;
+    else if constexpr (std::is_same_v<T, uint64_t>) return ncclUint64;
+    else if constexpr (std::is_same_v<T, float>) return ncclFloat32;
+    else if constexpr (std::is_same_v<T, double>) return ncclFloat64;
+    else if constexpr (std::is_same_v<T, __half>) return ncclFloat16;
+
+#ifdef __CUDA_BF16_TYPES_EXIST__
+    else if constexpr (std::is_same_v<T, __nv_bfloat16>) return ncclBfloat16;
+#endif
+
+    else {
+        static_assert(!sizeof(T*), "NCCL does not support this datatype.");
+    }
+}
 
 #include "spacomm.cuh"
 

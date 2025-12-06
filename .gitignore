@@ -17,8 +17,12 @@ interactive_results_2/
 small_matrices/
 kokkos/
 kokkos-kernels/
+Trilinos/
 
 *.out
 *.bmtx
 CMakeCache.txt
 CMakeFiles/
+
+plots_wave4/
+results_wave4/
