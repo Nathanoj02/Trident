@@ -566,21 +566,37 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     // NCCL warmup
 #ifdef NCCL_ALLGATHERV
     {
+        A_holder.set_csx_ptrs(A_max_nnz);
+        B_holder.set_csx_ptrs(B_max_nnz);
+
         int *tmp;
         CUDA_CHECK(cudaMalloc(&tmp, sizeof(int)));
-        char *d_buf_A = A_holder.d_buf;
-        char *d_buf_B = A_holder.d_buf;
+        // char *d_buf_A = A_holder.d_buf;
+        // char *d_buf_B = B_holder.d_buf;
+        VT* A_vals_buf = A_holder.d_vals_buf;
+        VT* B_vals_buf = B_holder.d_vals_buf;
+        IT* A_inds_buf = A_holder.d_inds_buf;
+        IT* B_inds_buf = B_holder.d_inds_buf;
+        IT* A_ptrs_buf = A_holder.d_ptrs_buf;
+        IT* B_ptrs_buf = B_holder.d_ptrs_buf;
         ncclGroupStart();
         for (int dest = 0; dest < node_size; dest++) {
-                ncclSend(tmp,     1, ncclInt32, dest, A_holder.ncclNodecomm, 0);
-                ncclSend(d_buf_A, 1, ncclChar,  dest, A_holder.ncclNodecomm, 0);
-                ncclSend(d_buf_B, 1, ncclChar,  dest, B_holder.ncclNodecomm, 0);
+                ncclSend(A_vals_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+                ncclSend(B_vals_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
+                ncclSend(A_inds_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+                ncclSend(B_inds_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
         }
         for (int src = 0; src < node_size; src++) {
-                ncclRecv(tmp,     1, ncclInt32, src, A_holder.ncclNodecomm, 0);
-                ncclRecv(d_buf_A, 1, ncclChar,  src, A_holder.ncclNodecomm, 0);
-                ncclRecv(d_buf_B, 1, ncclChar,  src, B_holder.ncclNodecomm, 0);
+                ncclRecv(A_vals_buf, 1, NCCLType<VT>(),  src, A_holder.ncclNodecomm, 0);
+                ncclRecv(B_vals_buf, 1, NCCLType<VT>(),  src, B_holder.ncclNodecomm, 0);
+                ncclRecv(A_inds_buf, 1, NCCLType<IT>(),  src, A_holder.ncclNodecomm, 0);
+                ncclRecv(B_inds_buf, 1, NCCLType<IT>(),  src, B_holder.ncclNodecomm, 0);
         }
+        ncclGroupEnd();
+
+        ncclGroupStart();
+        ncclAllGather(A_ptrs_buf + 1, A_ptrs_buf + 1, 1, NCCLType<IT>(), A_holder.ncclNodecomm, 0);
+        ncclAllGather(B_ptrs_buf + 1, B_ptrs_buf + 1, 1, NCCLType<IT>(), B_holder.ncclNodecomm, 0);
         ncclGroupEnd();
         cudaDeviceSynchronize();
         CUDA_CHECK(cudaFree(tmp));
