@@ -15,21 +15,18 @@ import matplotlib.pyplot as plt
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RESULTS_DIR = os.path.join(SCRIPT_DIR, '..', 'results_wave4')
 
-# Hatching patterns for HnS configurations
-# (dimension, spcomm) -> hatch pattern
-CONFIG_HATCHES = {
-    ('2D', True): '',       # solid
-    ('2D', False): '///',   # diagonal lines
-    ('3D', True): '...',    # dots
-    ('3D', False): 'xxx',   # crosses
-}
-
-# Colors for configurations
+# Colors for HnS configurations (dimension, spcomm)
 CONFIG_COLORS = {
     ('2D', True): '#4C72B0',    # steel blue
     ('2D', False): '#55A868',   # sage green
     ('3D', True): '#C44E52',    # soft red
     ('3D', False): '#8172B3',   # muted purple
+}
+
+# Hatching patterns for workstealing vs async
+WORKSTEALING_HATCHES = {
+    True: '',       # workstealing: solid
+    False: '///',   # async: diagonal lines
 }
 
 
@@ -49,10 +46,11 @@ def get_dimension_label(grid: str, all_grids_for_ngpus: set[str]) -> str:
     return '2D' if sizes[grid] == max_size else '3D'
 
 
-def get_config_label(dim: str, spcomm: bool) -> str:
+def get_config_label(dim: str, spcomm: bool, workstealing: bool) -> str:
     """Get display label for an HnS configuration."""
     spcomm_str = 'spcomm' if spcomm else 'nospcomm'
-    return f'HnS {dim} {spcomm_str}'
+    sched_str = 'workstealing' if workstealing else 'async'
+    return f'HnS {dim} {spcomm_str} {sched_str}'
 
 
 @dataclass
@@ -64,6 +62,7 @@ class HnsResult:
     matrix: str
     backend: str
     spcomm: bool
+    workstealing: bool
     # Overall spgemm runtimes (one per round, excluding round 0)
     spgemm_times_ms: list[float] = field(default_factory=list)
     # Per-phase timings: {phase_name: {process_rank: [sum values per round]}}
@@ -89,7 +88,7 @@ def parse_hns_filename(filename: str) -> Optional[dict]:
     """
     basename = os.path.basename(filename)
     # hns_strong_16_4x4_mouse_gene_kokkos_spcomm.out
-    pattern = r'hns_strong_(\d+)_(\d+x\d+)_(.+)_(\w+)_(spcomm|nospcomm)\.out'
+    pattern = r'hns_strong_(\d+)_(\d+x\d+)_(.+)_(\w+)_(spcomm|nospcomm)_(workstealing|async)\.out'
     match = re.match(pattern, basename)
     if not match:
         return None
@@ -99,6 +98,7 @@ def parse_hns_filename(filename: str) -> Optional[dict]:
         'matrix': match.group(3),
         'backend': match.group(4),
         'spcomm': match.group(5) == 'spcomm',
+        'workstealing': match.group(6) == 'workstealing'
     }
 
 
@@ -131,6 +131,7 @@ def parse_hns_file(filepath: str) -> Optional[HnsResult]:
         matrix=meta['matrix'],
         backend=meta['backend'],
         spcomm=meta['spcomm'],
+        workstealing=meta['workstealing'],
     )
 
     with open(filepath, 'r') as f:
@@ -163,7 +164,7 @@ def parse_hns_file(filepath: str) -> Optional[HnsResult]:
     # <[process P]>[phase_name] ...,sum=X.X (summary format)
     phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(\w+)\].*sum=([\d.]+)')
     # <[process P]>[phase_name] X.X ms (single value format, for spm_time, spadd_time)
-    single_phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(spm_time|spadd_time)\]\s+([\d.]+)\s+ms')
+    single_phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(spm_time|spadd_time|wait_for_input|intranode_comm)\]\s+([\d.]+)\s+ms')
     # <[p P, ...]> ... XXXXX B, YYYYY B, ... (capture second B value)
     internode_pattern = re.compile(r'<\[p\s+(\d+),.*?\]>.*?\d+\s+B,\s*(\d+)\s+B')
 
@@ -260,6 +261,34 @@ def parse_trilinos_file(filepath: str) -> Optional[TrilinosResult]:
     return result
 
 
+def filter_hns_results(
+    results: list[HnsResult],
+    spcomm_filter: str = 'all',
+    scheduling_filter: str = 'all'
+) -> list[HnsResult]:
+    """Filter HnS results based on spcomm and scheduling mode.
+
+    Args:
+        results: List of HnsResult objects
+        spcomm_filter: 'all', 'spcomm', or 'nospcomm'
+        scheduling_filter: 'all', 'workstealing', or 'async'
+
+    Returns:
+        Filtered list of HnsResult objects
+    """
+    filtered = results
+
+    if spcomm_filter != 'all':
+        spcomm_value = (spcomm_filter == 'spcomm')
+        filtered = [r for r in filtered if r.spcomm == spcomm_value]
+
+    if scheduling_filter != 'all':
+        workstealing_value = (scheduling_filter == 'workstealing')
+        filtered = [r for r in filtered if r.workstealing == workstealing_value]
+
+    return filtered
+
+
 def load_all_results(results_dir: str = DEFAULT_RESULTS_DIR) -> tuple[list[HnsResult], list[TrilinosResult]]:
     """Load all results from the given directory."""
     hns_results = []
@@ -316,9 +345,9 @@ def plot_runtime_comparison(
         for r in hns_for_matrix:
             grids_by_ngpus[r.ngpus].add(r.grid)
 
-        # Build data structure: {(dim, spcomm): {ngpus: runtime_ms}}
+        # Build data structure: {(dim, spcomm, workstealing): {ngpus: runtime_ms}}
         # Also track Trilinos separately
-        hns_data: dict[tuple[str, bool], dict[int, float]] = defaultdict(dict)
+        hns_data: dict[tuple[str, bool, bool], dict[int, float]] = defaultdict(dict)
         trilinos_data: dict[int, float] = {}
 
         # Trilinos data
@@ -331,10 +360,15 @@ def plot_runtime_comparison(
             if r.spgemm_times_ms:
                 dim = get_dimension_label(r.grid, grids_by_ngpus[r.ngpus])
                 avg_time = sum(r.spgemm_times_ms) / len(r.spgemm_times_ms)
-                hns_data[(dim, r.spcomm)][r.ngpus] = avg_time
+                hns_data[(dim, r.spcomm, r.workstealing)][r.ngpus] = avg_time
 
         # Define config order: Trilinos first, then HnS configs
-        config_order = [('2D', True), ('2D', False), ('3D', True), ('3D', False)]
+        config_order = [
+            ('2D', True, True), ('2D', True, False),
+            ('2D', False, True), ('2D', False, False),
+            ('3D', True, True), ('3D', True, False),
+            ('3D', False, True), ('3D', False, False)
+        ]
         hns_configs_present = [c for c in config_order if c in hns_data]
 
         # Create the plot
@@ -351,16 +385,36 @@ def plot_runtime_comparison(
         ax.bar(x + offset, values, bar_width, label='Trilinos',
                color='tab:gray', edgecolor='black', linewidth=1)
 
+        # Track which workstealing values we've added to legend
+        legend_added = set()
+
         # Plot HnS bars with hatches
-        for i, (dim, spcomm) in enumerate(hns_configs_present, start=1):
-            gpu_data = hns_data[(dim, spcomm)]
+        for i, (dim, spcomm, workstealing) in enumerate(hns_configs_present, start=1):
+            gpu_data = hns_data[(dim, spcomm, workstealing)]
             values = [gpu_data.get(g, np.nan) for g in gpu_counts]
             offset = (i - n_configs / 2 + 0.5) * bar_width
-            label = get_config_label(dim, spcomm)
-            ax.bar(x + offset, values, bar_width, label=label,
-                   color=CONFIG_COLORS[(dim, spcomm)],
-                   hatch=CONFIG_HATCHES[(dim, spcomm)],
-                   edgecolor='black', linewidth=1)
+
+            # Only add legend label for first occurrence of each workstealing value
+            if workstealing not in legend_added:
+                label = 'Workstealing' if workstealing else 'Async'
+                legend_added.add(workstealing)
+            else:
+                label = None
+
+            bars = ax.bar(x + offset, values, bar_width, label=label,
+                          color=CONFIG_COLORS[(dim, spcomm)],
+                          hatch=WORKSTEALING_HATCHES[workstealing],
+                          edgecolor='black', linewidth=1)
+
+            # Add text labels above bars
+            spcomm_str = 'spcomm' if spcomm else 'nospcomm'
+            bar_label = f'{dim}\n{spcomm_str}'
+            for j, (bar, value) in enumerate(zip(bars, values)):
+                if not np.isnan(value):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           bar_label, ha='center', va='bottom', fontsize=7,
+                           rotation=0)
 
         ax.set_xlabel('Number of GPUs')
         ax.set_ylabel('Runtime (ms)')
@@ -423,12 +477,12 @@ def plot_runtime_breakdown_per_process(
             all_phases.update(r.phase_timings.keys())
         all_phases = sorted([p for p in all_phases if p in PHASE_DISPLAY_NAMES])
 
-        # Build data: {(dim, spcomm): {process: {phase: avg_value}}}
-        data: dict[tuple[str, bool], dict[int, dict[str, float]]] = {}
+        # Build data: {(dim, spcomm, workstealing): {process: {phase: avg_value}}}
+        data: dict[tuple[str, bool, bool], dict[int, dict[str, float]]] = {}
 
         for r in results:
             dim = get_dimension_label(r.grid, all_grids)
-            key = (dim, r.spcomm)
+            key = (dim, r.spcomm, r.workstealing)
             if key not in data:
                 data[key] = defaultdict(dict)
 
@@ -439,7 +493,12 @@ def plot_runtime_breakdown_per_process(
                         data[key][process][phase] = avg_val
 
         # Order configs consistently
-        config_order = [('2D', True), ('2D', False), ('3D', True), ('3D', False)]
+        config_order = [
+            ('2D', True, True), ('2D', True, False),
+            ('2D', False, True), ('2D', False, False),
+            ('3D', True, True), ('3D', True, False),
+            ('3D', False, True), ('3D', False, False)
+        ]
         configs_present = [c for c in config_order if c in data]
 
         # Create the plot
@@ -455,11 +514,11 @@ def plot_runtime_breakdown_per_process(
         phase_colors = plt.cm.tab10.colors
 
         # Plot stacked bars for each configuration
-        for i, (dim, spcomm) in enumerate(configs_present):
-            process_data = data[(dim, spcomm)]
+        for i, (dim, spcomm, workstealing) in enumerate(configs_present):
+            process_data = data[(dim, spcomm, workstealing)]
             offset = (i - n_configs / 2 + 0.5) * bar_width
             bottom = np.zeros(n_processes)
-            hatch = CONFIG_HATCHES[(dim, spcomm)]
+            hatch = WORKSTEALING_HATCHES[workstealing]
 
             for j, phase in enumerate(all_phases):
                 values = []
@@ -487,9 +546,9 @@ def plot_runtime_breakdown_per_process(
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
                         for j, phase in enumerate(all_phases)]
         config_handles = [Patch(facecolor='white', edgecolor='black',
-                                hatch=CONFIG_HATCHES[(dim, spcomm)],
-                                label=get_config_label(dim, spcomm))
-                         for dim, spcomm in configs_present]
+                                hatch=WORKSTEALING_HATCHES[workstealing],
+                                label=get_config_label(dim, spcomm, workstealing))
+                         for dim, spcomm, workstealing in configs_present]
 
         leg1 = ax.legend(handles=phase_handles, title='Phase', loc='upper left')
         ax.add_artist(leg1)
@@ -539,12 +598,12 @@ def plot_runtime_breakdown_overall(
             all_phases.update(r.phase_timings.keys())
         all_phases = sorted([p for p in all_phases if p in PHASE_DISPLAY_NAMES])
 
-        # Build data: {(dim, spcomm): {ngpus: {phase: max_avg_value}}}
-        data: dict[tuple[str, bool], dict[int, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
+        # Build data: {(dim, spcomm, workstealing): {ngpus: {phase: max_avg_value}}}
+        data: dict[tuple[str, bool, bool], dict[int, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
 
         for r in results_for_matrix:
             dim = get_dimension_label(r.grid, grids_by_ngpus[r.ngpus])
-            key = (dim, r.spcomm)
+            key = (dim, r.spcomm, r.workstealing)
 
             for phase in all_phases:
                 if phase in r.phase_timings:
@@ -559,7 +618,12 @@ def plot_runtime_breakdown_overall(
                         data[key][r.ngpus][phase] = max(process_avgs)
 
         # Order configs consistently
-        config_order = [('2D', True), ('2D', False), ('3D', True), ('3D', False)]
+        config_order = [
+            ('2D', True, True), ('2D', True, False),
+            ('2D', False, True), ('2D', False, False),
+            ('3D', True, True), ('3D', True, False),
+            ('3D', False, True), ('3D', False, False)
+        ]
         configs_present = [c for c in config_order if c in data]
 
         # Create the plot
@@ -575,11 +639,11 @@ def plot_runtime_breakdown_overall(
         phase_colors = plt.cm.tab10.colors
 
         # Plot stacked bars for each configuration
-        for i, (dim, spcomm) in enumerate(configs_present):
-            gpu_data = data[(dim, spcomm)]
+        for i, (dim, spcomm, workstealing) in enumerate(configs_present):
+            gpu_data = data[(dim, spcomm, workstealing)]
             offset = (i - n_configs / 2 + 0.5) * bar_width
             bottom = np.zeros(n_gpu_counts)
-            hatch = CONFIG_HATCHES[(dim, spcomm)]
+            hatch = WORKSTEALING_HATCHES[workstealing]
 
             for j, phase in enumerate(all_phases):
                 values = []
@@ -596,24 +660,35 @@ def plot_runtime_breakdown_overall(
                        hatch=hatch, edgecolor='black', linewidth=0.5)
                 bottom += values
 
+            # Add text labels above each stacked bar
+            spcomm_str = 'spcomm' if spcomm else 'nospcomm'
+            bar_label = f'{dim}\n{spcomm_str}'
+            for k, (x_pos, height) in enumerate(zip(x + offset, bottom)):
+                if height > 0:
+                    ax.text(x_pos, height, bar_label,
+                           ha='center', va='bottom', fontsize=7, rotation=0)
+
         ax.set_xlabel('Number of GPUs')
         ax.set_ylabel('Runtime (ms)')
         ax.set_title(f'Overall Runtime Breakdown: {matrix}')
         ax.set_xticks(x)
         ax.set_xticklabels(gpu_counts)
 
-        # Create two legends: one for phases, one for configs (hatches)
+        # Create two legends: one for phases, one for workstealing mode
         phase_handles = [Patch(facecolor=phase_colors[j % len(phase_colors)], edgecolor='black',
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
                         for j, phase in enumerate(all_phases)]
-        config_handles = [Patch(facecolor='white', edgecolor='black',
-                                hatch=CONFIG_HATCHES[(dim, spcomm)],
-                                label=get_config_label(dim, spcomm))
-                         for dim, spcomm in configs_present]
+
+        # Create workstealing legend entries (only unique values)
+        workstealing_values = sorted(set(ws for _, _, ws in configs_present), reverse=True)
+        workstealing_handles = [Patch(facecolor='white', edgecolor='black',
+                                      hatch=WORKSTEALING_HATCHES[ws],
+                                      label='Workstealing' if ws else 'Async')
+                               for ws in workstealing_values]
 
         leg1 = ax.legend(handles=phase_handles, title='Phase', loc='upper left')
         ax.add_artist(leg1)
-        ax.legend(handles=config_handles, title='Config', loc='upper right')
+        ax.legend(handles=workstealing_handles, title='Scheduling', loc='upper right')
 
         ax.grid(axis='y', linestyle='--', alpha=0.7)
 
@@ -652,12 +727,12 @@ def plot_comm_volume_per_process(
         if not all_processes:
             continue
 
-        # Build data: {(dim, spcomm): {process: avg_bytes}}
-        data: dict[tuple[str, bool], dict[int, float]] = {}
+        # Build data: {(dim, spcomm, workstealing): {process: avg_bytes}}
+        data: dict[tuple[str, bool, bool], dict[int, float]] = {}
 
         for r in results:
             dim = get_dimension_label(r.grid, all_grids)
-            key = (dim, r.spcomm)
+            key = (dim, r.spcomm, r.workstealing)
             if key not in data:
                 data[key] = {}
 
@@ -667,7 +742,12 @@ def plot_comm_volume_per_process(
                     data[key][process] = avg_val
 
         # Order configs consistently
-        config_order = [('2D', True), ('2D', False), ('3D', True), ('3D', False)]
+        config_order = [
+            ('2D', True, True), ('2D', True, False),
+            ('2D', False, True), ('2D', False, False),
+            ('3D', True, True), ('3D', True, False),
+            ('3D', False, True), ('3D', False, False)
+        ]
         configs_present = [c for c in config_order if c in data]
 
         # Create the plot
@@ -680,14 +760,14 @@ def plot_comm_volume_per_process(
         x = np.arange(n_processes)
 
         # Plot bars for each configuration
-        for i, (dim, spcomm) in enumerate(configs_present):
-            process_data = data[(dim, spcomm)]
+        for i, (dim, spcomm, workstealing) in enumerate(configs_present):
+            process_data = data[(dim, spcomm, workstealing)]
             offset = (i - n_configs / 2 + 0.5) * bar_width
             values = [process_data.get(proc, 0.0) for proc in all_processes]
-            label = get_config_label(dim, spcomm)
+            label = get_config_label(dim, spcomm, workstealing)
             ax.bar(x + offset, values, bar_width, label=label,
                    color=CONFIG_COLORS[(dim, spcomm)],
-                   hatch=CONFIG_HATCHES[(dim, spcomm)],
+                   hatch=WORKSTEALING_HATCHES[workstealing],
                    edgecolor='black', linewidth=0.5)
 
         ax.set_xlabel('Process Rank')
@@ -748,6 +828,18 @@ def main():
         default=DEFAULT_RESULTS_DIR,
         help=f'Directory containing result files (default: {DEFAULT_RESULTS_DIR})'
     )
+    parser.add_argument(
+        '--spcomm',
+        choices=['all', 'spcomm', 'nospcomm'],
+        default='all',
+        help='Filter HnS results by spcomm mode (default: all)'
+    )
+    parser.add_argument(
+        '--scheduling',
+        choices=['all', 'workstealing', 'async'],
+        default='all',
+        help='Filter HnS results by scheduling mode (default: all)'
+    )
 
     args = parser.parse_args()
 
@@ -767,6 +859,10 @@ def main():
     print(f"Loading results from {args.results_dir}...")
     hns_results, trilinos_results = load_all_results(args.results_dir)
     print(f"  Loaded {len(hns_results)} HnS results and {len(trilinos_results)} Trilinos results.")
+
+    # Apply filters
+    hns_results = filter_hns_results(hns_results, args.spcomm, args.scheduling)
+    print(f"  After filtering: {len(hns_results)} HnS results (spcomm={args.spcomm}, scheduling={args.scheduling})")
 
     # Determine which plots to generate
     if 'all' in args.plots:

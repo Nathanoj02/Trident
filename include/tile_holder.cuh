@@ -349,12 +349,12 @@ struct TileHolder
     {
         assert(window);
 
-        MPI_Get(landing_zone->d_node_vals, remote_nnz * sizeof(VT), MPI_CHAR, target, 0, 
-                remote_nnz * sizeof(VT), MPI_CHAR, buf_win);
-        MPI_Get(landing_zone->d_node_colinds, remote_nnz * sizeof(IT) , MPI_CHAR, target, remote_nnz * sizeof(VT), 
-                remote_nnz * sizeof(IT), MPI_CHAR, buf_win);
-        MPI_Get(landing_zone->d_node_rowptrs, (remote_nrows + 1) * sizeof(IT), MPI_CHAR, target, remote_nnz * sizeof(VT) + remote_nnz * sizeof(IT), 
-                (remote_nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Get(landing_zone->d_node_vals, remote_nnz * sizeof(VT) / sizeof(int), MPI_INT, target, 0, 
+                remote_nnz * sizeof(VT) / sizeof(int), MPI_INT, buf_win);
+        MPI_Get(landing_zone->d_node_colinds, remote_nnz * sizeof(IT) / sizeof(int), MPI_INT, target, remote_nnz * sizeof(VT), 
+                remote_nnz * sizeof(IT) / sizeof(int), MPI_INT, buf_win);
+        MPI_Get(landing_zone->d_node_rowptrs, (remote_nrows + 1) * sizeof(IT) / sizeof(int), MPI_INT, target, remote_nnz * sizeof(VT) + remote_nnz * sizeof(IT), 
+                (remote_nrows + 1) * sizeof(IT) / sizeof(int), MPI_INT, buf_win);
         MPI_Win_flush_local(target, buf_win);
     }
 
@@ -363,12 +363,12 @@ struct TileHolder
     void put_tile(mmio::CSX<IT, VT> * csx, const int target)
     {
         assert(window);
-        MPI_Put(csx->val, csx->nnz * sizeof(VT), MPI_CHAR, target, 0, 
-                csx->nnz * sizeof(VT), MPI_CHAR, buf_win);
-        MPI_Put(csx->idx_vec, csx->nnz * sizeof(IT), MPI_CHAR, target, csx->nnz * sizeof(VT), 
-                csx->nnz * sizeof(IT), MPI_CHAR, buf_win);
-        MPI_Put(csx->ptr_vec, (csx->nrows + 1) * sizeof(IT), MPI_CHAR, target, csx->nnz * sizeof(VT) + csx->nnz * sizeof(IT), 
-                (csx->nrows + 1) * sizeof(IT), MPI_CHAR, buf_win);
+        MPI_Put(csx->val, csx->nnz * sizeof(VT) / sizeof(int), MPI_INT, target, 0, 
+                csx->nnz * sizeof(VT) / sizeof(int), MPI_INT, buf_win);
+        MPI_Put(csx->idx_vec, csx->nnz * sizeof(IT) / sizeof(int), MPI_INT, target, csx->nnz * sizeof(VT), 
+                csx->nnz * sizeof(IT) / sizeof(int), MPI_INT, buf_win);
+        MPI_Put(csx->ptr_vec, (csx->nrows + 1) * sizeof(IT) / sizeof(int), MPI_INT, target, csx->nnz * sizeof(VT) + csx->nnz * sizeof(IT), 
+                (csx->nrows + 1) * sizeof(IT) / sizeof(int), MPI_INT, buf_win);
         MPI_Win_flush_local(target, buf_win);
     }
 

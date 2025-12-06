@@ -31,9 +31,9 @@ def make_script_hns(nodes):
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
-#SBATCH -C gpu
+#SBATCH -C "gpu&hbm80g"
 #SBATCH -G {GPUS_PER_NODE*nodes}
-#SBATCH -q regular
+#SBATCH -q premium
 #SBATCH -t 1:00:00
 #SBATCH -A m4646_g
     """
