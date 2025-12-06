@@ -64,12 +64,10 @@ int main(int argc, char ** argv)
     } 
     else 
     {
-        // TODO wirite it for other partitionings and check it
         fprintf(stderr, "Partitioning different by Naive are not supported yet.\n");
         MPI_Abort(MPI_COMM_WORLD, __LINE__);
     }
 
-    // Some prints
     if (world_rank == 0)
     {
       std::cout << "A matrix file path: " << config->matpathA << std::endl;
@@ -80,6 +78,7 @@ int main(int argc, char ** argv)
       std::cout << "Chosen implementation: " << config->impl_str <<  std::endl;
       std::cout << "A stored in CSC format: " << config->Acsc << std::endl;
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
+      std::cout << "C_remote_size: " << config->c_remote_size << std::endl;
     }
 
     if (config->skip_ws)
@@ -202,7 +201,8 @@ int main(int argc, char ** argv)
         // Gen thread pool (mostly for profiling)
         ThreadPool pool(2);
 
-        const int niters = 6;
+        //const int niters = 6;
+        const int niters = 3;
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
 
@@ -217,7 +217,7 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->skip_spgemm, config->skip_ws);
+            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
             MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef NVTX_PROFILING

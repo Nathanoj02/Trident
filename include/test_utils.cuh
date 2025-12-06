@@ -22,6 +22,7 @@ struct config
     bool Acsc;
     bool mem_efficient;
     bool skip_ws;
+    size_t c_remote_size;
 
     int nprocrows;
     int nproccols;
@@ -81,6 +82,7 @@ void parse_args(int argc, char ** argv, Config * config)
     config->nproccols = 1;
     config->mem_efficient = false;
     config->skip_ws = false;
+    config->c_remote_size = (1LU << 30) * 6;
 
     int inc = 2;
     for (int i=1; i<argc; i+=inc)
@@ -131,6 +133,10 @@ void parse_args(int argc, char ** argv, Config * config)
         {
             config->mem_efficient = true;
             inc = 1;
+        }
+        else if (!strcmp(argname, "--c-size"))
+        {
+            config->c_remote_size = (1LU << 30) * std::atol(argv[i+1]);
         }
         else if (!strcmp(argname, "--2D-pgrid"))
         {

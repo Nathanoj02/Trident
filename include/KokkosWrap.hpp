@@ -375,11 +375,11 @@ namespace KokkosWrap {
         result.initialized = true;
 
 
-        //int rank;
-        //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        //char tmpstr[100];
-        //sprintf(tmpstr, "[process %d]", rank);
-        //TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", rank);
+        TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
 
         return result;
     }
@@ -388,42 +388,46 @@ namespace KokkosWrap {
     template <typename KIT, typename DIT, typename VT>
     void LocalMatrix<KIT,DIT,VT>::spadd(const LocalMatrix& A, LocalMatrix& C) 
     {
+        CUDA_TIMER_DEF(spadd_time);
+        CUDA_TIMER_START_DEFAULT(spadd_time)
 
         if (A.storage.nnz() == 0)
         {
-            return;
         }
-
-        if (!C.initialized)
+        else if (!C.initialized)
         {
             C.storage = A.storage;
             C.initialized = true;
-            return;
         }
-            
+        else
+        {
+            // Create KokkosKernelHandle
+            using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
+                KIT, KIT, VT,
+                Kokkos::DefaultExecutionSpace,
+                typename Kokkos::DefaultExecutionSpace::memory_space,
+                typename Kokkos::DefaultExecutionSpace::memory_space>;
 
-        // Create KokkosKernelHandle
-        using KernelHandle = KokkosKernels::Experimental::KokkosKernelsHandle<
-            KIT, KIT, VT,
-            Kokkos::DefaultExecutionSpace,
-            typename Kokkos::DefaultExecutionSpace::memory_space,
-            typename Kokkos::DefaultExecutionSpace::memory_space>;
 
-        CUDA_TIMER_DEF(spadd_time);
+            LocalMatrix<KIT, DIT, VT>::KokkosCrs accumulator;
 
-        LocalMatrix<KIT, DIT, VT>::KokkosCrs accumulator;
+            KernelHandle kh;
+            kh.create_spadd_handle(false);
 
-        CUDA_TIMER_START_DEFAULT(spadd_time)
-        KernelHandle kh;
-        kh.create_spadd_handle(false);
+            KokkosSparse::spadd_symbolic(&kh, A.storage, C.storage, accumulator);
+            KokkosSparse::spadd_numeric(&kh, 1.0, A.storage, 1.0, C.storage, accumulator);
+            kh.destroy_spadd_handle();
 
-        KokkosSparse::spadd_symbolic(&kh, A.storage, C.storage, accumulator);
-        KokkosSparse::spadd_numeric(&kh, 1.0, A.storage, 1.0, C.storage, accumulator);
-        kh.destroy_spadd_handle();
+            C.storage = accumulator;
+            C.initialized = true;
+        }
 
-        C.storage = accumulator;
-        C.initialized = true;
         CUDA_TIMER_STOP(spadd_time);
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        char tmpstr[100];
+        sprintf(tmpstr, "[process %d]", rank);
+        TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
     }
 
     // Convert Kokkos CSC matrix to CRS matrix

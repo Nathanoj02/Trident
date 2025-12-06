@@ -4,20 +4,25 @@ import os
 
 GPUS_PER_NODE = 4
 
-DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "cage15", "isolates_subgraph4", "uk-2002", "archaea", "dielFilterV3real")
-GROUPS = ( "Fluorem", "Belcastro", "Schenk", "vanHeukelum", "mcl", "LAW", "mcl", "Dziekonski")
+#DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "cage15", "isolates_subgraph4", "uk-2002", "archaea", "dielFilterV3real")
+#GROUPS = ( "Fluorem", "Belcastro", "Schenk", "vanHeukelum", "mcl", "LAW", "mcl", "Dziekonski")
+DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
+GROUPS = ( "Fluorem", "Schenk", "LAW" )
+
+SIZES = [15, 15, 15]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
 GRIDS=("4x4", "2x2", "8x8", "4x4")
 
+
 GRIDPROCS=("16", "16", "64", "64")
 
-CONFIGURATIONS=("--impl async ", "--impl async --Acsc --spcomm ")
+CONFIGURATIONS=["--impl workstealing"]
 
-CONFIGURATIONS_STR=( "kokkos_nospcomm", "kokkos_spcomm")
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_workstealing"]
 
-RESULTS_DIR = "./results_wave4/"
+RESULTS_DIR = "./results_wave5/"
 
 
 
@@ -50,10 +55,11 @@ def make_script_hns(nodes):
                     outfile = fname + ".out"
                     errfile = fname + ".err"
                     file.write(f"echo 'HnS {mat}, {conf_str}, {grid}'\n")
-                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf}"
+                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf} --c-size {SIZES[k]}"
                     file.write(f"{cmd}\n")
 
     with open(f"./scripts/sbatch_scripts/hns_strong_all_{nodes}.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
         for mat in DATASETS:
             file.write(f"sbatch ./scripts/sbatch_scripts/hns_strong_{mat}_{nodes}.sh\n")
 

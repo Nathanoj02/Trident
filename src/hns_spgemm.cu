@@ -157,6 +157,7 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                                  const Implementation impl, ThreadPool& pool,
                                                  SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                                 size_t C_remote_size,
                                                  bool skipspgemm, bool skipws)
 {
 
@@ -208,7 +209,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Tile holders for A and B -- these are buffers that remote processes will write tiles to
     size_t A_buf_size = CSX_buf_size<IT, VT>(dist_A->getLocalNrows(), dist_A->getLocalNcols(), A_max_nnz*1.5, majordim);
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
-    size_t C_remote_size = 1e9 * 6; //TODO: Tune
     size_t C_remote_nnz = (C_remote_size - (sizeof(IT) * (dist_A->getLocalNrows() + 1))) / (sizeof(VT) * sizeof(IT));
 
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
@@ -272,12 +272,15 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     int* col_rank = new int(grid->col_rank);
 
 
-#ifdef DETAILED_TIMERS
+    int nstolen = 0;
     CPU_TIMER_DEF(wait_for_input)
     CUDA_TIMER_DEF(intranode_comm)
     CUDA_TIMER_DEF(comp_time)
     CUDA_TIMER_DEF(A_conversion)
-#endif
+    CPU_TIMER_DEF(main_loop)
+    CPU_TIMER_DEF(ws_loop)
+    CPU_TIMER_DEF(tile_agg)
+    CPU_TIMER_DEF(task_queue)
 
 
     // Build task queue
@@ -290,10 +293,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Main loop
     alloc_sync_point.arrive_and_wait();
     CPU_TIMER_START(spgemm);
+    CPU_TIMER_START(main_loop);
     for (int iter = 0; iter < n_iters; iter++)
     {
         // Pop local tasks
+        CPU_TIMER_START(task_queue);
         LocalSpGEMMTask * task = queue.pop_local_task(); 
+        CPU_TIMER_STOP(task_queue);
 
         if (task->owner != -1)
         {
@@ -311,34 +317,39 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
             LocalMatrix<IT, IT, VT>::spadd(C_prod, C_p);
 
 
+            CPU_TIMER_START(task_queue);
             queue.inc_n_complete();
-        }
-
-        // force some workstealing
-        if (iter >= (int)sqrt(n_iters)) 
-        {
-            break;
+            CPU_TIMER_STOP(task_queue);
         }
 
         delete task;
 
     }
 
+    CPU_TIMER_STOP(main_loop);
+
 
     // TODO: Spawn separate thread to merge as soon as all of mine are done
     // Begin workstealing
+    CPU_TIMER_START(ws_loop);
+    CPU_TIMER_START(task_queue);
     int ntasks_done = queue.check_n_complete();
+    CPU_TIMER_STOP(task_queue);
     while (ntasks_done < queue.ntasks)
     {
 
         if (skipws) break;
 
         // Grab a random task
+        CPU_TIMER_START(task_queue);
         LocalSpGEMMTask * task = queue.pop_random_task();
+        CPU_TIMER_STOP(task_queue);
 
         
         if (task->is_valid())
         {
+
+            nstolen++;
             
 #ifdef DEBUG_WS
             print_rkn("Got task, %d\n", ntasks_done);
@@ -357,22 +368,30 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
 
             
             // Aggregate on remote tile
+            CPU_TIMER_START(tile_agg);
             if (C_prod.storage.nnz() > 0)
             {
                 C_remote_holder.aggregate_remote_tile(C_prod, task->owner, C_remote_buffs); 
             }
+            CPU_TIMER_STOP(tile_agg);
 
 
             // Increment completed task count    
+            CPU_TIMER_START(task_queue);
             queue.inc_n_complete();
+            CPU_TIMER_STOP(task_queue);
         }
 
         delete task;
 
 
         // Update local completed task count
+        CPU_TIMER_START(task_queue);
         ntasks_done = queue.check_n_complete();
+        CPU_TIMER_STOP(task_queue);
     }
+
+    CPU_TIMER_STOP(ws_loop);
 
 #ifdef DEBUG_WS
     print_rkn("Done workstealing -- %d, %d\n", C_p.storage.nnz(), *(C_remote_holder.current_nnz));
@@ -386,6 +405,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
                                                                    mmio::MajorDim::ROWS);
 
     // Final aggregation
+    CPU_TIMER_START(tile_agg);
     LocalMatrix<IT,IT,VT> C_remote(C_remote_csx);
     
     if (C_p.initialized)
@@ -397,20 +417,24 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
         C_p = C_remote;
     }
 
+    CPU_TIMER_STOP(tile_agg);
 
     MPI_Barrier(MPI_COMM_WORLD);
     CPU_TIMER_STOP(spgemm);
 
 
-//#ifdef DETAILED_TIMERS
-//    char tmpstr[100];
-//    sprintf(tmpstr, "[process %d]", grid->global_rank);
-//    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
-//    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
-//    TIMER_PRINT_WPREFIX_STR(comp_time, tmpstr)
-//    TIMER_PRINT_WPREFIX_STR(A_conversion, tmpstr)
-//    fflush(stdout);
-//#endif
+#ifdef DETAILED_TIMERS
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", grid->global_rank);
+    TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(tile_agg, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(main_loop, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(ws_loop, tmpstr)
+    TIMER_PRINT_WPREFIX_STR(task_queue, tmpstr)
+    fprintf(stdout, "<[process %d]>[nstolen] %d\n", grid->global_rank, nstolen);
+    fflush(stdout);
+#endif
 
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -892,6 +916,7 @@ template <typename IT, typename VT>
 DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistCusparseCSX<IT, VT> * dist_B, 
                                          const Implementation impl, ThreadPool& pool,
                                          SpaComm::SpaCommHandler<IT, VT> *spcomm, 
+                                         size_t c_remote_size,
                                          bool skipspgemm, bool skipws)
 {
 
@@ -902,7 +927,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
             C = hns_spgemm_async(dist_A, dist_B, impl, pool, spcomm, skipspgemm);
             break;
         case Implementation::WORKSTEALING:
-            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, skipspgemm, skipws);
+            C = hns_spgemm_workstealing(dist_A, dist_B, impl, pool, spcomm, c_remote_size, skipspgemm, skipws);
             break;
         default:
             assert(false && "Unreachable\n");
@@ -912,6 +937,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
     return nullptr;
 }
 
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false, bool skipws=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, size_t C_remote_size, bool skipspgemm=false, bool skipws=false);
 template DistCusparseCSX<int32_t,float> *  hns_spgemm_async(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false);
-template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm,  bool skipspgemm=false, bool skipws=false);
+template DistCusparseCSX<int32_t,float> *  hns_spgemm_main(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, size_t C_remote_size, bool skipspgemm=false, bool skipws=false);
