@@ -108,16 +108,9 @@ int main(int argc, char ** argv)
         if (world_rank == 0) fprintf(stderr, "WARNING: -DSKIP_SPGEMM is a DEBUG ONLY flag, local SpGEMM computation will be skipped\n");
 #endif
 
-        // TODO
-        // if ( config->spcomm && nprocpergroup > 1)
-        // {
-        //     if (world_rank == 0) fprintf(stderr, "Error: on 3D grids, --spcomm is not supported yet\n");
-        //     MPI_Barrier(MPI_COMM_WORLD);
-        //     MPI_Abort(MPI_COMM_WORLD, __LINE__);
-        // }
     }
 
-    // Reading the distribuited matrices
+    // Reading the distributed matrices
     std::string A_mtx_path = (std::string) config->matpathA;
     mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
     dmmio::DCOO<int32_t, float> *dcoo_A = dmmio::DCOO_read<int32_t, float>(
@@ -126,7 +119,7 @@ int main(int argc, char ** argv)
         nprocrows, nproccols, nprocpergroup,
         Apart, Aop,
         true, meta_A,
-        (config->spcomm && nprocpergroup>1) ? (MASK_SIZE) : 1
+        MASK_SIZE
     );
 
     std::string B_mtx_path = (std::string) config->matpathB;
@@ -137,7 +130,7 @@ int main(int argc, char ** argv)
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
         true, meta_B,
-        (config->spcomm && nprocpergroup>1) ? (MASK_SIZE) : 1
+        MASK_SIZE
     );
 
     if (world_rank==0) fprintf(stdout, "A matrix: %dx%d, B matrix: %dx%d\n", dcoo_A->coo->nrows, dcoo_A->coo->ncols, dcoo_B->coo->nrows, dcoo_B->coo->ncols); fflush(stdout);
@@ -166,10 +159,6 @@ int main(int argc, char ** argv)
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 
-        /*MPI_ALL_PRINT(
-            fprintf(fp, "local A is %dx%d\n", dist_A->csx->mat->nrows, dist_A->csx->mat->ncols);
-            fprintf(fp, "local B is %dx%d\n", dist_B->csx->mat->nrows, dist_B->csx->mat->ncols);
-        )*/
         fflush(stdout);
         MPI_Barrier(MPI_COMM_WORLD);
 

@@ -57,8 +57,8 @@
 
 // #define COMP_THRESHOLD 1e8
 #define COMP_THRESHOLD 0
-#define MPI_ALLGATHERV
-//#define NCCL_ALLGATHERV
+//#define MPI_ALLGATHERV
+#define NCCL_ALLGATHERV
 
 #define BMASK_TYPE uint8_t
 #define MPI_BMASK_TYPE MPI_UINT8_T
@@ -75,7 +75,8 @@ extern FILE * logfile;
 #include <future>
 #include <atomic>
 
-enum Implementation {
+enum Implementation 
+{
     ASYNC,
     WORKSTEALING
 };

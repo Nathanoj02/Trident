@@ -76,11 +76,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int sendround = 0;
     int compression_flag = (spacomm != nullptr && tilebuffersize >= COMP_THRESHOLD);
 
-    // if (spacomm->grid->node_size>1) {
-    //     int tmp_compression_flag = compression_flag;
-    //     MPI_Allreduce(&tmp_compression_flag, &compression_flag, 1, MPI_INT, MPI_LOR, spacomm->grid->node_comm);
-    // }
-
     while (true)
     {
 
@@ -532,12 +527,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     // Set cusparse stream
     cudaStream_t stream = cudaStreamPerThread;
-    //CUDA_CHECK(cudaStreamCreate(&stream));
 
     cusparseHandle_t handle;
     CUSPARSE_CHECK(cusparseCreate(&handle));
 
-    //CUSPARSE_CHECK(cusparseSetStream(handle, stream));
 
 #ifndef KOKKOS
     // Mempool setup

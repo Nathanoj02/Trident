@@ -271,11 +271,13 @@ struct TileHolder
 #else
 #ifdef NCCL_ALLGATHERV
         ncclGroupStart();
-        for (int dest = 0; dest < node_size; dest++) {
+        for (int dest = 0; dest < node_size; dest++) 
+        {
             ncclSend(d_vals_buf, nnz, NCCLType<VT>(), dest, ncclNodecomm, *stream);
             ncclSend(d_inds_buf, nnz, NCCLType<IT>(), dest, ncclNodecomm, *stream);
         }
-        for (int src = 0; src < node_size; src++) {
+        for (int src = 0; src < node_size; src++) 
+        {
             ncclRecv((*d_node_vals)    + displs[src], node_nnz[src], NCCLType<VT>(), src, ncclNodecomm, *stream);
             ncclRecv((*d_node_colinds) + displs[src], node_nnz[src], NCCLType<IT>(), src, ncclNodecomm, *stream);
         }
@@ -283,7 +285,7 @@ struct TileHolder
         ncclAllGather(d_ptrs_buf + 1, (*d_node_rowptrs) + 1, nrows, NCCLType<IT>(), ncclNodecomm, *stream);
         cudaStreamSynchronize(*stream);
 #else
-        static_assert(false, "Ether MPI_ALLGATHERV or NCCL_ALLGATHERV must be difined at compile time\n");
+        static_assert(false, "Ether MPI_ALLGATHERV or NCCL_ALLGATHERV must be defined at compile time\n");
 #endif
 #endif
 
