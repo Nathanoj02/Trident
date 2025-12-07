@@ -1,5 +1,8 @@
+
 #include "hns_spgemm.cuh"
+#include "permute.cuh"
 #include "test_utils.cuh"
+
 #include <ccutils/timers.h>
 
 #define PRINT_MYDEV { \
@@ -80,6 +83,7 @@ int main(int argc, char ** argv)
       std::cout << "Spcomm enabled: " << config->spcomm << " (It require --Acsc)" << std::endl;
       std::cout << "Compression threshold: " << COMP_THRESHOLD << " B" << std::endl;
       std::cout << "C_remote_size: " << config->c_remote_size << std::endl;
+      std::cout << "Permute: " << config->permute << std::endl;
     }
 
     if (config->skip_ws)
@@ -119,7 +123,8 @@ int main(int argc, char ** argv)
         nprocrows, nproccols, nprocpergroup,
         Apart, Aop,
         true, meta_A,
-        MASK_SIZE
+        MASK_SIZE,
+        config->permute
     );
 
     std::string B_mtx_path = (std::string) config->matpathB;
@@ -130,7 +135,9 @@ int main(int argc, char ** argv)
         nprocrows, nproccols, nprocpergroup,
         Apart, Bop,
         true, meta_B,
-        MASK_SIZE
+        MASK_SIZE,
+        config->permute,
+        dcoo_A->permutation
     );
 
     if (world_rank==0) fprintf(stdout, "A matrix: %dx%d, B matrix: %dx%d\n", dcoo_A->coo->nrows, dcoo_A->coo->ncols, dcoo_B->coo->nrows, dcoo_B->coo->ncols); fflush(stdout);
@@ -201,7 +208,7 @@ int main(int argc, char ** argv)
         ThreadPool pool(2);
 
         //const int niters = 6;
-        const int niters = 3;
+        const int niters = 4;
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
 

@@ -4,25 +4,26 @@ import os
 
 GPUS_PER_NODE = 4
 
-#DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "cage15", "isolates_subgraph4", "uk-2002", "archaea", "dielFilterV3real")
-#GROUPS = ( "Fluorem", "Belcastro", "Schenk", "vanHeukelum", "mcl", "LAW", "mcl", "Dziekonski")
-DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
-GROUPS = ( "Fluorem", "Schenk", "LAW" )
+DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "isolates_subgraph4", "uk-2002", "archaea")
+GROUPS = ( "Fluorem", "Belcastro", "Schenk", "mcl", "LAW", "mcl")
+#DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
+#GROUPS = ( "Fluorem", "Schenk", "LAW" )
 
-SIZES = [10, 10, 10]
+SIZES = [10, 10, 10, 10, 10, 10]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
-GRIDS=("4x4", "2x2", "8x8", "4x4")
+GRIDS=("2x2", "4x4", "8x8")
 
+GRIDPROCS=("16", "64", "256")
 
-GRIDPROCS=("16", "16", "64", "64")
+CONFIGURATIONS=["--impl async --permute", "--impl workstealing", "--impl async"]
 
-CONFIGURATIONS=["--impl workstealing"]
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_workstealing_nopermute", "kokkos_nospcomm_async_nopermute"]
 
-CONFIGURATIONS_STR=[ "kokkos_nospcomm_workstealing"]
+RESULTS_DIR = "./results_wave6/"
 
-RESULTS_DIR = "./results_wave5/"
+GPU_KIND = '\"gpu\"'
 
 
 
@@ -31,10 +32,10 @@ def make_script_hns(nodes):
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
-#SBATCH -C "gpu&hbm80g"
+#SBATCH -C {GPU_KIND}
 #SBATCH -G {GPUS_PER_NODE*nodes}
-#SBATCH -q premium
-#SBATCH -t 1:00:00
+#SBATCH -q regular
+#SBATCH -t 0:10:00
 #SBATCH -A m4646_g
     """
 
@@ -69,7 +70,7 @@ def make_script_trilinos(nodes):
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
-#SBATCH -C gpu
+#SBATCH -C {GPU_KIND}
 #SBATCH -G {GPUS_PER_NODE*nodes}
 #SBATCH -q regular
 #SBATCH -t 1:00:00
@@ -95,6 +96,7 @@ def make_script_trilinos(nodes):
             file.write(f"{cmd}\n")
 
     with open(f"./scripts/sbatch_scripts/trilinos_strong_all_{nodes}.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
         for mat in DATASETS:
             file.write(f"sbatch ./scripts/sbatch_scripts/trilinos_strong_{mat}_{nodes}.sh\n")
         

@@ -499,8 +499,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
 
     // Indices of tiles to fetch in the first iteration from each communicator
-    int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stragger left
-    int rowBtoGet = (grid->col_rank + grid->row_rank) % common_grid_size; // Stragger down
+    int colAtoGet = (grid->row_rank + grid->col_rank) % common_grid_size; // Stagger left
+    int rowBtoGet = (grid->col_rank + grid->row_rank) % common_grid_size; // Stagger down
 
 
     // Message queue setup -- these will contain indices of the processes that request tiles of A and tiles of B

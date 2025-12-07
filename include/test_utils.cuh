@@ -23,6 +23,7 @@ struct config
     bool Acsc;
     bool mem_efficient;
     bool skip_ws;
+    bool permute;
     size_t c_remote_size;
 
     int nprocrows;
@@ -84,6 +85,7 @@ void parse_args(int argc, char ** argv, Config * config)
     config->verbose   = 0;
     config->mem_efficient = false;
     config->skip_ws = false;
+    config->permute = false;
     config->c_remote_size = (1LU << 30) * 6;
 
     int inc = 2;
@@ -110,6 +112,11 @@ void parse_args(int argc, char ** argv, Config * config)
         else if (!strcmp(argname, "--spcomm"))
         {
             config->spcomm = true;
+            inc = 1;
+        }
+        else if (!strcmp(argname, "--permute"))
+        {
+            config->permute = true;
             inc = 1;
         }
         else if (!strcmp(argname, "--Acsc"))
