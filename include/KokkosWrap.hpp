@@ -77,13 +77,13 @@ namespace KokkosWrap {
     };
 
 
-    template <typename IT, typename VT>
-    struct Triple
-    {
-        IT row;
-        IT col;
-        VT val;
-    };
+    //template <typename IT, typename VT>
+    //struct Triple
+    //{
+    //    IT row;
+    //    IT col;
+    //    VT val;
+    //};
 
 
     template<typename KIT, typename VT>

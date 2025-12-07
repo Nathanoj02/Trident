@@ -15,7 +15,7 @@ struct TileHolder
 
     using LocalMatrix = KokkosWrap::LocalMatrix<IT,IT,VT>;
 
-    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm, const bool _window=false, MPI_Comm _nodecomm=MPI_COMM_NULL)
+    TileHolder(const size_t _buf_size, const IT _ptr_size, const IT nnz_size, MPI_Comm _comm, MPI_Comm _nodecomm, const bool _window=false)
     {
         static_assert(sizeof(IT) == sizeof(VT));
 
@@ -47,7 +47,8 @@ struct TileHolder
         MPI_Comm_size(_nodecomm, &mpi_size);
 
         // Step 1: unique ID created by rank 0
-        if (mpi_rank == 0) {
+        if (mpi_rank == 0) 
+        {
             ncclGetUniqueId(&id);
         }
 

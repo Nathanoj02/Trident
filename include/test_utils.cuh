@@ -126,6 +126,7 @@ void parse_args(int argc, char ** argv, Config * config)
         {
             config->skip_ws = true;
             inc = 1;
+        }
         else if (!strcmp(argname, "--verbose"))
         {
             config->verbose = atoi(argv[i+1]);

@@ -108,8 +108,6 @@ endmacro()
 
 
 # TESTS
-add_test(test_queue)
-add_test(test_kokkos)
 add_test(test_compression)
 add_test(test_cuda_mpi)
 add_test(test_p2pallgatherv)

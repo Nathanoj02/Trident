@@ -218,9 +218,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     size_t B_buf_size = CSX_buf_size<IT, VT>(dist_B->getLocalNrows(), dist_B->getLocalNcols(), B_max_nnz*1.5, mmio::MajorDim::ROWS);
     size_t C_remote_nnz = (C_remote_size - (sizeof(IT) * (dist_A->getLocalNrows() + 1))) / (sizeof(VT) * sizeof(IT));
 
-    TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm);
-    TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm);
-    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), C_remote_nnz, grid->world_comm, true);
+    TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->world_comm, grid->node_comm);
+    TileHolder<IT, VT> B_holder(B_buf_size, dist_B->getLocalPtrvecsize(), (IT)B_max_nnz*1.5, grid->world_comm, grid->node_comm);
+    TileHolder<IT, VT> C_remote_holder(C_remote_size, dist_A->getLocalNrows(), C_remote_nnz, grid->world_comm, grid->node_comm, true);
 
 
     // Temporary allgather buffers
@@ -571,8 +571,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
         int *tmp;
         CUDA_CHECK(cudaMalloc(&tmp, sizeof(int)));
-        // char *d_buf_A = A_holder.d_buf;
-        // char *d_buf_B = B_holder.d_buf;
         VT* A_vals_buf = A_holder.d_vals_buf;
         VT* B_vals_buf = B_holder.d_vals_buf;
         IT* A_inds_buf = A_holder.d_inds_buf;
@@ -580,17 +578,19 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         IT* A_ptrs_buf = A_holder.d_ptrs_buf;
         IT* B_ptrs_buf = B_holder.d_ptrs_buf;
         ncclGroupStart();
-        for (int dest = 0; dest < node_size; dest++) {
-                ncclSend(A_vals_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
-                ncclSend(B_vals_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
-                ncclSend(A_inds_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
-                ncclSend(B_inds_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
+        for (int dest = 0; dest < node_size; dest++) 
+        {
+            ncclSend(A_vals_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+            ncclSend(B_vals_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
+            ncclSend(A_inds_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+            ncclSend(B_inds_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
         }
-        for (int src = 0; src < node_size; src++) {
-                ncclRecv(A_vals_buf, 1, NCCLType<VT>(),  src, A_holder.ncclNodecomm, 0);
-                ncclRecv(B_vals_buf, 1, NCCLType<VT>(),  src, B_holder.ncclNodecomm, 0);
-                ncclRecv(A_inds_buf, 1, NCCLType<IT>(),  src, A_holder.ncclNodecomm, 0);
-                ncclRecv(B_inds_buf, 1, NCCLType<IT>(),  src, B_holder.ncclNodecomm, 0);
+        for (int src = 0; src < node_size; src++) 
+        {
+            ncclRecv(A_vals_buf, 1, NCCLType<VT>(),  src, A_holder.ncclNodecomm, 0);
+            ncclRecv(B_vals_buf, 1, NCCLType<VT>(),  src, B_holder.ncclNodecomm, 0);
+            ncclRecv(A_inds_buf, 1, NCCLType<IT>(),  src, A_holder.ncclNodecomm, 0);
+            ncclRecv(B_inds_buf, 1, NCCLType<IT>(),  src, B_holder.ncclNodecomm, 0);
         }
         ncclGroupEnd();
 
