@@ -1,6 +1,6 @@
 
 #include "hns_spgemm.cuh"
-#include "permute.cuh"
+// #include "permute.cuh"
 #include "test_utils.cuh"
 
 #include <ccutils/timers.h>
@@ -148,7 +148,7 @@ int main(int argc, char ** argv)
     CUDA_CHECK(cudaSetDevice(world_rank % gpn));
 
 
-    dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout);
+    dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout, true);
     MPI_Barrier(MPI_COMM_WORLD);
 
     {
