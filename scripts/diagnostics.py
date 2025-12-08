@@ -27,7 +27,7 @@ def diagnose_hns(args):
 
         with open(args.dir + "/" + filename, "r") as file:
             content = file.read()
-            if content.count("spgemm round: 2")==1 and content.count("A stored in CSC") == 1:
+            if content.count("spgemm round: 3")==1 and content.count("A stored in CSC") == 1:
                 print("\t" + OKGREEN + param_str + " complete" + ENDC)
             else:
                 bad.append(param_str)

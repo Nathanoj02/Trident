@@ -228,6 +228,45 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     // Temporary buffers to hold remote in-progress aggregated tiles of C
     CsxBuffers<IT, VT> * C_remote_buffs = new CsxBuffers<IT,VT>((uint64_t)A_max_nnz * 1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, false);
 
+    // NCCL warmup
+#ifdef NCCL_ALLGATHERV
+    {
+        A_holder.set_csx_ptrs(A_max_nnz);
+        B_holder.set_csx_ptrs(B_max_nnz);
+
+        int *tmp;
+        CUDA_CHECK(cudaMalloc(&tmp, sizeof(int)));
+        VT* A_vals_buf = A_holder.d_vals_buf;
+        VT* B_vals_buf = B_holder.d_vals_buf;
+        IT* A_inds_buf = A_holder.d_inds_buf;
+        IT* B_inds_buf = B_holder.d_inds_buf;
+        IT* A_ptrs_buf = A_holder.d_ptrs_buf;
+        IT* B_ptrs_buf = B_holder.d_ptrs_buf;
+        ncclGroupStart();
+        for (int dest = 0; dest < node_size; dest++) 
+        {
+            ncclSend(A_vals_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+            ncclSend(B_vals_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
+            ncclSend(A_inds_buf, 1, NCCLType<VT>(),  dest, A_holder.ncclNodecomm, 0);
+            ncclSend(B_inds_buf, 1, NCCLType<VT>(),  dest, B_holder.ncclNodecomm, 0);
+        }
+        for (int src = 0; src < node_size; src++) 
+        {
+            ncclRecv(A_vals_buf, 1, NCCLType<VT>(),  src, A_holder.ncclNodecomm, 0);
+            ncclRecv(B_vals_buf, 1, NCCLType<VT>(),  src, B_holder.ncclNodecomm, 0);
+            ncclRecv(A_inds_buf, 1, NCCLType<IT>(),  src, A_holder.ncclNodecomm, 0);
+            ncclRecv(B_inds_buf, 1, NCCLType<IT>(),  src, B_holder.ncclNodecomm, 0);
+        }
+        ncclGroupEnd();
+
+        ncclGroupStart();
+        ncclAllGather(A_ptrs_buf + 1, A_ptrs_buf + 1, 1, NCCLType<IT>(), A_holder.ncclNodecomm, 0);
+        ncclAllGather(B_ptrs_buf + 1, B_ptrs_buf + 1, 1, NCCLType<IT>(), B_holder.ncclNodecomm, 0);
+        ncclGroupEnd();
+        cudaDeviceSynchronize();
+        CUDA_CHECK(cudaFree(tmp));
+    }
+#endif
 
 
     // Store local partition of C

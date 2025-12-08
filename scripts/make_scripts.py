@@ -13,13 +13,16 @@ SIZES = [10, 10, 10, 10, 10, 10]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
-GRIDS=("2x2", "4x4", "8x8")
+GRIDS=("1x1", "2x2", "4x4", "8x8", "10x10")
 
-GRIDPROCS=("16", "64", "256")
+GRIDPROCS=("4", "16", "64", "256", "400")
 
-CONFIGURATIONS=["--impl async --permute", "--impl workstealing", "--impl async"]
+#CONFIGURATIONS=["--impl async --permute", "--impl workstealing", "--impl async"]
+#
+#CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_workstealing_nopermute", "kokkos_nospcomm_async_nopermute"]
+CONFIGURATIONS=[ "--impl workstealing"]
 
-CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_workstealing_nopermute", "kokkos_nospcomm_async_nopermute"]
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_workstealing_nopermute"]
 
 RESULTS_DIR = "./results_wave6/"
 
@@ -34,7 +37,7 @@ def make_script_hns(nodes):
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
 #SBATCH -C {GPU_KIND}
 #SBATCH -G {GPUS_PER_NODE*nodes}
-#SBATCH -q regular
+#SBATCH -q premium
 #SBATCH -t 0:10:00
 #SBATCH -A m4646_g
     """
