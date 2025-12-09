@@ -46,8 +46,7 @@ void accum_thread_loop(AccumThreadHandle<IT,VT>& handle)
         handle.C_prod.reset();
 
         // Spadd
-        LocalMatrix<IT,IT,VT>::spadd(C_prod, *(handle.C_local));
-
+        handle.spadd_kokkos();
 
         // Tell main thread I'm ready for another
         handle.ready_flag->store(AccumThreadHandle<IT, VT>::IDLE, std::memory_order_release);

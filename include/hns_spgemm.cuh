@@ -36,6 +36,9 @@ struct AccumThreadHandle
 
     std::optional<LocalMatrix> C_prod;
     LocalMatrix * C_local;
+    CusparseCSX<IT, VT> * C_local_csx; 
+    CusparseCSX<IT, VT> * C_accum_csx; 
+    cusparseHandle_t * cusparse_handle;
 
     std::atomic<int> * ready_flag;
     int n_accum_total;
@@ -44,10 +47,33 @@ struct AccumThreadHandle
     static constexpr int IDLE = 1;
     static constexpr int ACTIVE = 2;
 
+    AccumThreadHandle(cusparseHandle_t * cusparse_handle, CusparseCSX<IT, VT> * C_local_csx, CusparseCSX<IT, VT> * C_accum_csx, int n_accum_total, int dev_id):
+        cusparse_handle(cusparse_handle), C_local_csx(C_local_csx), C_accum_csx(C_accum_csx), n_accum_total(n_accum_total), dev_id(dev_id)
+    {
+        ready_flag = new std::atomic<int>(IDLE);
+    }
+
+
     AccumThreadHandle(LocalMatrix * C_local, int n_accum_total, int dev_id):
         C_local(C_local), n_accum_total(n_accum_total), dev_id(dev_id)
     {
         ready_flag = new std::atomic<int>(IDLE);
+    }
+
+
+    void spadd_cusparse()
+    {
+        CusparseCSX<IT, VT> * C_prod_csx = new CusparseCSX<IT, VT>(C_prod);
+        cusparse_spgeam(cusparse_handle, C_prod_csx, C_local_csx, C_accum_csx);
+        std::swap(C_local_csx, C_accum_csx);
+        free(C_prod_csx->mat);
+        delete C_prod_csx;
+    }
+
+
+    void spadd_kokkos()
+    {
+        LocalMatrix::spadd(*C_prod, *C_local);
     }
 
 
