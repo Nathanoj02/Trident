@@ -43,27 +43,49 @@ struct AccumThreadHandle
     std::atomic<int> * ready_flag;
     int n_accum_total;
     int dev_id;
+    bool empty_matrix;
 
     static constexpr int IDLE = 1;
     static constexpr int ACTIVE = 2;
+    static constexpr int EMPTY = 3;
 
     AccumThreadHandle(cusparseHandle_t * cusparse_handle, CusparseCSX<IT, VT> * C_local_csx, CusparseCSX<IT, VT> * C_accum_csx, int n_accum_total, int dev_id):
         cusparse_handle(cusparse_handle), C_local_csx(C_local_csx), C_accum_csx(C_accum_csx), n_accum_total(n_accum_total), dev_id(dev_id)
     {
         ready_flag = new std::atomic<int>(IDLE);
+        empty_matrix = true;
     }
 
 
     AccumThreadHandle(LocalMatrix * C_local, int n_accum_total, int dev_id):
-        C_local(C_local), n_accum_total(n_accum_total), dev_id(dev_id)
+        cusparse_handle(nullptr), C_local(C_local), n_accum_total(n_accum_total), dev_id(dev_id)
     {
         ready_flag = new std::atomic<int>(IDLE);
+        empty_matrix = true;
     }
 
 
-    void spadd_cusparse()
+    void spadd(LocalMatrix& C_prod_)
     {
-        CusparseCSX<IT, VT> * C_prod_csx = new CusparseCSX<IT, VT>(C_prod);
+        if (cusparse_handle == nullptr)
+        {
+            spadd_kokkos(C_prod_);
+        }
+        else
+        {
+            spadd_cusparse(C_prod_);
+        }
+    }
+
+
+    void spadd_cusparse(LocalMatrix& C_prod_)
+    {
+        if (C_prod_.storage.nnz() == 0)
+        {
+            return;
+        }
+
+        CusparseCSX<IT, VT> * C_prod_csx = new CusparseCSX<IT, VT>(C_prod_);
         cusparse_spgeam(cusparse_handle, C_prod_csx, C_local_csx, C_accum_csx);
         std::swap(C_local_csx, C_accum_csx);
         free(C_prod_csx->mat);
@@ -71,9 +93,9 @@ struct AccumThreadHandle
     }
 
 
-    void spadd_kokkos()
+    void spadd_kokkos(LocalMatrix& C_prod_)
     {
-        LocalMatrix::spadd(*C_prod, *C_local);
+        LocalMatrix::spadd(C_prod_, *C_local);
     }
 
 
@@ -85,9 +107,24 @@ struct AccumThreadHandle
 
     void start_accum(LocalMatrix&& C_prod_)
     {
+        empty_matrix = false;
         C_prod.emplace(C_prod_);
         ready_flag->store(ACTIVE, std::memory_order_release);
         ready_flag->notify_all();
+    }
+
+
+    void signal_empty()
+    {
+        empty_matrix = true;
+        ready_flag->store(ACTIVE, std::memory_order_release);
+        ready_flag->notify_all();
+    }
+
+
+    bool is_empty()
+    {
+        return empty_matrix;
     }
 
 };

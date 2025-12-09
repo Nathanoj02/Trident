@@ -35,25 +35,30 @@ void accum_thread_loop(AccumThreadHandle<IT,VT>& handle)
 {
     cudaStream_t stream = cudaStreamPerThread;
     CUDA_CHECK(cudaSetDevice(handle.dev_id)); // To be sure each thread on the same process is assigned to the same GPU
-
-    int n_accum_done = 0;
-    while (n_accum_done < handle.n_accum_total)
+                                              
+    int ndone = 0;
+    while (ndone < handle.n_accum_total)
     {
-        // Wait until main thread signals ready -- flag now is READY
+        // Wait until main thread signals ready 
         handle.ready_flag->wait(AccumThreadHandle<IT, VT>::IDLE, std::memory_order_relaxed); 
 
-        LocalMatrix<IT, IT, VT> C_prod = std::move(*(handle.C_prod));
-        handle.C_prod.reset();
+        // If the local SpGEMM was empty, then I don't need to add 
+        if (!handle.is_empty())
+        {
+            // Get C_prod
+            LocalMatrix<IT, IT, VT> C_prod = std::move(*(handle.C_prod));
+            handle.C_prod.reset();
 
-        // Spadd
-        handle.spadd_kokkos();
+            // Spadd
+            handle.spadd(C_prod);
+        }
 
         // Tell main thread I'm ready for another
         handle.ready_flag->store(AccumThreadHandle<IT, VT>::IDLE, std::memory_order_release);
         handle.ready_flag->notify_all();
 
         // Increment done
-        n_accum_done++;
+        ndone++;
     }
 
 }
@@ -616,7 +621,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
 #ifdef DEBUG_MEM
     print_gpu_mem(true);
-    par_print("A size: %zu MB, B size: %zu MB\n", A_buf_size/(1<<20), B_buf_size/(1<<20));
+    //par_print("A size: %zu MB, B size: %zu MB\n", A_buf_size/(1<<20), B_buf_size/(1<<20));
 #endif
 
     TileHolder<IT, VT> A_holder(A_buf_size, dist_A->getLocalPtrvecsize(), (IT)A_max_nnz*1.5, grid->row_comm, grid->node_comm);
@@ -628,11 +633,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     // Temporary csc->csr buffers
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
 
-    // Accumulation buffers 
-#ifndef ACCUM_THREAD
+    // Accumulation and local C buffer
     CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
-#endif
+
 
     // NCCL warmup
 #ifdef NCCL_ALLGATHERV
@@ -675,12 +679,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 #endif
     
 
-#ifdef ACCUM_THREAD
-    LocalMatrix<IT, IT, VT> C_p;
-#else
+    LocalMatrix<IT,IT,VT> C_p;
     CusparseCSX<IT, VT> * C_accum = new CusparseCSX<IT,VT>(C_accum_buffs);
     CusparseCSX<IT, VT> * C_local = new CusparseCSX<IT,VT>(C_local_buffs);
-#endif
+
 
 #ifndef KOKKOS
     int nbuffers = 6;
@@ -726,7 +728,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
 #ifdef ACCUM_THREAD
     // Launch accum thread
-    AccumThreadHandle<IT, VT> accum_handle(&C_p, n_iters, dev_id);
+    //AccumThreadHandle<IT, VT> accum_handle(&C_p, n_iters, dev_id);
+    AccumThreadHandle<IT, VT> accum_handle(&handle, C_local, C_accum, n_iters, dev_id);
     auto accum_thread = std::thread(accum_thread_loop<IT, VT>, std::ref(accum_handle));
 #endif
 
@@ -955,6 +958,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
             done_one_spgemm = did_spgemm || done_one_spgemm;
 #endif
         }
+        else
+        {
+#ifdef ACCUM_THREAD
+            // Wait until thread is ready for another
+            if (iter > 0)
+            {
+                accum_handle.wait_until_idle();
+            }
+
+            accum_handle.signal_empty();
+#endif
+        }
         CUDA_SYNC(stream);
 
 #ifdef DETAILED_TIMERS
@@ -1010,11 +1025,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 #endif
 
     MPI_Barrier(MPI_COMM_WORLD);
-#ifdef ACCUM_THREAD
-    int64_t nnz_global = (int64_t)C_p.storage.nnz();
-#else
     int64_t nnz_global = (int64_t)C_local->nnz();
-#endif
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
     if (grid->global_rank==0)
     {
@@ -1033,17 +1044,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     delete conversion_buffs;
     delete gather_buffs;
-
-#ifndef ACCUM_THREAD
     delete C_accum;
     delete C_local;
-#endif
 
 #ifndef KOKKOS
     delete C_prod;
     teardown_mempool(grid->global_rank % gpn);
 #endif
-
 
     A_comm_thread.get();
     B_comm_thread.get();

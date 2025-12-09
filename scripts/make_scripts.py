@@ -4,33 +4,30 @@ import os
 
 GPUS_PER_NODE = 4
 
-DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "isolates_subgraph4", "uk-2002", "archaea")
-GROUPS = ( "Fluorem", "Belcastro", "Schenk", "mcl", "LAW", "mcl")
-#DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
-#GROUPS = ( "Fluorem", "Schenk", "LAW" )
+#DATASETS=( "HV15R", "mouse_gene", "nlpkkt160", "isolates_subgraph4", "uk-2002", "archaea")
+#GROUPS = ( "Fluorem", "Belcastro", "Schenk", "mcl", "LAW", "mcl")
+DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
+GROUPS = ( "Fluorem", "Schenk", "LAW")
+#DATASETS=( "uk-2002", "nlpkkt240")
+#GROUPS = ( "LAW", "Schenk")
 
 SIZES = [10, 10, 10, 10, 10, 10]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
-GRIDS=("1x1", "2x2", "4x4", "8x8", "10x10")
+GRIDS=("1x1", "2x2", "4x4", "8x8")
+GRIDPROCS=("4", "16", "64", "256")
 
-GRIDPROCS=("4", "16", "64", "256", "400")
+CONFIGURATIONS=[ "--impl async", "--impl async --permute"]
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_nopermute", "kokkos_nospcomm_async_permute"]
 
-#CONFIGURATIONS=["--impl async --permute", "--impl workstealing", "--impl async"]
-#
-#CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_workstealing_nopermute", "kokkos_nospcomm_async_nopermute"]
-CONFIGURATIONS=[ "--impl workstealing"]
-
-CONFIGURATIONS_STR=[ "kokkos_nospcomm_workstealing_nopermute"]
-
-RESULTS_DIR = "./results_wave6/"
+RESULTS_DIR = "./results_cusparseadd/"
 
 GPU_KIND = '\"gpu\"'
 
 
 
-def make_script_hns(nodes):
+def make_script_hns(nodes, accum_thread=False):
     header = f"""#!/usr/bin/bash
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
@@ -42,11 +39,17 @@ def make_script_hns(nodes):
 #SBATCH -A m4646_g
     """
 
+    if accum_thread:
+        hns_name = "hns_accumthread"
+        bin_name = "run_spgemm_accumthread"
+    else:
+        hns_name = "hns"
+        bin_name = "run_spgemm"
 
     os.makedirs("./scripts/sbatch_scripts/", exist_ok=True)
 
     for k, mat in enumerate(DATASETS):
-        with open(f"./scripts/sbatch_scripts/hns_strong_{mat}_{nodes}.sh", "w") as file:
+        with open(f"./scripts/sbatch_scripts/{hns_name}_strong_{mat}_{nodes}.sh", "w") as file:
             file.write(header + "\n")
             matpath = f"{MAT_DIR}/{GROUPS[k]}/{mat}/{mat}.bmtx"
             for i, conf in enumerate(CONFIGURATIONS):
@@ -55,20 +58,25 @@ def make_script_hns(nodes):
                     gridproc = GRIDPROCS[j]
                     if int(gridproc) != GPUS_PER_NODE*nodes:
                         continue
-                    fname = f"{RESULTS_DIR}/hns_strong_{gridproc}_{grid}_{mat}_{conf_str}"
+                    fname = f"{RESULTS_DIR}/{hns_name}_strong_{gridproc}_{grid}_{mat}_{conf_str}"
                     outfile = fname + ".out"
                     errfile = fname + ".err"
                     file.write(f"echo 'HnS {mat}, {conf_str}, {grid}'\n")
-                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/run_spgemm --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf} --c-size {SIZES[k]}"
+                    cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/{bin_name} --matA {matpath} --matB {matpath} --2D-pgrid {grid} {conf} --c-size {SIZES[k]}"
                     file.write(f"{cmd}\n")
 
-    with open(f"./scripts/sbatch_scripts/hns_strong_all_{nodes}.sh", "w") as file:
+    with open(f"./scripts/sbatch_scripts/{hns_name}_strong_all_{nodes}.sh", "w") as file:
         file.write("#!/usr/bin/bash\n")
         for mat in DATASETS:
-            file.write(f"sbatch ./scripts/sbatch_scripts/hns_strong_{mat}_{nodes}.sh\n")
+            file.write(f"sbatch ./scripts/sbatch_scripts/{hns_name}_strong_{mat}_{nodes}.sh\n")
+
+    with open(f"./scripts/sbatch_scripts/{hns_name}_strong_all_{nodes}_run.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
+        for mat in DATASETS:
+            file.write(f"sh ./scripts/sbatch_scripts/{hns_name}_strong_{mat}_{nodes}.sh\n")
 
 
-def make_script_trilinos(nodes):
+def make_script_trilinos(nodes, dummy):
     header = f"""#!/usr/bin/bash
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
@@ -109,10 +117,15 @@ def make_script_trilinos(nodes):
 def make_scripts(args):
     if args.impl == "hns":
         f = make_script_hns 
+        t = False
     elif args.impl == "trilinos":
         f = make_script_trilinos
+        t = False
+    elif args.impl == "hns_accumthread":
+        f = make_script_hns 
+        t = True
     for nodes in args.nodes:
-        f(nodes)
+        f(nodes, t)
 
 
 if __name__=="__main__":
