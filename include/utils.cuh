@@ -583,9 +583,8 @@ struct CsxBuffers
     }
 
 
-    CsxBuffers(void) 
+    CsxBuffers() 
     {
-        assert(false && "This should never be called\n");
         initialized    = 0;
         d_node_vals    = nullptr;
         d_node_colinds = nullptr;

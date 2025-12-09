@@ -1,6 +1,5 @@
 #pragma once
 
-// KokkosWrap.hpp
 #include <dmmio/dmmio.h>
 #include <dmmio/partitioning.h>
 
@@ -13,6 +12,7 @@
 
 #include "KokkosWrapTriple.hpp"
 #include "kokkos_helpers.cuh"
+#include "cusparse_helpers.cuh"
 
 
 using MajorDim = mmio::MajorDim;

@@ -595,6 +595,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     // Temporary csc->csr buffers
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
 
+    // Accumulation buffers 
+    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+
     // NCCL warmup
 #ifdef NCCL_ALLGATHERV
     {
@@ -634,16 +638,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         CUDA_CHECK(cudaFree(tmp));
     }
 #endif
+    
+    CusparseCSX<IT, VT> * C_accum = new CusparseCSX<IT,VT>(C_accum_buffs);
+    CusparseCSX<IT, VT> * C_local = new CusparseCSX<IT,VT>(C_local_buffs);
 
-
-#ifdef KOKKOS
-    LocalMatrix<IT, IT, VT> C_p;
-#else
+#ifndef KOKKOS
     int nbuffers = 6;
     CsxBuffers<IT,VT> * C_prod_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, nbuffers, true);
-    CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
-    CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
-
 #ifdef DEBUG_MEM
     par_print("Buffer information:\n \tA_holder: %d MB\n, \tB_holder: %d MB\n, \tgather_buffs: %zu MB\n, \tconversion_buffs: %zu MB\n, \tC_prod_buffs: %zu MB\n, \tC_local_buffs: %zu MB\n, \tC_accum_buffs: %zu MB\n",
     A_holder.d_buf_size/(1<<20),
@@ -655,16 +656,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     C_accum_buffs->total_size()/(1<<20));
     print_gpu_mem(true);
 #endif
-
-
     // Make CusparseCSX Objects
     CusparseCSX<IT, VT> * C_prod = new CusparseCSX<IT,VT>(C_prod_buffs);
-    CusparseCSX<IT, VT> * C_local = new CusparseCSX<IT,VT>(C_local_buffs);
-    CusparseCSX<IT, VT> * C_accum = new CusparseCSX<IT,VT>(C_accum_buffs);
-
 #endif
-
-
 #ifdef NVTX_PROFILING
     NVTX_POP_RANGE;
 #endif
@@ -710,9 +704,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     CPU_TIMER_DEF(spgemm);
 
     // For deciding whether or not to accumulate
-    // TODO: Remove this, currently not used
-    bool done_one_spgemm = false;
-
+    bool did_one_spgemm = false;
 
     // Main loop
     alloc_sync_point.arrive_and_wait();
@@ -893,11 +885,9 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
 #ifdef KOKKOS
-
             LocalMatrix<IT, IT, VT> A_p(A_remote->mat);
             LocalMatrix<IT, IT, VT> B_p(B_node->mat);
-
-            LocalMatrix<IT, IT, VT>::sp_mma(A_p, B_p, C_p);
+            sp_mma_hybrid(&handle, A_p, B_p, &C_local, &C_accum, did_one_spgemm);
 #else
             int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, mem_efficient);
             done_one_spgemm = did_spgemm || done_one_spgemm;
@@ -953,11 +943,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 #endif
 
     MPI_Barrier(MPI_COMM_WORLD);
-#ifdef KOKKOS
-    int64_t nnz_global = (int64_t)C_p.storage.nnz();
-#else
     int64_t nnz_global = (int64_t)C_local->nnz();
-#endif
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
     if (grid->global_rank==0)
     {
@@ -976,11 +962,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     delete conversion_buffs;
     delete gather_buffs;
+    delete C_accum;
+    delete C_local;
 
 #ifndef KOKKOS
     delete C_prod;
-    delete C_accum;
-    delete C_local;
     teardown_mempool(grid->global_rank % gpn);
 #endif
 

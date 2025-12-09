@@ -6,10 +6,13 @@
 #include <dmmio/dmmio.h>
 #include <dmmio/partitioning.h>
 
-#include "KokkosWrapTriple.hpp"
+//#include "KokkosWrapTriple.hpp"
+#include "KokkosWrap.hpp"
 
 using namespace mmio;
 using namespace dmmio;
+
+using namespace KokkosWrap;
 
 template <typename IT, typename VT>
 CSX<IT,VT>* coo_to_row_csx_contig(COO<IT, VT> * coo)
@@ -167,6 +170,33 @@ struct CusparseCSX
                                              CUDA_R_32F));
             CUSPARSE_CHECK(cusparseCreateMatDescr(&mat_descr));
         }
+    }
+
+
+    CusparseCSX(LocalMatrix<IT, IT, VT>& local_mat):
+        mat(rawptr_get(local_mat.storage)),
+        buffers(nullptr),
+        state(State::Mat)
+    {
+        assert(mat->majordim == MajorDim::ROWS);
+        CUSPARSE_CHECK(cusparseCreateCsr(&descr,
+                                         mat->nrows,
+                                         mat->ncols,
+                                         mat->nnz,
+                                         mat->ptr_vec,
+                                         mat->idx_vec,
+                                         mat->val,
+                                         CUSPARSE_INDEX_32I,
+                                         CUSPARSE_INDEX_32I,
+                                         CUSPARSE_INDEX_BASE_ZERO,
+                                         CUDA_R_32F));
+        CUSPARSE_CHECK(cusparseCreateMatDescr(&mat_descr));
+
+        buffers = new CsxBuffers<IT, VT>();
+        buffers->d_node_vals = mat->val;
+        buffers->d_node_colinds = mat->idx_vec;
+        buffers->d_node_rowptrs = mat->ptr_vec;
+        buffers->nnz = mat->nnz;
     }
 
 
@@ -627,6 +657,41 @@ CSX<IT, VT> * cusparse_csc_to_csr(cusparseHandle_t* handle, CSX<IT, VT> * csc, C
 }
 
 
+template <typename IT, typename VT>
+void sp_mma_hybrid(cusparseHandle_t * handle,
+                   const LocalMatrix<IT, IT, VT>& A, const LocalMatrix<IT, IT, VT>& B, 
+                   CusparseCSX<IT, VT> ** C_local, CusparseCSX<IT, VT> ** C_accum, 
+                   bool &did_first)
+{
+
+    // SpGEMM
+    LocalMatrix<IT, IT, VT> C_prod = LocalMatrix<IT, IT, VT>::spgemm(A, B);
+
+    // If C_Prod is empty, no need to do anything
+    if (C_prod.storage.nnz() == 0)
+    {
+        return;
+    }
+
+    // Convert to CusparseCSX so we can pass it to spgeam
+    CusparseCSX<IT, VT> * C_prod_csx = new CusparseCSX<IT, VT>(C_prod);
+
+    // We've done one SpGEMM that produces >0 nonzeros
+    did_first = true;
+
+    // C_accum = C_local + C_prod_csx
+    cusparse_spgeam(handle, C_prod_csx, *C_local, *C_accum);
+
+    // C_local now points to C_accum, C_accum now points to old C_local
+    std::swap(*C_local, *C_accum);
+
+    free(C_prod_csx->mat); // Just frees the csx struct
+    delete C_prod_csx; // Does not free underlying C_prod pointers
+                       // C_prod going out of scope will free its buffers
+}
+
+
+
 
 template <typename IT, typename VT>
 int cusparse_spmma(cusparseHandle_t* handle,
@@ -689,8 +754,10 @@ void cusparse_spgeam(cusparseHandle_t * handle,
                      CusparseCSX<IT, VT> * C_local,
                      CusparseCSX<IT, VT> * C_accum)
 {
+    CUDA_TIMER_DEF(spadd_time);
+    CUDA_TIMER_START_DEFAULT(spadd_time);
 
-    C_prod->assert_buffs("C_prod");
+    //C_prod->assert_buffs("C_prod");
     C_local->assert_buffs("C_local");
     C_accum->assert_buffs("C_accum");
 
@@ -698,7 +765,7 @@ void cusparse_spgeam(cusparseHandle_t * handle,
     CsxBuffers<IT, VT> * C_local_buffs = C_local->buffers;
     CsxBuffers<IT, VT> * C_accum_buffs = C_accum->buffers;
 
-    cudaStream_t * stream = C_prod_buffs->stream;
+    cudaStream_t * stream = C_local_buffs->stream;
     assert(stream != nullptr);
 
     //par_print("C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
@@ -779,6 +846,12 @@ void cusparse_spgeam(cusparseHandle_t * handle,
 
     //par_print("Post accumulation: C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
     //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
+    CUDA_TIMER_STOP(spadd_time);
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    char tmpstr[100];
+    sprintf(tmpstr, "[process %d]", rank);
+    TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
 }
 
 
