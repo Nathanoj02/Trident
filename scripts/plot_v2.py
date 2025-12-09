@@ -152,8 +152,8 @@ def parse_hns_file(filepath: str) -> Optional[HnsResult]:
     spgemm_timer_pattern = re.compile(r'<Timer>\[spgemm\]\s+([\d.]+)\s+ms')
     # <[process P]>[phase_name] ...,sum=X.X (summary format)
     phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(\w+)\].*sum=([\d.]+)')
-    # <[process P]>[phase_name] X.X ms (single value format, for spm_time, spadd_time)
-    single_phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(spm_time|spadd_time|wait_for_input|intranode_comm)\]\s+([\d.]+)\s+ms')
+    # <[process P]>[phase_name] X.X ms (single value format, for spm_time, spadd_time, queue phases)
+    single_phase_pattern = re.compile(r'<\[process\s+(\d+)\]>\[(spm_time|spadd_time|wait_for_input|intranode_comm|task_queue_checkn|task_queue_incn|task_queue_pop)\]\s+([\d.]+)\s+ms')
 
     for line in content.split('\n'):
         # Check for round start
@@ -348,7 +348,25 @@ PHASE_DISPLAY_NAMES = {
     'spm_time': 'Local SpGEMM',
     'spadd_time': 'Accumulation',
     'A_conversion': 'CSC Conversion',
+    'task_queue_checkn': 'Queue Check',
+    'task_queue_incn': 'Queue Increment',
+    'task_queue_pop': 'Queue Pop',
 }
+
+# Custom colors for phases (visually distinct, colorblind-friendly palette)
+PHASE_COLORS = {
+    'wait_for_input': '#4477AA',    # blue - internode comm
+    'intranode_comm': '#66CCEE',    # cyan - intranode comm
+    'spm_time': '#228833',          # green - local SpGEMM
+    'spadd_time': '#CCBB44',        # yellow - accumulation
+    'A_conversion': '#EE6677',      # red - CSC conversion
+    'task_queue_checkn': '#AA3377', # purple - queue check
+    'task_queue_incn': '#BBBBBB',   # gray - queue increment
+    'task_queue_pop': '#44AA99',    # teal - queue pop
+}
+
+# Phases that are queue-related (for filtering)
+QUEUE_PHASES = {'task_queue_checkn', 'task_queue_incn', 'task_queue_pop'}
 
 
 def plot_runtime_breakdown_per_process(
@@ -411,9 +429,6 @@ def plot_runtime_breakdown_per_process(
         bar_width = 0.8 / n_impls
         x = np.arange(n_processes)
 
-        # Use a colormap for phases
-        phase_colors = plt.cm.tab10.colors
-
         # Plot stacked bars for each implementation
         for i, impl in enumerate(impls_present):
             process_data = data[impl]
@@ -421,7 +436,7 @@ def plot_runtime_breakdown_per_process(
             bottom = np.zeros(n_processes)
             hatch = IMPL_HATCHES[impl]
 
-            for j, phase in enumerate(all_phases):
+            for phase in all_phases:
                 values = []
                 for proc in all_processes:
                     val = process_data.get(proc, {}).get(phase, 0.0)
@@ -429,10 +444,11 @@ def plot_runtime_breakdown_per_process(
                 values = np.array(values)
 
                 display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
+                color = PHASE_COLORS.get(phase, '#888888')
                 # Only add phase label for the first implementation to avoid duplicate legend entries
                 phase_label = display_name if i == 0 else None
                 ax.bar(x + offset, values, bar_width, bottom=bottom,
-                       label=phase_label, color=phase_colors[j % len(phase_colors)],
+                       label=phase_label, color=color,
                        hatch=hatch, edgecolor='black', linewidth=0.5)
                 bottom += values
 
@@ -443,9 +459,9 @@ def plot_runtime_breakdown_per_process(
         ax.set_xticklabels(all_processes)
 
         # Create two legends: one for phases, one for implementations (hatches)
-        phase_handles = [Patch(facecolor=phase_colors[j % len(phase_colors)], edgecolor='black',
+        phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
-                        for j, phase in enumerate(all_phases)]
+                        for phase in all_phases]
         impl_handles = [Patch(facecolor='white', edgecolor='black',
                               hatch=IMPL_HATCHES[impl],
                               label=f'HnS {impl}')
@@ -466,12 +482,14 @@ def plot_runtime_breakdown_per_process(
         print(f"    Saved {output_path}")
 
 
-def plot_runtime_breakdown_overall(
+def _plot_runtime_breakdown_overall_impl(
     hns_results: list[HnsResult],
-    trilinos_results: list[TrilinosResult],
     output_dir: str,
+    include_queue: bool,
+    subdir_name: str,
+    title_suffix: str = '',
 ) -> None:
-    """Stacked bar plot showing overall runtime breakdown (max across processes) for HnS."""
+    """Internal implementation for overall runtime breakdown plots."""
     import numpy as np
     from matplotlib.patches import Patch
 
@@ -491,11 +509,13 @@ def plot_runtime_breakdown_overall(
         # Collect all unique GPU counts
         gpu_counts = sorted(set(r.ngpus for r in results_for_matrix))
 
-        # Collect all phases (only those in PHASE_DISPLAY_NAMES)
+        # Collect all phases (only those in PHASE_DISPLAY_NAMES, optionally filter queue)
         all_phases = set()
         for r in results_for_matrix:
             all_phases.update(r.phase_timings.keys())
         all_phases = sorted([p for p in all_phases if p in PHASE_DISPLAY_NAMES])
+        if not include_queue:
+            all_phases = [p for p in all_phases if p not in QUEUE_PHASES]
 
         # Build data: {implementation: {ngpus: {phase: max_avg_value}}}
         data: dict[str, dict[int, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
@@ -527,9 +547,6 @@ def plot_runtime_breakdown_overall(
         bar_width = 0.8 / n_impls
         x = np.arange(n_gpu_counts)
 
-        # Use a colormap for phases
-        phase_colors = plt.cm.tab10.colors
-
         # Plot stacked bars for each implementation
         for i, impl in enumerate(impls_present):
             gpu_data = data[impl]
@@ -537,7 +554,7 @@ def plot_runtime_breakdown_overall(
             bottom = np.zeros(n_gpu_counts)
             hatch = IMPL_HATCHES[impl]
 
-            for j, phase in enumerate(all_phases):
+            for phase in all_phases:
                 values = []
                 for ngpus in gpu_counts:
                     val = gpu_data.get(ngpus, {}).get(phase, 0.0)
@@ -545,23 +562,27 @@ def plot_runtime_breakdown_overall(
                 values = np.array(values)
 
                 display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
+                color = PHASE_COLORS.get(phase, '#888888')
                 # Only add phase label for the first implementation to avoid duplicate legend entries
                 phase_label = display_name if i == 0 else None
                 ax.bar(x + offset, values, bar_width, bottom=bottom,
-                       label=phase_label, color=phase_colors[j % len(phase_colors)],
+                       label=phase_label, color=color,
                        hatch=hatch, edgecolor='black', linewidth=0.5)
                 bottom += values
 
         ax.set_xlabel('Number of GPUs')
         ax.set_ylabel('Runtime (ms)')
-        ax.set_title(f'Overall Runtime Breakdown: {matrix}')
+        title = f'Overall Runtime Breakdown: {matrix}'
+        if title_suffix:
+            title += f' {title_suffix}'
+        ax.set_title(title)
         ax.set_xticks(x)
         ax.set_xticklabels(gpu_counts)
 
         # Create two legends: one for phases, one for implementations
-        phase_handles = [Patch(facecolor=phase_colors[j % len(phase_colors)], edgecolor='black',
+        phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
-                        for j, phase in enumerate(all_phases)]
+                        for phase in all_phases]
 
         impl_handles = [Patch(facecolor='white', edgecolor='black',
                               hatch=IMPL_HATCHES[impl],
@@ -574,9 +595,158 @@ def plot_runtime_breakdown_overall(
 
         ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-        plot_subdir = os.path.join(output_dir, 'runtime-breakdown-overall', matrix)
+        plot_subdir = os.path.join(output_dir, subdir_name, matrix)
         os.makedirs(plot_subdir, exist_ok=True)
         output_path = os.path.join(plot_subdir, 'runtime_breakdown_overall.png')
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"    Saved {output_path}")
+
+
+def plot_runtime_breakdown_overall(
+    hns_results: list[HnsResult],
+    trilinos_results: list[TrilinosResult],
+    output_dir: str,
+) -> None:
+    """Stacked bar plot showing overall runtime breakdown (max across processes) for HnS.
+
+    Generates two versions: one without queue phases and one with queue phases.
+    """
+    # Version without queue phases
+    _plot_runtime_breakdown_overall_impl(
+        hns_results, output_dir,
+        include_queue=False,
+        subdir_name='runtime-breakdown-overall',
+    )
+    # Version with queue phases
+    _plot_runtime_breakdown_overall_impl(
+        hns_results, output_dir,
+        include_queue=True,
+        subdir_name='runtime-breakdown-overall-queue',
+        title_suffix='(with Queue)',
+    )
+
+
+def plot_runtime_per_process_stack(
+    hns_results: list[HnsResult],
+    trilinos_results: list[TrilinosResult],
+    output_dir: str,
+) -> None:
+    """Vertically stacked subplots showing per-phase runtime breakdown per process for each HnS implementation."""
+    import numpy as np
+    from matplotlib.patches import Patch
+
+    # Implementation order for consistent plotting (top to bottom in subplots)
+    impl_order = [IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING]
+
+    # Group HnS results by (matrix, ngpus)
+    groups: dict[tuple[str, int], list[HnsResult]] = defaultdict(list)
+    for r in hns_results:
+        groups[(r.matrix, r.ngpus)].append(r)
+
+    for (matrix, ngpus), results in sorted(groups.items()):
+        # Build data: {(implementation, grid): {phase: {process: avg_value}}}
+        data: dict[tuple[str, str], dict[str, dict[int, float]]] = {}
+
+        # Collect all phases present
+        all_phases_set = set()
+
+        for r in results:
+            key = (r.implementation, r.grid)
+            if key not in data:
+                data[key] = defaultdict(lambda: defaultdict(float))
+
+            for phase, process_data in r.phase_timings.items():
+                # Only include phases we care about
+                if phase not in PHASE_DISPLAY_NAMES:
+                    continue
+                all_phases_set.add(phase)
+                for process, round_values in process_data.items():
+                    if round_values:
+                        avg_val = sum(round_values) / len(round_values)
+                        data[key][phase][process] = avg_val
+
+        # Sort phases consistently
+        all_phases = sorted([p for p in all_phases_set if p in PHASE_DISPLAY_NAMES])
+
+        # Get (impl, grid) keys present, ordered by implementation then grid
+        keys_present = []
+        for impl in impl_order:
+            impl_keys = sorted([k for k in data.keys() if k[0] == impl], key=lambda k: k[1])
+            keys_present.extend(impl_keys)
+
+        if not keys_present:
+            continue
+
+        # Collect all process ranks across all configurations
+        all_processes = set()
+        for phase_data in data.values():
+            for process_data in phase_data.values():
+                all_processes.update(process_data.keys())
+        all_processes = sorted(all_processes)
+
+        if not all_processes:
+            continue
+
+        # Create vertically stacked subplots with fixed figure size
+        n_configs = len(keys_present)
+        fig, axes = plt.subplots(n_configs, 1, figsize=(12, 3 * n_configs), sharex=True)
+
+        # Handle single subplot case
+        if n_configs == 1:
+            axes = [axes]
+
+        x = np.array(all_processes)
+
+        # Find global y-max for consistent y-axis across subplots (sum of all phases)
+        y_max = 0
+        for key in keys_present:
+            phase_data = data[key]
+            totals = [0.0] * len(all_processes)
+            for phase in all_phases:
+                for j, proc in enumerate(all_processes):
+                    totals[j] += phase_data.get(phase, {}).get(proc, 0.0)
+            y_max = max(y_max, max(totals) if totals else 0)
+
+        # Plot each (implementation, grid) in its own subplot
+        for i, key in enumerate(keys_present):
+            impl, grid = key
+            ax = axes[i]
+            phase_data = data[key]
+
+            # Build stack data: list of arrays, one per phase
+            stack_data = []
+            colors = []
+            labels = []
+            for phase in all_phases:
+                values = [phase_data.get(phase, {}).get(proc, 0.0) for proc in all_processes]
+                stack_data.append(values)
+                colors.append(PHASE_COLORS.get(phase, '#888888'))
+                labels.append(PHASE_DISPLAY_NAMES.get(phase, phase))
+
+            if stack_data:
+                ax.stackplot(x, stack_data, colors=colors, edgecolor='black', linewidth=0.5)
+
+            ax.set_ylabel('Runtime (ms)')
+            ax.set_title(f'HnS {impl} ({grid})')
+            ax.set_ylim(0, y_max * 1.1)
+            ax.grid(axis='y', linestyle='--', alpha=0.7)
+
+        # Set x-axis label only on bottom subplot
+        axes[-1].set_xlabel('Process Rank')
+
+        # Create a single legend for phases (on the first subplot)
+        phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
+                               label=PHASE_DISPLAY_NAMES.get(phase, phase))
+                        for phase in all_phases]
+        axes[0].legend(handles=phase_handles, title='Phase', loc='upper right')
+
+        fig.suptitle(f'Per-Process Runtime Breakdown: {matrix} ({ngpus} GPUs)', fontsize=12)
+
+        plot_subdir = os.path.join(output_dir, 'runtime-per-process-stack', matrix)
+        os.makedirs(plot_subdir, exist_ok=True)
+        output_path = os.path.join(plot_subdir, f'{ngpus}gpus.png')
         fig.tight_layout()
         fig.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -589,6 +759,7 @@ def get_available_plots():
         'runtime-comparison': plot_runtime_comparison,
         'runtime-breakdown-per-process': plot_runtime_breakdown_per_process,
         'runtime-breakdown-overall': plot_runtime_breakdown_overall,
+        'runtime-per-process-stack': plot_runtime_per_process_stack,
     }
 
 

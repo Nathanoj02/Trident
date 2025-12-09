@@ -1,6 +1,4 @@
-
 #include "hns_spgemm.cuh"
-#include "permute.cuh"
 #include "test_utils.cuh"
 
 #include <ccutils/timers.h>
@@ -42,9 +40,6 @@ int main(int argc, char ** argv)
         std::cout<<CYAN<<"----Running HnS-SpGEMM----"<<RESET<<std::endl;
     }
 
-    std::string logname("log_rk_" + std::to_string(world_rank) + ".out");
-    FILE * logfile = fopen(logname.c_str(), "w");
-
     Config * config = (Config *)(malloc(sizeof(Config)));
     parse_args(argc, argv, config);
 
@@ -84,6 +79,9 @@ int main(int argc, char ** argv)
       std::cout << "Compression threshold: " << COMP_THRESHOLD << " B" << std::endl;
       std::cout << "C_remote_size: " << config->c_remote_size << std::endl;
       std::cout << "Permute: " << config->permute << std::endl;
+#ifdef ACCUM_THREAD
+      std::cout << "Accumulation thread activated" << std::endl;
+#endif
     }
 
     if (config->skip_ws)
@@ -208,7 +206,7 @@ int main(int argc, char ** argv)
         ThreadPool pool(2);
 
         //const int niters = 6;
-        const int niters = 4;
+        const int niters = 6;
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
 
@@ -244,9 +242,6 @@ int main(int argc, char ** argv)
 
     dmmio::DCOO_destroy(&dcoo_A);
     dmmio::DCOO_destroy(&dcoo_B);
-
-
-    fclose(logfile);
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

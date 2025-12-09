@@ -24,6 +24,40 @@ inline uint64_t compute_message_size(int nnz, int ptr_size) {
         return( nnz * (sizeof(VT) + sizeof(IT)) + compute_ptrv_size<IT>(ptr_size) );
 }
 
+/* /////////////////////////////////////////
+ *
+ *            ACCUMULATION THREAD 
+ *
+ * ///////////////////////////////////////// */
+
+template <typename IT, typename VT>
+void accum_thread_loop(AccumThreadHandle<IT,VT>& handle)
+{
+    cudaStream_t stream = cudaStreamPerThread;
+    CUDA_CHECK(cudaSetDevice(handle.dev_id)); // To be sure each thread on the same process is assigned to the same GPU
+
+    int n_accum_done = 0;
+    while (n_accum_done < handle.n_accum_total)
+    {
+        // Wait until main thread signals ready -- flag now is READY
+        handle.ready_flag->wait(AccumThreadHandle<IT, VT>::IDLE, std::memory_order_relaxed); 
+
+        LocalMatrix<IT, IT, VT> C_prod = std::move(*(handle.C_prod));
+        handle.C_prod.reset();
+
+        // Spadd
+        LocalMatrix<IT,IT,VT>::spadd(C_prod, *(handle.C_local));
+
+
+        // Tell main thread I'm ready for another
+        handle.ready_flag->store(AccumThreadHandle<IT, VT>::IDLE, std::memory_order_release);
+        handle.ready_flag->notify_all();
+
+        // Increment done
+        n_accum_done++;
+    }
+
+}
 
 
 /* /////////////////////////////////////////
@@ -596,8 +630,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     CsxBuffers<IT,VT> * conversion_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNcols()+1, dist_A->getLocalNrows(), &stream, 1, true);
 
     // Accumulation buffers 
+#ifndef ACCUM_THREAD
     CsxBuffers<IT,VT> * C_accum_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
     CsxBuffers<IT,VT> * C_local_buffs = new CsxBuffers<IT,VT>(A_max_nnz*1.5, dist_A->getLocalNrows()+1, dist_A->getLocalNcols(), &stream, 1, true);
+#endif
 
     // NCCL warmup
 #ifdef NCCL_ALLGATHERV
@@ -639,8 +675,13 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     }
 #endif
     
+
+#ifdef ACCUM_THREAD
+    LocalMatrix<IT, IT, VT> C_p;
+#else
     CusparseCSX<IT, VT> * C_accum = new CusparseCSX<IT,VT>(C_accum_buffs);
     CusparseCSX<IT, VT> * C_local = new CusparseCSX<IT,VT>(C_local_buffs);
+#endif
 
 #ifndef KOKKOS
     int nbuffers = 6;
@@ -684,6 +725,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
                             impl, spcomm, dev_id, 
                             grid->col_rank, std::ref(mpi_mutex), 1);
 
+#ifdef ACCUM_THREAD
+    // Launch accum thread
+    AccumThreadHandle<IT, VT> accum_handle(&C_p, n_iters, dev_id);
+    auto accum_thread = std::thread(accum_thread_loop<IT, VT>, std::ref(accum_handle));
+#endif
 
     // Row and column rank 
     int* row_rank = new int(grid->row_rank);
@@ -885,9 +931,26 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         if (!skipspgemm && A_remote->nnz() > 0 && B_node->nnz() > 0)
         {
 #ifdef KOKKOS
+
             LocalMatrix<IT, IT, VT> A_p(A_remote->mat);
             LocalMatrix<IT, IT, VT> B_p(B_node->mat);
+
+#ifdef ACCUM_THREAD
+
+            LocalMatrix<IT, IT, VT> C_prod = LocalMatrix<IT, IT, VT>::spgemm(A_p, B_p);
+
+            // Wait until thread is ready for another
+            if (iter > 0)
+            {
+                accum_handle.wait_until_idle();
+            }
+
+            // Give the thread handle the recently computed C_prod and tell it to accumulate
+            accum_handle.start_accum(std::move(C_prod));
+#else
             sp_mma_hybrid(&handle, A_p, B_p, &C_local, &C_accum, did_one_spgemm);
+#endif
+
 #else
             int did_spgemm = cusparse_spmma<IT, VT>(&handle, A_remote, B_node, &C_prod, &C_accum, &C_local, mem_efficient);
             done_one_spgemm = did_spgemm || done_one_spgemm;
@@ -912,6 +975,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
+
+#ifdef ACCUM_THREAD
+    accum_thread.join();
+#endif
+
 
 #if DEBUG_MAIN
     fprintf(stdout, "Rank %d joining on communication threads\n", grid->global_rank);
@@ -943,7 +1011,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 #endif
 
     MPI_Barrier(MPI_COMM_WORLD);
+#ifdef ACCUM_THREAD
+    int64_t nnz_global = (int64_t)C_p.storage.nnz();
+#else
     int64_t nnz_global = (int64_t)C_local->nnz();
+#endif
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
     if (grid->global_rank==0)
     {
@@ -962,8 +1034,11 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     delete conversion_buffs;
     delete gather_buffs;
+
+#ifndef ACCUM_THREAD
     delete C_accum;
     delete C_local;
+#endif
 
 #ifndef KOKKOS
     delete C_prod;
@@ -973,6 +1048,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     A_comm_thread.get();
     B_comm_thread.get();
+
     return nullptr;
 }
 

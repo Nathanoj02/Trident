@@ -78,64 +78,52 @@ set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
 #set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr")
 
 
-# MAIN HNS_SPGEMM LIBRARY
+# MAIN HNS_SPGEMM LIBRARIES
+add_library(hns_spgemm_accumthread
+            src/hns_spgemm.cu)
+target_link_libraries(hns_spgemm_accumthread PUBLIC
+                      MPI::MPI_CXX 
+                      dmmio 
+                      ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                      KokkosKernels::kokkoskernels Kokkos::kokkos
+                      Threads::Threads
+                      CUDA::cusparse
+                      NCCL::NCCL)
+target_compile_definitions(hns_spgemm_accumthread PUBLIC ACCUM_THREAD)
+
+
 add_library(hns_spgemm
-            src/hns_spgemm.cu
-            )
+            src/hns_spgemm.cu)
 target_link_libraries(hns_spgemm PUBLIC
-                        MPI::MPI_CXX 
-                        dmmio 
-                        ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
-                        KokkosKernels::kokkoskernels Kokkos::kokkos
-                        Threads::Threads
-                        CUDA::cusparse
-			NCCL::NCCL)
-
-
-# MACRO FOR ADDING TESTS
-macro(add_test name)
-    add_executable(${name} test/${name}.cu)
-    target_link_libraries(${name} PRIVATE 
-                            MPI::MPI_CXX 
-                            dmmio 
-                            ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi 
-                            hns_spgemm 
-                            KokkosKernels::kokkoskernels Kokkos::kokkos
-                            Threads::Threads 
-                            CUDA::cusparse
-		    	    NCCL::NCCL)
-endmacro()
-
-
-# TESTS
-add_test(test_compression)
-add_test(test_cuda_mpi)
-add_test(test_p2pallgatherv)
-
-add_executable(test_p2p_mthread test/test_p2p_mthread.cpp)
-target_link_libraries(test_p2p_mthread PUBLIC OpenMP::OpenMP_CXX MPI::MPI_CXX)
+                      MPI::MPI_CXX 
+                      dmmio 
+                      ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                      KokkosKernels::kokkoskernels Kokkos::kokkos
+                      Threads::Threads
+                      CUDA::cusparse
+                      NCCL::NCCL)
 
 # MACRO FOR ADDING OTHER EXECUTABLES
-macro(add_src name)
-    add_executable(${name} src/${name}.cu)
-    target_link_libraries(${name} PRIVATE
+macro(add_src src_name exec_name hns_libname)
+    add_executable(${exec_name} src/${src_name}.cu)
+    target_link_libraries(${exec_name} PRIVATE
     		MPI::MPI_CXX
     		dmmio
     		ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
             KokkosKernels::kokkoskernels Kokkos::kokkos
-    		hns_spgemm
+            ${hns_libname}
     		Threads::Threads
-		CUDA::cusparse
-		NCCL::NCCL
+            CUDA::cusparse
+            NCCL::NCCL
     		${NVTX_LIBRARY}
 	)
-    target_compile_options(${name} PRIVATE -O3 -Wall)
+    target_compile_options(${exec_name} PRIVATE -O3 -Wall)
 endmacro()
 
 
 # EXECUTABLES
-add_src(run_spgemm)
-add_src(scratch)
+add_src(run_spgemm run_spgemm hns_spgemm)
+add_src(run_spgemm run_spgemm_accumthread hns_spgemm_accumthread)
 
 # --- FIND NVTX (profiling library from CUDA Toolkit) ---
 find_library(NVTX_LIBRARY
@@ -150,54 +138,11 @@ else()
 endif()
 
 
-# --- MACRO FOR ADDING PROFILING EXECUTABLES ---
-macro(add_prof name folder)
-    # 1. Define executable first
-    add_executable(${name}_prof ${folder}/${name}.cu)
-
-    # 2. Link libraries
-    target_link_libraries(${name}_prof PRIVATE
-        MPI::MPI_CXX
-        dmmio
-        ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
-        KokkosKernels::kokkoskernels Kokkos::kokkos
-        hns_spgemm
-        Threads::Threads
-        CUDA::cusparse
-	NCCL::NCCL
-        ${NVTX_LIBRARY}
-    )
-
-    # 3. Set compile options & defines
-    target_compile_options(${name}_prof PRIVATE -O3 -Wall)
-    target_compile_definitions(${name}_prof PRIVATE NVTX_PROFILING)
-
-    # 4. Propagate NVTX to owned libs (safe filtering)
-    set(_prof_libs hns_spgemm dmmio ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi)
-    foreach(lib IN LISTS _prof_libs)
-        if(TARGET ${lib})
-            get_target_property(_is_imported ${lib} IMPORTED)
-            get_target_property(_type ${lib} TYPE)
-            if(NOT _is_imported AND NOT _type STREQUAL "INTERFACE_LIBRARY" AND NOT _type STREQUAL "ALIAS")
-                message(STATUS "Applying NVTX_PROFILING to target: ${lib}")
-                target_compile_definitions(${lib} PUBLIC NVTX_PROFILING)
-            else()
-                message(STATUS "Skipping imported/alias target: ${lib}")
-            endif()
-        endif()
-    endforeach()
-endmacro()
-
-
-# --- PROFILING EXECUTABLES (after all libs are defined!) ---
-#add_prof(run_spgemm src)
-add_prof(test_p2pallgatherv test)
-
 
 option(ENABLE_NVTX_PROFILING "Enable NVTX profiling" OFF)
 
 if(ENABLE_NVTX_PROFILING)
-    target_compile_definitions(hns_spgemm PUBLIC NVTX_PROFILING)
+    target_compile_definitions(hns_spgemm_deb PUBLIC NVTX_PROFILING)
 endif()
 
 
