@@ -11,3 +11,6 @@
 [submodule "kokkos-kernels"]
     path = kokkos-kernels
     url = https://github.com/kokkos/kokkos-kernels.git
+[submodule "bcl"]
+	path = bcl
+	url = https://github.com/Hooninator/bcl
