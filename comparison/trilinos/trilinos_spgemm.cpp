@@ -139,15 +139,27 @@ bool verify_local_csr(const size_t* row_ptrs, const LO* col_idx, const scalar_t*
 }
 
 
-Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const Teuchos::Comm<int>>& comm, bool permute=false, LO * perm_vec=nullptr)
+Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const Teuchos::Comm<int>>& comm, LO ** perm_vec, bool permute=false)
 {
 
     int np, rank;
     rank = comm->getRank();
     np = comm->getSize();
 
+    std::cout << "permute: " << permute << std::endl;
+    fflush(stdout);
+
     mmio::Matrix_Metadata meta;
-    mmio_dcoo_t * dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute, perm_vec);
+    mmio_dcoo_t * dcoo;
+    if (perm_vec==nullptr)
+    {
+        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute);
+    }
+    else
+    {
+        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute, *perm_vec);
+    }
+
 
     while ((dcoo->coo->nrows * MASK_SIZE) % np != 0)
     {
@@ -158,9 +170,16 @@ Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const
     {
         std::cout << "Done with dmmio read" << std::endl;
     }
+
     MPI_Barrier(MPI_COMM_WORLD);
 
     GO glob_nrows = dcoo->coo->nrows;
+
+    if (*perm_vec == nullptr && permute)
+    {
+        *perm_vec = new LO[glob_nrows];
+        memcpy(*perm_vec, dcoo->permutation, sizeof(LO) * glob_nrows);
+    }
 
     map_inds(dcoo, np);
 
@@ -321,7 +340,7 @@ int main(int narg, char *arg[]) {
     cmdp.setOption("distribution", &distribution, "Parallel distribution to use: 1D, 2D, LowerTriangularBlock, MMFile");
 
     bool randomize = false;
-    //cmdp.setOption("randomize", "norandomize", &randomize, "Randomly permute the matrix rows and columns");
+    cmdp.setOption("randomize", "norandomize", &randomize, "Randomly permute the matrix rows and columns");
 
     bool binary = false;  
     //cmdp.setOption("binary", "mtx", &binary, "Reading a binary file instead of a matrix market file");
@@ -344,19 +363,23 @@ int main(int narg, char *arg[]) {
     out << "Kokkos is running on: " << Kokkos::DefaultExecutionSpace().name() << std::endl;
     out << "Random permutation: " << params.get<bool>("randomize") << std::endl;
 
+
     // Call readSparseFile to read the file
     Teuchos::RCP<matrix_t> Amat, Bmat;
     try {
       //using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
       //Amat = read_trilinos(filenameA.c_str(), comm);
       //Bmat = read_trilinos(filenameB.c_str(), comm);
-      Amat = read_fast(filenameA.c_str(), comm);
-      Bmat = read_fast(filenameB.c_str(), comm);
+      LO * perm_vec = nullptr;
+      Amat = read_fast(filenameA.c_str(), comm, &perm_vec, randomize);
+      Bmat = read_fast(filenameB.c_str(), comm, &perm_vec, randomize);
     } catch (std::exception &e) {
       out << ":  matrix reading failed " << filenameA << std::endl;
       out << e.what() << std::endl;
       throw e;
     }
+
+    //if (perm_vec != nullptr) delete[] perm_vec;
 
 
     // The resulting matrix is ready to use

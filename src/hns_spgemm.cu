@@ -604,7 +604,6 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     // Set cusparse stream
     cudaStream_t stream = cudaStreamPerThread;
-
     cusparseHandle_t handle;
     CUSPARSE_CHECK(cusparseCreate(&handle));
 

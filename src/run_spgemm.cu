@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include "sparse_summa.cuh"
 #include "test_utils.cuh"
 
 #include <ccutils/timers.h>
@@ -148,7 +149,6 @@ int main(int argc, char ** argv)
 
     dmmio::utils::ProcessGrid_graph(dcoo_A->partitioning->grid, stdout, true);
     MPI_Barrier(MPI_COMM_WORLD);
-
     {
         if (world_rank==0) printf("Beginning conversion\n");
         fflush(stdout);
@@ -205,7 +205,6 @@ int main(int argc, char ** argv)
         // Gen thread pool (mostly for profiling)
         ThreadPool pool(2);
 
-        //const int niters = 6;
         const int niters = 6;
 
         if (world_rank==0) printf("Beginning spgemm -- implementation: %s\n", config->impl_str);
@@ -221,7 +220,14 @@ int main(int argc, char ** argv)
 #endif
 
             MPI_Barrier(MPI_COMM_WORLD);
-            hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
+            if (config->impl == Implementation::SUMMA)
+            {
+                sparse_summa(dist_A, dist_B);
+            }
+            else
+            {
+                hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
+            }
             MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef NVTX_PROFILING

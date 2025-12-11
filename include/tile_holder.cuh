@@ -416,6 +416,34 @@ struct TileHolder
     }
 
 
+    IT tile_bcast(mmio::CSX<IT, VT> * csx, const int root)
+    {
+        IT remote_nnz;
+
+        if (root == rank)
+        {
+            CUDA_CHECK(cudaMemcpyAsync(d_buf, csx->buf, sizeof(char) * csx->buf_size, cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+            remote_nnz = csx->nnz;
+        }
+
+        MPI_Bcast(&remote_nnz, 1, MPIType<IT>(), root, comm);
+
+        set_csx_ptrs(remote_nnz);
+
+        if (remote_nnz == 0)
+        {
+            return 0;
+        }
+
+        size_t buf_size = sizeof(VT) * remote_nnz + sizeof(IT) * remote_nnz + (ptr_size + 1) * sizeof(IT);
+
+        CUDA_SYNC(cudaStreamPerThread);
+
+        MPI_Bcast(d_buf, buf_size, MPI_CHAR, root, comm);
+
+        return remote_nnz;
+    }
+
 
     ~TileHolder()
     {

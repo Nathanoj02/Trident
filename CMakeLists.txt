@@ -3,6 +3,12 @@ cmake_minimum_required(VERSION 3.10)
 set(CMAKE_CUDA_ARCHITECTURES "80")
 set(CMAKE_CXX_STANDARD 20)
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
+set(CMAKE_CUDA_FLAGS 
+"-ccbin ${CMAKE_CXX_COMPILER} \
+-Wno-deprecated-declarations \
+-Xcompiler -O3 \
+-Xcompiler -fopenmp \
+--extended-lambda --expt-relaxed-constexpr -O3")
 
 
 # FIND CUDATOOLKIT
@@ -74,7 +80,7 @@ find_package(OpenMP REQUIRED)
 
 
 # CUDA FLAGS
-set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
+#set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr -O3")
 #set(CMAKE_CUDA_FLAGS "--extended-lambda --expt-relaxed-constexpr")
 
 
@@ -103,6 +109,17 @@ target_link_libraries(hns_spgemm PUBLIC
                       CUDA::cusparse
                       NCCL::NCCL)
 
+add_library(sparse_summa
+            src/sparse_summa.cu)
+target_link_libraries(sparse_summa PUBLIC
+                      MPI::MPI_CXX 
+                      dmmio 
+                      ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
+                      KokkosKernels::kokkoskernels Kokkos::kokkos
+                      Threads::Threads
+                      CUDA::cusparse
+                      NCCL::NCCL)
+
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src src_name exec_name hns_libname)
     add_executable(${exec_name} src/${src_name}.cu)
@@ -112,6 +129,7 @@ macro(add_src src_name exec_name hns_libname)
     		ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
             KokkosKernels::kokkoskernels Kokkos::kokkos
             ${hns_libname}
+            sparse_summa
     		Threads::Threads
             CUDA::cusparse
             NCCL::NCCL

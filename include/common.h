@@ -78,7 +78,8 @@ extern FILE * logfile;
 enum Implementation 
 {
     ASYNC,
-    WORKSTEALING
+    WORKSTEALING,
+    SUMMA
 };
 
 
