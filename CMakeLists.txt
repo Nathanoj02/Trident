@@ -85,8 +85,10 @@ find_package(OpenMP REQUIRED)
 
 
 # MAIN HNS_SPGEMM LIBRARIES
-add_library(hns_spgemm_accumthread
-            src/hns_spgemm.cu)
+set(SOURCES src/hns_spgemm.cu 
+             src/sparse_summa.cu 
+             src/hns_spgemm_1d.cu)
+add_library(hns_spgemm_accumthread ${SOURCES})
 target_link_libraries(hns_spgemm_accumthread PUBLIC
                       MPI::MPI_CXX 
                       dmmio 
@@ -98,8 +100,7 @@ target_link_libraries(hns_spgemm_accumthread PUBLIC
 target_compile_definitions(hns_spgemm_accumthread PUBLIC ACCUM_THREAD)
 
 
-add_library(hns_spgemm
-            src/hns_spgemm.cu)
+add_library(hns_spgemm ${SOURCES})
 target_link_libraries(hns_spgemm PUBLIC
                       MPI::MPI_CXX 
                       dmmio 
@@ -109,16 +110,6 @@ target_link_libraries(hns_spgemm PUBLIC
                       CUDA::cusparse
                       NCCL::NCCL)
 
-add_library(sparse_summa
-            src/sparse_summa.cu)
-target_link_libraries(sparse_summa PUBLIC
-                      MPI::MPI_CXX 
-                      dmmio 
-                      ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
-                      KokkosKernels::kokkoskernels Kokkos::kokkos
-                      Threads::Threads
-                      CUDA::cusparse
-                      NCCL::NCCL)
 
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src src_name exec_name hns_libname)
@@ -129,7 +120,6 @@ macro(add_src src_name exec_name hns_libname)
     		ccutils::ccutils ccutils::ccutils_cuda ccutils::ccutils_mpi
             KokkosKernels::kokkoskernels Kokkos::kokkos
             ${hns_libname}
-            sparse_summa
     		Threads::Threads
             CUDA::cusparse
             NCCL::NCCL
@@ -141,6 +131,7 @@ endmacro()
 
 # EXECUTABLES
 add_src(run_spgemm run_spgemm hns_spgemm)
+add_src(mcl mcl hns_spgemm)
 add_src(run_spgemm run_spgemm_accumthread hns_spgemm_accumthread)
 
 # --- FIND NVTX (profiling library from CUDA Toolkit) ---

@@ -2,7 +2,7 @@
 
 set -e
 
-#source scripts/variables.sh
+source scripts/variables.sh
 
 cd comparison
 

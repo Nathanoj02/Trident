@@ -6,7 +6,7 @@
 #include <ccutils/cuda/cuda_timers.h>
 
 template <typename IT, typename VT>
-void sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B);
+DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B);
 
 
 

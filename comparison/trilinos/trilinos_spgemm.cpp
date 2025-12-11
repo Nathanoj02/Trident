@@ -151,7 +151,7 @@ Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const
 
     mmio::Matrix_Metadata meta;
     mmio_dcoo_t * dcoo;
-    if (perm_vec==nullptr)
+    if (*perm_vec==nullptr)
     {
         dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute);
     }

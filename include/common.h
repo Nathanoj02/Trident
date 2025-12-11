@@ -79,7 +79,8 @@ enum Implementation
 {
     ASYNC,
     WORKSTEALING,
-    SUMMA
+    SUMMA,
+    ONED
 };
 
 

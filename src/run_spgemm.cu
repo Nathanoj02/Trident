@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include "hns_spgemm_1d.cuh"
 #include "sparse_summa.cuh"
 #include "test_utils.cuh"
 
@@ -222,11 +223,11 @@ int main(int argc, char ** argv)
             MPI_Barrier(MPI_COMM_WORLD);
             if (config->impl == Implementation::SUMMA)
             {
-                sparse_summa(dist_A, dist_B);
+                dist_C = sparse_summa(dist_A, dist_B);
             }
             else
             {
-                hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
+                dist_C = hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
             }
             MPI_Barrier(MPI_COMM_WORLD);
 
@@ -234,6 +235,7 @@ int main(int argc, char ** argv)
             NVTX_POP_RANGE;
 #endif
 
+            delete dist_C;
             fflush(stdout);
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }

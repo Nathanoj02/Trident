@@ -179,6 +179,7 @@ void parse_args(int argc, char ** argv, Config * config)
     if (!strcmp(config->impl_str, "async")) config->impl = Implementation::ASYNC;
     else if (!strcmp(config->impl_str, "workstealing")) config->impl = Implementation::WORKSTEALING;
     else if (!strcmp(config->impl_str, "summa")) config->impl = Implementation::SUMMA;
+    else if (!strcmp(config->impl_str, "1d")) config->impl = Implementation::ONED;
     else {
         fprintf(stdout, "Error: unrecognized implementation %s, valid implementations are:\n\t%s\n\t%s\n\t%s\n",
                 config->impl_str, "workstealing", "async");

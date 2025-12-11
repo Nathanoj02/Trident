@@ -1,12 +1,15 @@
 #include <Tpetra_Core.hpp>
 #include <Tpetra_CrsMatrix.hpp>
-#include <MatrixMarket_Tpetra.hpp>
 #include <TpetraExt_MatrixMatrix.hpp>
 #include <Tpetra_MultiVector.hpp>
 
 #include <ccutils/timers.h>
 #include <ccutils/cuda/cuda_utils.hpp>
 #include <ccutils/mpi/mpi_macros.h>
+
+#include <dmmio/dmmio.h>
+#include <dmmio/dio.h>
+#include <dmmio/partitioning.h>
 
 #include <mpi.h>
 #include <string.h>
@@ -19,15 +22,32 @@
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *                          MCL TRILINOS
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+using device_t = Kokkos::DefaultExecutionSpace::device_type;
+using node_t = Tpetra::Map<>::node_type;
 using matrix_t = Tpetra::CrsMatrix<float, int32_t, long long>;
 using graph_t = Tpetra::CrsGraph<int32_t, long long>;
+using scalar_t = float; // Tpetra::CrsMatrix<>::scalar_type;
 using GO = long long;
-using SC = float;
 using LO = int32_t;
+using SC = scalar_t;
 using Teuchos::RCP;
 using Teuchos::rcp;
 using Teuchos::Comm;
-using reader_t = Tpetra::MatrixMarket::Reader<matrix_t>;
+using mmio_csr_t = mmio::CSR<LO, scalar_t>;
+using mmio_coo_t = mmio::COO<LO, scalar_t>;
+using mmio_dcoo_t = dmmio::DCOO<LO, scalar_t>;
+
+void map_inds(mmio_dcoo_t * dcoo, int np)
+{
+
+    dcoo->coo->nrows /= np;
+
+    for (GO i=0; i<dcoo->coo->nnz; i++)
+    {
+        dcoo->coo->row[i] %= dcoo->coo->nrows;
+    }
+
+}
 
 /*
  * Prune entries with absolute value <= tol.
@@ -93,24 +113,136 @@ RCP<matrix_t> prune_small(RCP<matrix_t>&& A, const float tol) {
     return Anew;
 }
 
-/*
- * Read matrix (unchanged)
- */
-RCP<matrix_t> read_trilinos(const char * matpath, RCP<const Comm<int>>& comm) {
-    std::ifstream ifs;
-    ifs.open(matpath);
-    std::string banner;
-    std::getline(ifs, banner);
-    if (banner.find("pattern") != std::string::npos) {
-        RCP<graph_t> A_graph = reader_t::readSparseGraphFile(matpath, comm);
-        RCP<matrix_t> A_result = rcp(new matrix_t(A_graph));
-        A_result->fillComplete();
-        A_result->setAllToScalar((SC)1.0);
-        return A_result;
+
+Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const Teuchos::Comm<int>>& comm, LO ** perm_vec, bool permute=false)
+{
+
+    int np, rank;
+    rank = comm->getRank();
+    np = comm->getSize();
+
+    std::cout << "permute: " << permute << std::endl;
+    fflush(stdout);
+
+    mmio::Matrix_Metadata meta;
+    mmio_dcoo_t * dcoo;
+    if (perm_vec==nullptr)
+    {
+        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute);
+    }
+    else
+    {
+        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute, *perm_vec);
     }
 
-    return reader_t::readSparseFile(matpath, comm);
+
+    while ((dcoo->coo->nrows * MASK_SIZE) % np != 0)
+    {
+        dcoo->coo->nrows++;
+    }
+
+    if (rank==0)
+    {
+        std::cout << "Done with dmmio read" << std::endl;
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    GO glob_nrows = dcoo->coo->nrows;
+
+    if (*perm_vec == nullptr && permute)
+    {
+        *perm_vec = new LO[glob_nrows];
+        memcpy(*perm_vec, dcoo->permutation, sizeof(LO) * glob_nrows);
+    }
+
+    map_inds(dcoo, np);
+
+    std::cout << "Global rows: " << glob_nrows << ", local rows: " << dcoo->coo->nrows << std::endl;
+
+    mmio_coo_t * coo = dcoo->coo;
+    mmio_csr_t * csr = mmio::COO2CSR(coo);
+
+    if (rank==0)
+    {
+        std::cout << "Done with csr conversion" << std::endl;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Convert to size_t row pointers on the host first for verification
+    std::vector<size_t> row_ptrs_host(coo->nrows + 1);
+    for (LO i = 0; i <= coo->nrows; i++) {
+        row_ptrs_host[i] = static_cast<size_t>(csr->row_ptr[i]);
+    }
+
+    // Verify local CSR is correctly formed before passing to Tpetra
+    bool csr_valid = verify_local_csr(row_ptrs_host.data(), csr->col_idx, csr->val,
+                                       coo->nrows, glob_nrows, coo->nnz, rank);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (!csr_valid) {
+        std::cerr << "[Rank " << rank << "] CSR verification failed for " << filename << std::endl;
+    }
+
+    Teuchos::RCP<const map_t> row_map = Teuchos::rcp(new map_t(glob_nrows, (LO)coo->nrows, 0, comm));
+    // For SpGEMM, domain map should match the distribution (same as row_map for square matrices)
+    Teuchos::RCP<const map_t> domain_map = row_map;
+    Teuchos::RCP<const map_t> range_map = row_map;
+
+    if (rank==0)
+    {
+        std::cout << "Done with making row maps" << std::endl;
+        std::cout << "Kokkos execution space: " << Kokkos::DefaultExecutionSpace::name() << std::endl;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Create matrix using row-by-row insertion (Tpetra handles device copy)
+    // First, compute the max number of entries per row for allocation
+    size_t maxEntriesPerRow = 0;
+    for (LO i = 0; i < coo->nrows; i++) {
+        size_t rowLen = row_ptrs_host[i+1] - row_ptrs_host[i];
+        if (rowLen > maxEntriesPerRow) maxEntriesPerRow = rowLen;
+    }
+
+    Teuchos::RCP<matrix_t> mat = Teuchos::rcp(new matrix_t(row_map, maxEntriesPerRow));
+
+    // Insert entries row by row
+    for (LO localRow = 0; localRow < coo->nrows; localRow++) {
+        size_t rowStart = row_ptrs_host[localRow];
+        size_t rowEnd = row_ptrs_host[localRow + 1];
+        size_t numEntries = rowEnd - rowStart;
+
+        if (numEntries > 0) {
+            // Get global row index
+            GO globalRow = row_map->getGlobalElement(localRow);
+
+            // Create views of the column indices and values for this row
+            Teuchos::ArrayView<const LO> colInds(&csr->col_idx[rowStart], numEntries);
+            Teuchos::ArrayView<const scalar_t> vals(&csr->val[rowStart], numEntries);
+
+            // Convert local column indices to global
+            std::vector<GO> globalColInds(numEntries);
+            for (size_t j = 0; j < numEntries; j++) {
+                globalColInds[j] = static_cast<GO>(csr->col_idx[rowStart + j]);
+            }
+            Teuchos::ArrayView<const GO> globalColIndsView(globalColInds.data(), numEntries);
+
+            mat->insertGlobalValues(globalRow, globalColIndsView, vals);
+        }
+    }
+
+    mat->fillComplete(domain_map, range_map);
+
+    if (rank==0)
+    {
+        std::cout << "Done with making matrix" << std::endl;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    dmmio::DCOO_destroy(&dcoo);
+    
+    return mat;
 }
+
 
 /*
  * Print matrix (unchanged)
@@ -356,7 +488,7 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
         RCP<const Comm<int>> comm = Tpetra::getDefaultComm();
         RCP<matrix_t> A1,A2;
         if(myid==0) fprintf(stdout, "Reading matrix\n");
-        A1 = read_trilinos(args->mtx_path, comm);
+        A1 = read_fast(args->mtx_path, comm, nullptr);
         A2 = rcp(new matrix_t(*A1));
         if(myid==0) fprintf(stdout, "Matrix read, OK\n");
 

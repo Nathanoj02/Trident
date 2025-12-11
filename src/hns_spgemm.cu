@@ -1044,7 +1044,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     delete conversion_buffs;
     delete gather_buffs;
     delete C_accum;
-    delete C_local;
+    //delete C_local;
 
 #ifndef KOKKOS
     delete C_prod;
@@ -1054,7 +1054,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     A_comm_thread.get();
     B_comm_thread.get();
 
-    return nullptr;
+    //return nullptr;
+    return new DistCusparseCSX<IT, VT>(C_local, dist_A->partitioning);
 }
 
 
@@ -1080,7 +1081,7 @@ DistCusparseCSX<IT,VT> * hns_spgemm_main(DistCusparseCSX<IT, VT> * dist_A, DistC
             break;
     }
 
-    return nullptr;
+    return C;
 }
 
 template DistCusparseCSX<int32_t,float> *  hns_spgemm_workstealing(DistCusparseCSX<int32_t, float> * dist_A, DistCusparseCSX<int32_t, float> * dist_B, const Implementation impl, ThreadPool& pool, SpaComm::SpaCommHandler<int32_t, float> *spcomm, size_t C_remote_size, bool skipspgemm=false, bool skipws=false);

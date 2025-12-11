@@ -3,7 +3,7 @@
 
 
 template <typename IT, typename VT>
-void sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B)
+DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B)
 {
 
     dmmio::ProcessGrid * grid = A->partitioning->grid;
@@ -120,10 +120,10 @@ void sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparseCSX<IT, VT> * B)
     fflush(stdout);
 
     delete C_accum;
-    delete C_local;
 
+    return new DistCusparseCSX<IT, VT>(C_local, A->partitioning);
 }
 
 
 
-template void sparse_summa(DistCusparseCSX<int32_t, float> * A, DistCusparseCSX<int32_t, float> * B);
+template DistCusparseCSX<int32_t, float> * sparse_summa(DistCusparseCSX<int32_t, float> * A, DistCusparseCSX<int32_t, float> * B);
