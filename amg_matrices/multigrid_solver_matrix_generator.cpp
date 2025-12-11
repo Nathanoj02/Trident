@@ -450,10 +450,52 @@ void generate_restriction_3D(size_t nx_coarse, size_t ny_coarse, size_t nz_coars
     row_ptr[nx_coarse * ny_coarse * nz_coarse] = counter;
 }
 
+// Transpose a matrix in CSR format
+void transpose_matrix(const std::vector<size_t>& row_ptr,
+                     const std::vector<size_t>& col_idx,
+                     const std::vector<double>& values,
+                     size_t nrows, size_t ncols,
+                     std::vector<size_t>& row_ptr_T,
+                     std::vector<size_t>& col_idx_T,
+                     std::vector<double>& values_T)
+{
+    size_t nnz = col_idx.size();
+    
+    // Count entries per column (which becomes row count for transpose)
+    std::vector<size_t> col_counts(ncols, 0);
+    for (size_t idx : col_idx) {
+        col_counts[idx]++;
+    }
+    
+    // Build row_ptr for transpose
+    row_ptr_T.resize(ncols + 1);
+    row_ptr_T[0] = 0;
+    for (size_t i = 0; i < ncols; ++i) {
+        row_ptr_T[i + 1] = row_ptr_T[i] + col_counts[i];
+    }
+    
+    // Allocate space for transpose
+    col_idx_T.resize(nnz);
+    values_T.resize(nnz);
+    
+    // Track current position for each row of transpose
+    std::vector<size_t> current_pos = row_ptr_T;
+    
+    // Fill transpose
+    for (size_t i = 0; i < nrows; ++i) {
+        for (size_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j) {
+            size_t col = col_idx[j];
+            size_t pos = current_pos[col]++;
+            col_idx_T[pos] = i;
+            values_T[pos] = values[j];
+        }
+    }
+}
+
 // Generate descriptive filename
 std::string generate_filename(int dim, const std::string& type, 
                                size_t nx, size_t ny, size_t nz,
-                               size_t nrows, size_t nnz)
+                               size_t nrows, size_t nnz, bool transposed)
 {
     std::string name;
     
@@ -480,6 +522,10 @@ std::string generate_filename(int dim, const std::string& type,
     
     name += "_n" + std::to_string(nrows);
     name += "_nnz" + std::to_string(nnz);
+    
+    if (transposed) {
+        name += "_T";
+    }
     
     return name;
 }
@@ -535,13 +581,14 @@ void save_matrix_market(const std::string& filepath,
 int main(int argc, char* argv[])
 {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " DIMENSION MATRIX_TYPE [NX NY NZ] [OUTPUT_DIR] [FILENAME]\n";
+        std::cerr << "Usage: " << argv[0] << " DIMENSION MATRIX_TYPE [NX NY NZ] [OUTPUT_DIR] [FILENAME] [--transpose]\n";
         std::cerr << "DIMENSION: 1, 2, or 3\n";
         std::cerr << "MATRIX_TYPE: stencil, prolongation, restriction\n";
         std::cerr << "  For stencil: 3pt (1D), 5pt, 9pt (2D), 7pt, 27pt (3D)\n";
         std::cerr << "  For prolongation/restriction: grid sizes are for COARSE grid\n";
         std::cerr << "OUTPUT_DIR: Directory path where to save the .mtx file (default: current directory)\n";
         std::cerr << "FILENAME: Custom filename without extension (default: auto-generated)\n";
+        std::cerr << "--transpose: Transpose the matrix before saving\n";
         return 1;
     }
     
@@ -549,22 +596,46 @@ int main(int argc, char* argv[])
     std::string type = argv[2];
     size_t nx = 10, ny = 10, nz = 10;  // defaults
     
-    if (argc >= 4) nx = std::atoi(argv[3]);
-    if (argc >= 5) ny = std::atoi(argv[4]);
-    if (argc >= 6) nz = std::atoi(argv[5]);
+    // Parse dimension-specific arguments
+    int next_arg = 3;
+    if (argc >= 4 && argv[3][0] != '-') {
+        nx = std::atoi(argv[3]);
+        next_arg = 4;
+    }
+    if (dim >= 2 && argc >= next_arg + 1 && argv[next_arg][0] != '-') {
+        ny = std::atoi(argv[next_arg]);
+        next_arg++;
+    }
+    if (dim >= 3 && argc >= next_arg + 1 && argv[next_arg][0] != '-') {
+        nz = std::atoi(argv[next_arg]);
+        next_arg++;
+    }
     
     // Get output directory (default is current directory)
     std::string output_dir = ".";
-    if (argc >= 7) {
-        output_dir = argv[6];
-        // Remove trailing slash if present
-        if (!output_dir.empty() && (output_dir.back() == '/' || output_dir.back() == '\\')) {
-            output_dir.pop_back();
-        }
-        // Check if directory exists
-        if (!directory_exists(output_dir)) {
-            std::cerr << "Error: Directory '" << output_dir << "' does not exist\n";
-            return 1;
+    std::string custom_filename = "";
+    bool transpose = false;
+    
+    // Parse remaining optional arguments
+    for (int i = next_arg; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--transpose" || arg == "-t") {
+            transpose = true;
+        } else if (arg.substr(0, 2) != "--" && arg.substr(0, 1) != "-" && output_dir == ".") {
+            // First non-flag argument is output directory
+            output_dir = arg;
+            // Remove trailing slash if present
+            if (!output_dir.empty() && (output_dir.back() == '/' || output_dir.back() == '\\')) {
+                output_dir.pop_back();
+            }
+            // Check if directory exists
+            if (!directory_exists(output_dir)) {
+                std::cerr << "Error: Directory '" << output_dir << "' does not exist\n";
+                return 1;
+            }
+        } else if (arg.substr(0, 2) != "--" && arg.substr(0, 1) != "-" && custom_filename.empty()) {
+            // Second non-flag argument is custom filename
+            custom_filename = arg;
         }
     }
     
@@ -622,15 +693,36 @@ int main(int argc, char* argv[])
         return 1;
     }
     
+    // Determine actual number of rows and columns
+    size_t nrows = row_ptr.size() - 1;
+    if (ncols == 0) {
+        if (!col_idx.empty()) {
+            ncols = *std::max_element(col_idx.begin(), col_idx.end()) + 1;
+        } else {
+            ncols = nrows;
+        }
+    }
+    
+    // Transpose if requested
+    if (transpose) {
+        std::vector<size_t> row_ptr_T, col_idx_T;
+        std::vector<double> values_T;
+        transpose_matrix(row_ptr, col_idx, values, nrows, ncols, row_ptr_T, col_idx_T, values_T);
+        row_ptr = std::move(row_ptr_T);
+        col_idx = std::move(col_idx_T);
+        values = std::move(values_T);
+        std::swap(nrows, ncols); // Swap dimensions
+    }
+    
     // Generate filename
     std::string filename;
-    if (argc >= 8) {
+    if (!custom_filename.empty()) {
         // Custom filename provided
-        filename = argv[7];
+        filename = custom_filename;
     } else {
         // Auto-generate filename
         filename = generate_filename(dim, type, nx, ny, nz, 
-                                    row_ptr.size()-1, col_idx.size());
+                                    nrows, col_idx.size(), transpose);
     }
     
     // Construct full filepath
@@ -639,9 +731,12 @@ int main(int argc, char* argv[])
     // Save in MatrixMarket format
     save_matrix_market(filepath, row_ptr, col_idx, values, ncols);
     
-    std::cout << "Matrix generated: " << row_ptr.size()-1 << " rows, "
-              << (ncols > 0 ? ncols : row_ptr.size()-1) << " cols, "
+    std::cout << "Matrix generated: " << nrows << " rows, "
+              << ncols << " cols, "
               << col_idx.size() << " nonzeros\n";
+    if (transpose) {
+        std::cout << "Matrix transposed\n";
+    }
     std::cout << "MatrixMarket file saved: " << filepath << "\n";
     
     return 0;
