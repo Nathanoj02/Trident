@@ -4,8 +4,8 @@ import os
 
 GPUS_PER_NODE = 4
 
-DATASETS=( "mouse_gene", "isolates_subgraph4", "kmer_A2a", "archaea", "eukarya", "ldoor", "kmer_V1r")
-GROUPS = ( "Belcastro", "mcl", "GenBank", "mcl", "mcl", "GHS_psdef", "GenBank")
+DATASETS=( "mouse_gene", "isolates_subgraph4", "kmer_A2a", "archaea", "eukarya", "ldoor")
+GROUPS = ( "Belcastro", "mcl", "GenBank", "mcl", "mcl", "GHS_psdef")
 #DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
 #GROUPS = ( "Fluorem", "Schenk", "LAW")
 #DATASETS=( "uk-2002", "nlpkkt240")
@@ -19,49 +19,48 @@ GRIDS=("1x1", "2x2", "4x4", "8x8")
 TWODGRIDS=("2x2", "4x4", "8x8", "16x16")
 GRIDPROCS=("4", "16", "64", "256")
 
-CONFIGURATIONS=[ "--impl async", "--impl summa"]
-CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_nopermute", "kokkos_nospcomm_summa_nopermute"]
+CONFIGURATIONS=[ "--impl async --permute", "--impl summa --permute"]
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_summa_permute"]
 
 RESULTS_DIR = "./results_final/"
 
 GPU_KIND = '\"gpu\"'
 
-def make_script_bcl(nodes, accum_thread=False):
+def make_script_combblas(nodes, accum_thread=False):
     header = f"""#!/usr/bin/bash
 #SBATCH -N {nodes}
 #SBATCH --tasks-per-node {GPUS_PER_NODE}
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
 #SBATCH -C {GPU_KIND}
 #SBATCH -G {GPUS_PER_NODE*nodes}
-#SBATCH -q regular
-#SBATCH -t 0:10:00
+#SBATCH -q premium
+#SBATCH -t 0:30:00
 #SBATCH -A m4646_g
-module load cudatoolkit/12.4
-export NVSHMEM_SYMMETRIC_SIZE=12G
+export OMP_NUM_THREADS=128
     """
 
     os.makedirs("./scripts/sbatch_scripts/", exist_ok=True)
 
     for k, mat in enumerate(DATASETS):
-        with open(f"./scripts/sbatch_scripts/bcl_strong_{mat}_{nodes}.sh", "w") as file:
+        with open(f"./scripts/sbatch_scripts/combblas_strong_{mat}_{nodes}.sh", "w") as file:
             file.write(header + "\n")
             matpath = f"{MAT_DIR}/{GROUPS[k]}/{mat}/{mat}.mtx"
-            fname = f"{RESULTS_DIR}/bcl_strong_{mat}_{GPUS_PER_NODE*nodes}"
+            fname = f"{RESULTS_DIR}/combblas_strong_{mat}_{GPUS_PER_NODE*nodes}"
             outfile = fname + ".out"
             errfile = fname + ".err"
-            file.write(f"echo 'BCL {mat}'\n")
-            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./bcl/examples/experimental/nvshmem/matrix/sparse_test {matpath} "
+            file.write(f"echo 'CombBLAS {mat}'\n")
+            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/comparison/combblas_spgemm {matpath} "
             file.write(f"{cmd}\n")
 
-    with open(f"./scripts/sbatch_scripts/bcl_strong_all_{nodes}.sh", "w") as file:
+    with open(f"./scripts/sbatch_scripts/combblas_strong_all_{nodes}.sh", "w") as file:
         file.write("#!/usr/bin/bash\n")
         for mat in DATASETS:
-            file.write(f"sbatch ./scripts/sbatch_scripts/bcl_strong_{mat}_{nodes}.sh\n")
+            file.write(f"sbatch ./scripts/sbatch_scripts/combblas_strong_{mat}_{nodes}.sh\n")
 
-    with open(f"./scripts/sbatch_scripts/bcl_strong_all_{nodes}_run.sh", "w") as file:
+    with open(f"./scripts/sbatch_scripts/combblas_strong_all_{nodes}_run.sh", "w") as file:
         file.write("#!/usr/bin/bash\n")
         for mat in DATASETS:
-            file.write(f"sh ./scripts/sbatch_scripts/bcl_strong_{mat}_{nodes}.sh\n")
+            file.write(f"sh ./scripts/sbatch_scripts/combblas_strong_{mat}_{nodes}.sh\n")
 
 
 def make_script_hns(nodes, accum_thread=False):
@@ -71,7 +70,7 @@ def make_script_hns(nodes, accum_thread=False):
 #SBATCH --gpus-per-node {GPUS_PER_NODE}
 #SBATCH -C {GPU_KIND}
 #SBATCH -G {GPUS_PER_NODE*nodes}
-#SBATCH -q regular
+#SBATCH -q premium
 #SBATCH -t 0:10:00
 #SBATCH -A m4646_g
     """
@@ -179,8 +178,8 @@ def make_scripts(args):
     elif args.impl == "hns_accumthread":
         f = make_script_hns 
         t = True
-    elif args.impl == "bcl":
-        f = make_script_bcl
+    elif args.impl == "combblas":
+        f = make_script_combblas
         t = False
     for nodes in args.nodes:
         f(nodes, t)

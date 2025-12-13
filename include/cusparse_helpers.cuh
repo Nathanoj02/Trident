@@ -139,7 +139,8 @@ struct CusparseCSX
     {
         Mat,
         Buffs, 
-        Null
+        Null,
+        Both
     };
 
     cusparseSpMatDescr_t descr;
@@ -176,7 +177,7 @@ struct CusparseCSX
     CusparseCSX(LocalMatrix<IT, IT, VT>& local_mat):
         mat(rawptr_get(local_mat.storage)),
         buffers(nullptr),
-        state(State::Mat)
+        state(State::Both)
     {
         assert(mat->majordim == MajorDim::ROWS);
         CUSPARSE_CHECK(cusparseCreateCsr(&descr,
@@ -281,13 +282,13 @@ struct CusparseCSX
 
     inline bool is_mat()
     {
-        return state == State::Mat;
+        return state == State::Mat || state == State::Both;
     }
 
 
     inline bool is_buffs()
     {
-        return state == State::Buffs;
+        return state == State::Buffs || state == State::Both;
     }
 
 
@@ -421,7 +422,7 @@ struct CusparseCSX
         {
             CSX_destroy_device(&mat);
         }
-        else if (is_buffs())
+        if (is_buffs())
         {
             buffers->explicitFree();
         }
@@ -595,6 +596,8 @@ struct DistCusparseCSX
 
     ~DistCusparseCSX()
     {
+        // Don't ask
+        csx->mat->majordim = mmio::MajorDim::COLS;
         delete csx;
     }
 

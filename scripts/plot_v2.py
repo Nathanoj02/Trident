@@ -10,66 +10,40 @@ from glob import glob
 from typing import Optional
 
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 
 # Default results directory (relative to script location)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_RESULTS_DIR = os.path.join(SCRIPT_DIR, '..', 'results_wave6')
+DEFAULT_RESULTS_DIR = os.path.join(SCRIPT_DIR, '..', 'results_final')
 
 # Implementation types
-IMPL_NONE = 'None'
-IMPL_PERMUTE = 'Permute'
-IMPL_WORKSTEALING = 'Workstealing'
+IMPL_TRIDENT = 'Trident'
+IMPL_SPARSE_SUMMA = 'Sparse SUMMA'
 
-# Accumthread implementation types
-IMPL_ACCUMTHREAD_NONE = 'Accumthread None'
-IMPL_ACCUMTHREAD_PERMUTE = 'Accumthread Permute'
-
-# Colors for line plots (HnS implementations + Trilinos)
+# Colors for line plots (HnS implementations + Trilinos + CombBLAS)
 IMPL_COLORS = {
-    'Trilinos': '#7A9DCF',      # soft blue
-    IMPL_NONE: '#F4A582',       # soft coral
-    IMPL_PERMUTE: '#92C5A9',    # soft sage
-    IMPL_WORKSTEALING: '#C9A9D4',  # soft lavender
-    IMPL_ACCUMTHREAD_NONE: '#E8A838',     # golden orange
-    IMPL_ACCUMTHREAD_PERMUTE: '#5DADE2',  # sky blue
+    'Trilinos': '#7A9DCF',           # soft blue
+    IMPL_TRIDENT: '#F4A582',         # soft coral
+    IMPL_SPARSE_SUMMA: '#92C5A9',    # soft sage
+    'CombBLAS': '#AA7DC4',           # soft purple
+}
+
+# Marker shapes for line plots (different shape per implementation)
+IMPL_MARKERS = {
+    'Trilinos': 'o',                 # circle
+    IMPL_TRIDENT: 's',               # square
+    IMPL_SPARSE_SUMMA: '^',          # triangle up
+    'CombBLAS': 'D',                 # diamond
 }
 
 # Hatches for breakdown plots (to distinguish implementations)
 IMPL_HATCHES = {
-    IMPL_NONE: '',          # solid
-    IMPL_PERMUTE: '///',    # diagonal lines
-    IMPL_WORKSTEALING: '...',  # dots
+    IMPL_TRIDENT: '',          # solid
+    IMPL_SPARSE_SUMMA: '///',  # diagonal lines
 }
 
-# Hatches for accumthread breakdown plots
-IMPL_ACCUMTHREAD_HATCHES = {
-    IMPL_ACCUMTHREAD_NONE: '',       # solid
-    IMPL_ACCUMTHREAD_PERMUTE: '///',  # diagonal lines
-}
-
-
-def get_implementation_type(scheduling: str, permute: bool) -> str:
-    """Determine implementation type from scheduling mode and permute flag.
-
-    Returns one of: IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING
-    """
-    if scheduling == 'workstealing':
-        return IMPL_WORKSTEALING
-    elif permute:
-        return IMPL_PERMUTE
-    else:
-        return IMPL_NONE
-
-
-def get_accumthread_implementation_type(permute: bool) -> str:
-    """Determine accumthread implementation type from permute flag.
-
-    Returns one of: IMPL_ACCUMTHREAD_NONE, IMPL_ACCUMTHREAD_PERMUTE
-    """
-    if permute:
-        return IMPL_ACCUMTHREAD_PERMUTE
-    else:
-        return IMPL_ACCUMTHREAD_NONE
+# Implementation order for consistent plotting
+IMPL_ORDER = [IMPL_TRIDENT, IMPL_SPARSE_SUMMA]
 
 
 @dataclass
@@ -80,8 +54,8 @@ class HnsResult:
     grid: str  # e.g., "4x4"
     matrix: str
     backend: str
-    implementation: str  # One of IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING, or accumthread variants
-    is_accumthread: bool = False  # True if this is an accumthread result
+    implementation: str  # One of IMPL_TRIDENT or IMPL_SPARSE_SUMMA
+    is_permute: bool = False  # True if this is a permute version
     # Overall spgemm runtimes (one per round, excluding round 0)
     spgemm_times_ms: list[float] = field(default_factory=list)
     # Per-phase timings: {phase_name: {process_rank: [sum values per round]}}
@@ -94,51 +68,51 @@ class TrilinosResult:
     filepath: str
     ngpus: int
     matrix: str
+    is_permute: bool = False  # True if this is a permute version
     # Average spgemm runtime from summary line
     spgemm_avg_ms: Optional[float] = None
+
+
+@dataclass
+class CombblasResult:
+    """Parsed results from a CombBLAS output file."""
+    filepath: str
+    ngpus: int
+    matrix: str
+    # SpGEMM runtimes (one per round, excluding round 0)
+    spgemm_times_ms: list[float] = field(default_factory=list)
 
 
 def parse_hns_filename(filename: str) -> Optional[dict]:
     """Parse HnS filename to extract metadata.
 
-    Format: hns_strong_<ngpus>_<grid>_<matrix>_<backend>_nospcomm_<scheduling>_<permute>.out
+    Format: hns_strong_<ngpus>_<grid>_<matrix>_<backend>_nospcomm_<async|summa>_<permute>.out
+
+    Implementation mapping:
+    - 'async' in filename -> Trident
+    - 'summa' in filename -> Sparse SUMMA
     """
     basename = os.path.basename(filename)
     # hns_strong_16_2x2_mouse_gene_kokkos_nospcomm_async_nopermute.out
-    pattern = r'hns_strong_(\d+)_(\d+x\d+)_(.+)_(\w+)_nospcomm_(workstealing|async)_(permute|nopermute)\.out'
+    # hns_strong_16_4x4_mouse_gene_kokkos_nospcomm_summa_permute.out
+    pattern = r'hns_strong_(\d+)_(\d+x\d+)_(.+)_(\w+)_nospcomm_(async|summa)_(permute|nopermute)\.out'
     match = re.match(pattern, basename)
     if not match:
         return None
     scheduling = match.group(5)
-    permute = match.group(6) == 'permute'
+    permute_str = match.group(6)
+    # Map scheduling type to implementation name
+    if scheduling == 'async':
+        implementation = IMPL_TRIDENT
+    else:  # summa
+        implementation = IMPL_SPARSE_SUMMA
     return {
         'ngpus': int(match.group(1)),
         'grid': match.group(2),
         'matrix': match.group(3),
         'backend': match.group(4),
-        'implementation': get_implementation_type(scheduling, permute),
-    }
-
-
-def parse_hns_accumthread_filename(filename: str) -> Optional[dict]:
-    """Parse HnS accumthread filename to extract metadata.
-
-    Format: hns_accumthread_strong_<ngpus>_<grid>_<matrix>_<backend>_nospcomm_async_<permute>.out
-    Example: hns_accumthread_strong_64_4x4_HV15R_kokkos_nospcomm_async_nopermute.out
-    """
-    basename = os.path.basename(filename)
-    pattern = r'hns_accumthread_strong_(\d+)_(\d+x\d+)_(.+)_(\w+)_nospcomm_async_(permute|nopermute)\.out'
-    match = re.match(pattern, basename)
-    if not match:
-        return None
-    permute = match.group(5) == 'permute'
-    return {
-        'ngpus': int(match.group(1)),
-        'grid': match.group(2),
-        'matrix': match.group(3),
-        'backend': match.group(4),
-        'implementation': get_accumthread_implementation_type(permute),
-        'is_accumthread': True,
+        'implementation': implementation,
+        'is_permute': permute_str == 'permute',
     }
 
 
@@ -146,9 +120,37 @@ def parse_trilinos_filename(filename: str) -> Optional[dict]:
     """Parse Trilinos filename to extract metadata.
 
     Format: trilinos_strong_<matrix>_<ngpus>.out
+    Or:     trilinos_strong_<matrix>_<ngpus>_permute.out
     """
     basename = os.path.basename(filename)
+    # Try permute version first
+    pattern_permute = r'trilinos_strong_(.+)_(\d+)_permute\.out'
+    match = re.match(pattern_permute, basename)
+    if match:
+        return {
+            'matrix': match.group(1),
+            'ngpus': int(match.group(2)),
+            'is_permute': True,
+        }
+    # Try non-permute version
     pattern = r'trilinos_strong_(.+)_(\d+)\.out'
+    match = re.match(pattern, basename)
+    if not match:
+        return None
+    return {
+        'matrix': match.group(1),
+        'ngpus': int(match.group(2)),
+        'is_permute': False,
+    }
+
+
+def parse_combblas_filename(filename: str) -> Optional[dict]:
+    """Parse CombBLAS filename to extract metadata.
+
+    Format: combblas_strong_<matrix>_<ngpus>.out
+    """
+    basename = os.path.basename(filename)
+    pattern = r'combblas_strong_(.+)_(\d+)\.out'
     match = re.match(pattern, basename)
     if not match:
         return None
@@ -158,12 +160,9 @@ def parse_trilinos_filename(filename: str) -> Optional[dict]:
     }
 
 
-def parse_hns_file(filepath: str, is_accumthread: bool = False) -> Optional[HnsResult]:
+def parse_hns_file(filepath: str) -> Optional[HnsResult]:
     """Parse an HnS output file and extract timing/communication data."""
-    if is_accumthread:
-        meta = parse_hns_accumthread_filename(filepath)
-    else:
-        meta = parse_hns_filename(filepath)
+    meta = parse_hns_filename(filepath)
     if not meta:
         return None
 
@@ -174,7 +173,7 @@ def parse_hns_file(filepath: str, is_accumthread: bool = False) -> Optional[HnsR
         matrix=meta['matrix'],
         backend=meta['backend'],
         implementation=meta['implementation'],
-        is_accumthread=meta.get('is_accumthread', False),
+        is_permute=meta['is_permute'],
     )
 
     with open(filepath, 'r') as f:
@@ -265,6 +264,7 @@ def parse_trilinos_file(filepath: str) -> Optional[TrilinosResult]:
         filepath=filepath,
         ngpus=meta['ngpus'],
         matrix=meta['matrix'],
+        is_permute=meta['is_permute'],
     )
 
     with open(filepath, 'r') as f:
@@ -279,151 +279,222 @@ def parse_trilinos_file(filepath: str) -> Optional[TrilinosResult]:
     return result
 
 
-def load_all_results(results_dir: str = DEFAULT_RESULTS_DIR) -> tuple[list[HnsResult], list[TrilinosResult]]:
+def parse_combblas_file(filepath: str) -> Optional[CombblasResult]:
+    """Parse a CombBLAS output file and extract timing data.
+
+    CombBLAS outputs multiple <Timer>[spgemm] X.X ms lines.
+    The first is warmup (round 0), the rest are actual runs.
+    Lines may have ANSI color codes that need to be stripped.
+    """
+    meta = parse_combblas_filename(filepath)
+    if not meta:
+        return None
+
+    result = CombblasResult(
+        filepath=filepath,
+        ngpus=meta['ngpus'],
+        matrix=meta['matrix'],
+    )
+
+    with open(filepath, 'r') as f:
+        content = f.read()
+
+    # Match <Timer>[spgemm] X.X ms lines, ignoring ANSI color codes
+    # Format: [96m<Timer>[spgemm] 20165.000000 ms[0m
+    pattern = re.compile(r'<Timer>\[spgemm\]\s+([\d.]+)\s+ms')
+    matches = pattern.findall(content)
+
+    # Skip round 0 (warmup), take the rest
+    if len(matches) > 1:
+        result.spgemm_times_ms = [float(m) for m in matches[1:]]
+    elif len(matches) == 1:
+        # Only one measurement, use it
+        result.spgemm_times_ms = [float(matches[0])]
+
+    return result
+
+
+def load_all_results(results_dir: str = DEFAULT_RESULTS_DIR) -> tuple[list[HnsResult], list[TrilinosResult], list[CombblasResult]]:
     """Load all results from the given directory."""
     hns_results = []
     trilinos_results = []
+    combblas_results = []
 
     for filepath in glob(os.path.join(results_dir, '*.out')):
         basename = os.path.basename(filepath)
 
-        if basename.startswith('hns_accumthread_'):
-            result = parse_hns_file(filepath, is_accumthread=True)
-            if result:
-                hns_results.append(result)
-        elif basename.startswith('hns_'):
-            result = parse_hns_file(filepath, is_accumthread=False)
+        if basename.startswith('hns_strong_'):
+            result = parse_hns_file(filepath)
             if result:
                 hns_results.append(result)
         elif basename.startswith('trilinos_'):
             result = parse_trilinos_file(filepath)
             if result:
                 trilinos_results.append(result)
+        elif basename.startswith('combblas_'):
+            result = parse_combblas_file(filepath)
+            if result:
+                combblas_results.append(result)
 
-    return hns_results, trilinos_results
+    return hns_results, trilinos_results, combblas_results
+
+
+def _plot_runtime_comparison_impl(
+    hns_for_matrix: list[HnsResult],
+    trilinos_for_matrix: list[TrilinosResult],
+    combblas_for_matrix: list[CombblasResult],
+    matrix: str,
+    output_dir: str,
+    title_suffix: str = '',
+    filename_suffix: str = '',
+) -> None:
+    """Internal implementation for runtime comparison plots."""
+    import numpy as np
+
+    if not hns_for_matrix and not trilinos_for_matrix and not combblas_for_matrix:
+        return
+
+    # Collect all unique GPU counts
+    gpu_counts = set()
+    for r in hns_for_matrix:
+        gpu_counts.add(r.ngpus)
+    for r in trilinos_for_matrix:
+        gpu_counts.add(r.ngpus)
+    for r in combblas_for_matrix:
+        gpu_counts.add(r.ngpus)
+    gpu_counts = sorted(gpu_counts)
+
+    # Build data structure: {implementation: {ngpus: runtime_ms}}
+    hns_data: dict[str, dict[int, float]] = defaultdict(dict)
+    trilinos_data: dict[int, float] = {}
+    combblas_data: dict[int, float] = {}
+
+    # Trilinos data
+    for r in trilinos_for_matrix:
+        if r.spgemm_avg_ms is not None:
+            trilinos_data[r.ngpus] = r.spgemm_avg_ms
+
+    # CombBLAS data
+    for r in combblas_for_matrix:
+        if r.spgemm_times_ms:
+            avg_time = sum(r.spgemm_times_ms) / len(r.spgemm_times_ms)
+            combblas_data[r.ngpus] = avg_time
+
+    # HnS data by implementation
+    for r in hns_for_matrix:
+        if r.spgemm_times_ms:
+            avg_time = sum(r.spgemm_times_ms) / len(r.spgemm_times_ms)
+            hns_data[r.implementation][r.ngpus] = avg_time
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Path effect for black outline on lines
+    line_outline = [pe.Stroke(linewidth=4, foreground='black'), pe.Normal()]
+
+    # Plot Trilinos line
+    if trilinos_data:
+        x_vals = sorted(trilinos_data.keys())
+        y_vals = [trilinos_data[g] for g in x_vals]
+        ax.plot(x_vals, y_vals, marker=IMPL_MARKERS['Trilinos'], linestyle='-',
+                label='Trilinos', color=IMPL_COLORS['Trilinos'],
+                linewidth=2, markersize=8, markeredgecolor='black',
+                markeredgewidth=1, path_effects=line_outline)
+
+    # Plot CombBLAS line
+    if combblas_data:
+        x_vals = sorted(combblas_data.keys())
+        y_vals = [combblas_data[g] for g in x_vals]
+        ax.plot(x_vals, y_vals, marker=IMPL_MARKERS['CombBLAS'], linestyle='-',
+                label='CombBLAS', color=IMPL_COLORS['CombBLAS'],
+                linewidth=2, markersize=8, markeredgecolor='black',
+                markeredgewidth=1, path_effects=line_outline)
+
+    # Plot HnS lines for each implementation
+    for impl in IMPL_ORDER:
+        if impl in hns_data:
+            gpu_data = hns_data[impl]
+            x_vals = sorted(gpu_data.keys())
+            y_vals = [gpu_data[g] for g in x_vals]
+            ax.plot(x_vals, y_vals, marker=IMPL_MARKERS[impl], linestyle='-',
+                    label=impl, color=IMPL_COLORS[impl],
+                    linewidth=2, markersize=8, markeredgecolor='black',
+                    markeredgewidth=1, path_effects=line_outline)
+
+    ax.set_xlabel('Number of GPUs')
+    ax.set_ylabel('Runtime (ms)')
+    title = f'SpGEMM Runtime Comparison: {matrix}'
+    if title_suffix:
+        title += f' {title_suffix}'
+    ax.set_title(title)
+
+    # Set log scales
+    ax.set_xscale('log', base=2)
+    ax.set_yscale('log', base=10)
+
+    # Set x-axis ticks to the actual GPU counts
+    ax.set_xticks(gpu_counts)
+    ax.set_xticklabels([str(g) for g in gpu_counts])
+
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.7, which='both')
+
+    # Save the plot
+    plot_subdir = os.path.join(output_dir, 'runtime-comparison', matrix)
+    os.makedirs(plot_subdir, exist_ok=True)
+    filename = f'runtime_comparison{filename_suffix}.png'
+    output_path = os.path.join(plot_subdir, filename)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"    Saved {output_path}")
 
 
 def plot_runtime_comparison(
     hns_results: list[HnsResult],
     trilinos_results: list[TrilinosResult],
+    combblas_results: list[CombblasResult],
     output_dir: str,
 ) -> None:
-    """Line plot comparing HnS vs Trilinos spgemm runtimes per matrix."""
-    import numpy as np
+    """Line plot comparing Trident, Sparse SUMMA, Trilinos, and CombBLAS spgemm runtimes per matrix.
 
+    Generates two types of plots:
+    - Regular comparison (non-permute Trilinos) for all matrices
+    - Permute comparison (permute Trilinos) only for HV15R
+    """
     # Group results by matrix
     matrices = set()
     for r in hns_results:
         matrices.add(r.matrix)
     for r in trilinos_results:
         matrices.add(r.matrix)
-
-    # Implementation order for consistent plotting (regular HnS + accumthread)
-    impl_order = [IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING]
-    accumthread_impl_order = [IMPL_ACCUMTHREAD_NONE, IMPL_ACCUMTHREAD_PERMUTE]
-
-    # Markers for different implementation types
-    impl_markers = {
-        IMPL_NONE: 'o',
-        IMPL_PERMUTE: 'o',
-        IMPL_WORKSTEALING: 'o',
-        IMPL_ACCUMTHREAD_NONE: 's',      # square
-        IMPL_ACCUMTHREAD_PERMUTE: 's',   # square
-    }
+    for r in combblas_results:
+        matrices.add(r.matrix)
 
     for matrix in sorted(matrices):
-        # Filter results for this matrix (separate regular and accumthread)
-        hns_for_matrix = [r for r in hns_results if r.matrix == matrix and not r.is_accumthread]
-        accumthread_for_matrix = [r for r in hns_results if r.matrix == matrix and r.is_accumthread]
-        trilinos_for_matrix = [r for r in trilinos_results if r.matrix == matrix]
+        # Filter results for this matrix
+        combblas_for_matrix = [r for r in combblas_results if r.matrix == matrix]
 
-        if not hns_for_matrix and not accumthread_for_matrix and not trilinos_for_matrix:
-            continue
+        # Regular comparison (non-permute) - for all matrices
+        hns_nopermute = [r for r in hns_results
+                         if r.matrix == matrix and not r.is_permute]
+        trilinos_nopermute = [r for r in trilinos_results
+                              if r.matrix == matrix and not r.is_permute]
+        _plot_runtime_comparison_impl(
+            hns_nopermute, trilinos_nopermute, combblas_for_matrix, matrix, output_dir
+        )
 
-        # Collect all unique GPU counts
-        gpu_counts = set()
-        for r in hns_for_matrix:
-            gpu_counts.add(r.ngpus)
-        for r in accumthread_for_matrix:
-            gpu_counts.add(r.ngpus)
-        for r in trilinos_for_matrix:
-            gpu_counts.add(r.ngpus)
-        gpu_counts = sorted(gpu_counts)
-
-        # Build data structure: {implementation: {ngpus: runtime_ms}}
-        hns_data: dict[str, dict[int, float]] = defaultdict(dict)
-        trilinos_data: dict[int, float] = {}
-
-        # Trilinos data
-        for r in trilinos_for_matrix:
-            if r.spgemm_avg_ms is not None:
-                trilinos_data[r.ngpus] = r.spgemm_avg_ms
-
-        # HnS data by implementation (regular)
-        for r in hns_for_matrix:
-            if r.spgemm_times_ms:
-                avg_time = sum(r.spgemm_times_ms) / len(r.spgemm_times_ms)
-                hns_data[r.implementation][r.ngpus] = avg_time
-
-        # HnS data by implementation (accumthread)
-        for r in accumthread_for_matrix:
-            if r.spgemm_times_ms:
-                avg_time = sum(r.spgemm_times_ms) / len(r.spgemm_times_ms)
-                hns_data[r.implementation][r.ngpus] = avg_time
-
-        # Create the plot
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # Plot Trilinos line
-        if trilinos_data:
-            x_vals = sorted(trilinos_data.keys())
-            y_vals = [trilinos_data[g] for g in x_vals]
-            ax.plot(x_vals, y_vals, 'o-', label='Trilinos',
-                    color=IMPL_COLORS['Trilinos'], linewidth=2, markersize=8)
-
-        # Plot HnS lines for each regular implementation
-        for impl in impl_order:
-            if impl in hns_data:
-                gpu_data = hns_data[impl]
-                x_vals = sorted(gpu_data.keys())
-                y_vals = [gpu_data[g] for g in x_vals]
-                marker = impl_markers.get(impl, 'o')
-                ax.plot(x_vals, y_vals, f'{marker}-', label=f'HnS {impl}',
-                        color=IMPL_COLORS[impl], linewidth=2, markersize=8)
-
-        # Plot HnS lines for each accumthread implementation
-        for impl in accumthread_impl_order:
-            if impl in hns_data:
-                gpu_data = hns_data[impl]
-                x_vals = sorted(gpu_data.keys())
-                y_vals = [gpu_data[g] for g in x_vals]
-                marker = impl_markers.get(impl, 's')
-                ax.plot(x_vals, y_vals, f'{marker}-', label=f'HnS {impl}',
-                        color=IMPL_COLORS[impl], linewidth=2, markersize=8)
-
-        ax.set_xlabel('Number of GPUs')
-        ax.set_ylabel('Runtime (ms)')
-        ax.set_title(f'SpGEMM Runtime Comparison: {matrix}')
-
-        # Set log scales
-        ax.set_xscale('log', base=2)
-        ax.set_yscale('log', base=10)
-
-        # Set x-axis ticks to the actual GPU counts
-        ax.set_xticks(gpu_counts)
-        ax.set_xticklabels([str(g) for g in gpu_counts])
-
-        ax.legend()
-        ax.grid(True, linestyle='--', alpha=0.7, which='both')
-
-        # Save the plot
-        plot_subdir = os.path.join(output_dir, 'runtime-comparison', matrix)
-        os.makedirs(plot_subdir, exist_ok=True)
-        output_path = os.path.join(plot_subdir, 'runtime_comparison.png')
-        fig.tight_layout()
-        fig.savefig(output_path, dpi=150)
-        plt.close(fig)
-        print(f"    Saved {output_path}")
+        # Permute comparison - only for HV15R
+        if matrix == 'HV15R':
+            hns_permute = [r for r in hns_results
+                           if r.matrix == matrix and r.is_permute]
+            trilinos_permute = [r for r in trilinos_results
+                                if r.matrix == matrix and r.is_permute]
+            _plot_runtime_comparison_impl(
+                hns_permute, trilinos_permute, combblas_for_matrix, matrix, output_dir,
+                title_suffix='(Permute)',
+                filename_suffix='_permute'
+            )
 
 
 PHASE_DISPLAY_NAMES = {
@@ -432,6 +503,7 @@ PHASE_DISPLAY_NAMES = {
     'spm_time': 'Local SpGEMM',
     'spadd_time': 'Accumulation',
     'A_conversion': 'CSC Conversion',
+    'bcast': 'Broadcast',
     'task_queue_checkn': 'Queue Check',
     'task_queue_incn': 'Queue Increment',
     'task_queue_pop': 'Queue Pop',
@@ -444,6 +516,7 @@ PHASE_COLORS = {
     'spm_time': '#228833',          # green - local SpGEMM
     'spadd_time': '#CCBB44',        # yellow - accumulation
     'A_conversion': '#EE6677',      # red - CSC conversion
+    'bcast': '#882255',             # wine - broadcast (Sparse SUMMA only)
     'task_queue_checkn': '#AA3377', # purple - queue check
     'task_queue_incn': '#BBBBBB',   # gray - queue increment
     'task_queue_pop': '#44AA99',    # teal - queue pop
@@ -452,272 +525,102 @@ PHASE_COLORS = {
 # Phases that are queue-related (for filtering)
 QUEUE_PHASES = {'task_queue_checkn', 'task_queue_incn', 'task_queue_pop'}
 
-
-def _plot_runtime_breakdown_per_process_impl(
-    results_list: list[HnsResult],
-    output_dir: str,
-    impl_order: list[str],
-    hatches_dict: dict[str, str],
-    filename_suffix: str = '',
-    title_suffix: str = '',
-) -> None:
-    """Internal implementation for per-process runtime breakdown plots."""
-    import numpy as np
-    from matplotlib.patches import Patch
-
-    # Group results by (matrix, ngpus)
-    groups: dict[tuple[str, int], list[HnsResult]] = defaultdict(list)
-    for r in results_list:
-        groups[(r.matrix, r.ngpus)].append(r)
-
-    for (matrix, ngpus), results in sorted(groups.items()):
-        # Collect all process ranks
-        all_processes = set()
-        for r in results:
-            for phase_data in r.phase_timings.values():
-                all_processes.update(phase_data.keys())
-        all_processes = sorted(all_processes)
-
-        if not all_processes:
-            continue
-
-        # Collect all phases across all results (only those in PHASE_DISPLAY_NAMES)
-        all_phases = set()
-        for r in results:
-            all_phases.update(r.phase_timings.keys())
-        all_phases = sorted([p for p in all_phases if p in PHASE_DISPLAY_NAMES])
-
-        # Build data: {implementation: {process: {phase: avg_value}}}
-        data: dict[str, dict[int, dict[str, float]]] = {}
-
-        for r in results:
-            impl = r.implementation
-            if impl not in data:
-                data[impl] = defaultdict(dict)
-
-            for phase, process_data in r.phase_timings.items():
-                for process, round_values in process_data.items():
-                    if round_values:
-                        avg_val = sum(round_values) / len(round_values)
-                        data[impl][process][phase] = avg_val
-
-        # Get implementations present in order
-        impls_present = [impl for impl in impl_order if impl in data]
-
-        if not impls_present:
-            continue
-
-        # Create the plot
-        n_impls = len(impls_present)
-        n_processes = len(all_processes)
-
-        fig, ax = plt.subplots(figsize=(max(12, n_processes * 0.5), 6))
-
-        bar_width = 0.8 / n_impls
-        x = np.arange(n_processes)
-
-        # Plot stacked bars for each implementation
-        for i, impl in enumerate(impls_present):
-            process_data = data[impl]
-            offset = (i - n_impls / 2 + 0.5) * bar_width
-            bottom = np.zeros(n_processes)
-            hatch = hatches_dict.get(impl, '')
-
-            for phase in all_phases:
-                values = []
-                for proc in all_processes:
-                    val = process_data.get(proc, {}).get(phase, 0.0)
-                    values.append(val)
-                values = np.array(values)
-
-                display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
-                color = PHASE_COLORS.get(phase, '#888888')
-                # Only add phase label for the first implementation to avoid duplicate legend entries
-                phase_label = display_name if i == 0 else None
-                ax.bar(x + offset, values, bar_width, bottom=bottom,
-                       label=phase_label, color=color,
-                       hatch=hatch, edgecolor='black', linewidth=0.5)
-                bottom += values
-
-        ax.set_xlabel('Process Rank')
-        ax.set_ylabel('Runtime (ms)')
-        title = f'Per-Process Runtime Breakdown: {matrix} ({ngpus} GPUs)'
-        if title_suffix:
-            title += f' {title_suffix}'
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels(all_processes)
-
-        # Create two legends: one for phases, one for implementations (hatches)
-        phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
-                               label=PHASE_DISPLAY_NAMES.get(phase, phase))
-                        for phase in all_phases]
-        impl_handles = [Patch(facecolor='white', edgecolor='black',
-                              hatch=hatches_dict.get(impl, ''),
-                              label=f'HnS {impl}')
-                       for impl in impls_present]
-
-        leg1 = ax.legend(handles=phase_handles, title='Phase', loc='upper left')
-        ax.add_artist(leg1)
-        ax.legend(handles=impl_handles, title='Implementation', loc='upper right')
-
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-
-        plot_subdir = os.path.join(output_dir, 'runtime-breakdown-per-process', matrix)
-        os.makedirs(plot_subdir, exist_ok=True)
-        filename = f'{ngpus}gpus{filename_suffix}.png'
-        output_path = os.path.join(plot_subdir, filename)
-        fig.tight_layout()
-        fig.savefig(output_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f"    Saved {output_path}")
+# Phases to exclude from Trident plots
+TRIDENT_EXCLUDED_PHASES = {'A_conversion'}
 
 
 def plot_runtime_breakdown_per_process(
     hns_results: list[HnsResult],
     trilinos_results: list[TrilinosResult],
+    combblas_results: list[CombblasResult],
     output_dir: str,
 ) -> None:
     """Stacked bar plot showing per-process runtime breakdown for HnS.
 
-    Generates separate plots for regular HnS and accumthread implementations.
+    Generates separate plots for each implementation (Trident, Sparse SUMMA).
     """
-    # Regular HnS results
-    regular_results = [r for r in hns_results if not r.is_accumthread]
-    impl_order = [IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING]
-    _plot_runtime_breakdown_per_process_impl(
-        regular_results, output_dir, impl_order, IMPL_HATCHES
-    )
-
-    # Accumthread results
-    accumthread_results = [r for r in hns_results if r.is_accumthread]
-    accumthread_impl_order = [IMPL_ACCUMTHREAD_NONE, IMPL_ACCUMTHREAD_PERMUTE]
-    _plot_runtime_breakdown_per_process_impl(
-        accumthread_results, output_dir, accumthread_impl_order,
-        IMPL_ACCUMTHREAD_HATCHES, filename_suffix='_accumthread',
-        title_suffix='(Accumthread)'
-    )
-
-
-def _plot_runtime_breakdown_overall_impl(
-    hns_results: list[HnsResult],
-    output_dir: str,
-    include_queue: bool,
-    subdir_name: str,
-    impl_order: list[str],
-    hatches_dict: dict[str, str],
-    title_suffix: str = '',
-    filename_suffix: str = '',
-) -> None:
-    """Internal implementation for overall runtime breakdown plots."""
     import numpy as np
     from matplotlib.patches import Patch
 
-    # Group HnS results by matrix
-    matrices = set(r.matrix for r in hns_results)
+    # Group results by (matrix, ngpus, implementation)
+    groups: dict[tuple[str, int, str], HnsResult] = {}
+    for r in hns_results:
+        key = (r.matrix, r.ngpus, r.implementation)
+        groups[key] = r
 
-    for matrix in sorted(matrices):
-        # Filter results for this matrix
-        results_for_matrix = [r for r in hns_results if r.matrix == matrix]
+    for (matrix, ngpus, impl), result in sorted(groups.items()):
+        # Collect all process ranks
+        all_processes = set()
+        for phase_data in result.phase_timings.values():
+            all_processes.update(phase_data.keys())
+        all_processes = sorted(all_processes)
 
-        if not results_for_matrix:
+        if not all_processes:
             continue
 
-        # Collect all unique GPU counts
-        gpu_counts = sorted(set(r.ngpus for r in results_for_matrix))
+        # Collect all phases (only those in PHASE_DISPLAY_NAMES, exclude queue phases)
+        # Also exclude Trident-specific excluded phases
+        excluded = QUEUE_PHASES | (TRIDENT_EXCLUDED_PHASES if impl == IMPL_TRIDENT else set())
+        all_phases = sorted([p for p in result.phase_timings.keys()
+                            if p in PHASE_DISPLAY_NAMES and p not in excluded])
 
-        # Collect all phases (only those in PHASE_DISPLAY_NAMES, optionally filter queue)
-        all_phases = set()
-        for r in results_for_matrix:
-            all_phases.update(r.phase_timings.keys())
-        all_phases = sorted([p for p in all_phases if p in PHASE_DISPLAY_NAMES])
-        if not include_queue:
-            all_phases = [p for p in all_phases if p not in QUEUE_PHASES]
-
-        # Build data: {implementation: {ngpus: {phase: max_avg_value}}}
-        data: dict[str, dict[int, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
-
-        for r in results_for_matrix:
-            impl = r.implementation
-
-            for phase in all_phases:
-                if phase in r.phase_timings:
-                    # For each process, compute average across rounds
-                    process_avgs = []
-                    for process, round_values in r.phase_timings[phase].items():
-                        if round_values:
-                            avg_val = sum(round_values) / len(round_values)
-                            process_avgs.append(avg_val)
-                    # Take max across processes
-                    if process_avgs:
-                        data[impl][r.ngpus][phase] = max(process_avgs)
-
-        # Get implementations present in order
-        impls_present = [impl for impl in impl_order if impl in data]
-
-        if not impls_present:
+        if not all_phases:
             continue
+
+        # Build data: {process: {phase: avg_value}}
+        data: dict[int, dict[str, float]] = defaultdict(dict)
+
+        for phase, process_data in result.phase_timings.items():
+            if phase not in all_phases:
+                continue
+            for process, round_values in process_data.items():
+                if round_values:
+                    avg_val = sum(round_values) / len(round_values)
+                    data[process][phase] = avg_val
 
         # Create the plot
-        n_impls = len(impls_present)
-        n_gpu_counts = len(gpu_counts)
+        n_processes = len(all_processes)
 
-        fig, ax = plt.subplots(figsize=(max(10, n_gpu_counts * 2), 6))
+        fig, ax = plt.subplots(figsize=(max(12, n_processes * 0.3), 6))
 
-        bar_width = 0.8 / n_impls
-        x = np.arange(n_gpu_counts)
+        bar_width = 0.8
+        x = np.arange(n_processes)
+        bottom = np.zeros(n_processes)
 
-        # Plot stacked bars for each implementation
-        for i, impl in enumerate(impls_present):
-            gpu_data = data[impl]
-            offset = (i - n_impls / 2 + 0.5) * bar_width
-            bottom = np.zeros(n_gpu_counts)
-            hatch = hatches_dict.get(impl, '')
+        # Plot stacked bars
+        for phase in all_phases:
+            values = []
+            for proc in all_processes:
+                val = data.get(proc, {}).get(phase, 0.0)
+                values.append(val)
+            values = np.array(values)
 
-            for phase in all_phases:
-                values = []
-                for ngpus in gpu_counts:
-                    val = gpu_data.get(ngpus, {}).get(phase, 0.0)
-                    values.append(val)
-                values = np.array(values)
+            display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
+            color = PHASE_COLORS.get(phase, '#888888')
+            ax.bar(x, values, bar_width, bottom=bottom,
+                   label=display_name, color=color,
+                   edgecolor='black', linewidth=0.5)
+            bottom += values
 
-                display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
-                color = PHASE_COLORS.get(phase, '#888888')
-                # Only add phase label for the first implementation to avoid duplicate legend entries
-                phase_label = display_name if i == 0 else None
-                ax.bar(x + offset, values, bar_width, bottom=bottom,
-                       label=phase_label, color=color,
-                       hatch=hatch, edgecolor='black', linewidth=0.5)
-                bottom += values
-
-        ax.set_xlabel('Number of GPUs')
+        ax.set_xlabel('Process Rank')
         ax.set_ylabel('Runtime (ms)')
-        title = f'Overall Runtime Breakdown: {matrix}'
-        if title_suffix:
-            title += f' {title_suffix}'
-        ax.set_title(title)
+        ax.set_title(f'Per-Process Runtime Breakdown: {matrix} ({ngpus} GPUs) - {impl}')
         ax.set_xticks(x)
-        ax.set_xticklabels(gpu_counts)
+        ax.set_xticklabels(all_processes)
 
-        # Create two legends: one for phases, one for implementations
+        # Create legend for phases
         phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
                         for phase in all_phases]
-
-        impl_handles = [Patch(facecolor='white', edgecolor='black',
-                              hatch=hatches_dict.get(impl, ''),
-                              label=f'HnS {impl}')
-                       for impl in impls_present]
-
-        leg1 = ax.legend(handles=phase_handles, title='Phase', loc='upper left')
-        ax.add_artist(leg1)
-        ax.legend(handles=impl_handles, title='Implementation', loc='upper right')
+        ax.legend(handles=phase_handles, title='Phase', loc='upper right')
 
         ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-        plot_subdir = os.path.join(output_dir, subdir_name, matrix)
+        # Save to implementation-specific subdirectory
+        impl_dir_name = impl.lower().replace(' ', '_')
+        plot_subdir = os.path.join(output_dir, 'runtime-breakdown-per-process', impl_dir_name, matrix)
         os.makedirs(plot_subdir, exist_ok=True)
-        filename = f'runtime_breakdown_overall{filename_suffix}.png'
+        filename = f'{ngpus}gpus.png'
         output_path = os.path.join(plot_subdir, filename)
         fig.tight_layout()
         fig.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -728,182 +631,99 @@ def _plot_runtime_breakdown_overall_impl(
 def plot_runtime_breakdown_overall(
     hns_results: list[HnsResult],
     trilinos_results: list[TrilinosResult],
+    combblas_results: list[CombblasResult],
     output_dir: str,
 ) -> None:
     """Stacked bar plot showing overall runtime breakdown (max across processes) for HnS.
 
-    Generates versions for regular HnS and accumthread, each with/without queue phases.
+    Generates separate plots for each implementation (Trident, Sparse SUMMA).
     """
-    # Regular HnS results
-    regular_results = [r for r in hns_results if not r.is_accumthread]
-    impl_order = [IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING]
-
-    # Regular HnS: Version without queue phases
-    _plot_runtime_breakdown_overall_impl(
-        regular_results, output_dir,
-        include_queue=False,
-        subdir_name='runtime-breakdown-overall',
-        impl_order=impl_order,
-        hatches_dict=IMPL_HATCHES,
-    )
-    # Regular HnS: Version with queue phases
-    _plot_runtime_breakdown_overall_impl(
-        regular_results, output_dir,
-        include_queue=True,
-        subdir_name='runtime-breakdown-overall-queue',
-        impl_order=impl_order,
-        hatches_dict=IMPL_HATCHES,
-        title_suffix='(with Queue)',
-    )
-
-    # Accumthread results
-    accumthread_results = [r for r in hns_results if r.is_accumthread]
-    accumthread_impl_order = [IMPL_ACCUMTHREAD_NONE, IMPL_ACCUMTHREAD_PERMUTE]
-
-    # Accumthread: Version without queue phases
-    _plot_runtime_breakdown_overall_impl(
-        accumthread_results, output_dir,
-        include_queue=False,
-        subdir_name='runtime-breakdown-overall',
-        impl_order=accumthread_impl_order,
-        hatches_dict=IMPL_ACCUMTHREAD_HATCHES,
-        title_suffix='(Accumthread)',
-        filename_suffix='_accumthread',
-    )
-    # Accumthread: Version with queue phases
-    _plot_runtime_breakdown_overall_impl(
-        accumthread_results, output_dir,
-        include_queue=True,
-        subdir_name='runtime-breakdown-overall-queue',
-        impl_order=accumthread_impl_order,
-        hatches_dict=IMPL_ACCUMTHREAD_HATCHES,
-        title_suffix='(Accumthread, with Queue)',
-        filename_suffix='_accumthread',
-    )
-
-
-def _plot_runtime_per_process_stack_impl(
-    results_list: list[HnsResult],
-    output_dir: str,
-    impl_order: list[str],
-    filename_suffix: str = '',
-    title_suffix: str = '',
-) -> None:
-    """Internal implementation for per-process stack plots."""
     import numpy as np
     from matplotlib.patches import Patch
 
-    # Group results by (matrix, ngpus)
-    groups: dict[tuple[str, int], list[HnsResult]] = defaultdict(list)
-    for r in results_list:
-        groups[(r.matrix, r.ngpus)].append(r)
+    # Group results by (matrix, implementation)
+    groups: dict[tuple[str, str], list[HnsResult]] = defaultdict(list)
+    for r in hns_results:
+        groups[(r.matrix, r.implementation)].append(r)
 
-    for (matrix, ngpus), results in sorted(groups.items()):
-        # Build data: {(implementation, grid): {phase: {process: avg_value}}}
-        data: dict[tuple[str, str], dict[str, dict[int, float]]] = {}
+    for (matrix, impl), results in sorted(groups.items()):
+        if not results:
+            continue
 
-        # Collect all phases present
-        all_phases_set = set()
+        # Collect all unique GPU counts
+        gpu_counts = sorted(set(r.ngpus for r in results))
+
+        # Collect all phases (only those in PHASE_DISPLAY_NAMES, exclude queue phases)
+        # Also exclude Trident-specific excluded phases
+        excluded = QUEUE_PHASES | (TRIDENT_EXCLUDED_PHASES if impl == IMPL_TRIDENT else set())
+        all_phases = set()
+        for r in results:
+            all_phases.update(r.phase_timings.keys())
+        all_phases = sorted([p for p in all_phases
+                            if p in PHASE_DISPLAY_NAMES and p not in excluded])
+
+        if not all_phases:
+            continue
+
+        # Build data: {ngpus: {phase: max_avg_value}}
+        data: dict[int, dict[str, float]] = defaultdict(dict)
 
         for r in results:
-            key = (r.implementation, r.grid)
-            if key not in data:
-                data[key] = defaultdict(lambda: defaultdict(float))
-
-            for phase, process_data in r.phase_timings.items():
-                # Only include phases we care about
-                if phase not in PHASE_DISPLAY_NAMES:
-                    continue
-                all_phases_set.add(phase)
-                for process, round_values in process_data.items():
-                    if round_values:
-                        avg_val = sum(round_values) / len(round_values)
-                        data[key][phase][process] = avg_val
-
-        # Sort phases consistently
-        all_phases = sorted([p for p in all_phases_set if p in PHASE_DISPLAY_NAMES])
-
-        # Get (impl, grid) keys present, ordered by implementation then grid
-        keys_present = []
-        for impl in impl_order:
-            impl_keys = sorted([k for k in data.keys() if k[0] == impl], key=lambda k: k[1])
-            keys_present.extend(impl_keys)
-
-        if not keys_present:
-            continue
-
-        # Collect all process ranks across all configurations
-        all_processes = set()
-        for phase_data in data.values():
-            for process_data in phase_data.values():
-                all_processes.update(process_data.keys())
-        all_processes = sorted(all_processes)
-
-        if not all_processes:
-            continue
-
-        # Create vertically stacked subplots with fixed figure size
-        n_configs = len(keys_present)
-        fig, axes = plt.subplots(n_configs, 1, figsize=(12, 3 * n_configs), sharex=True)
-
-        # Handle single subplot case
-        if n_configs == 1:
-            axes = [axes]
-
-        x = np.array(all_processes)
-
-        # Find global y-max for consistent y-axis across subplots (sum of all phases)
-        y_max = 0
-        for key in keys_present:
-            phase_data = data[key]
-            totals = [0.0] * len(all_processes)
             for phase in all_phases:
-                for j, proc in enumerate(all_processes):
-                    totals[j] += phase_data.get(phase, {}).get(proc, 0.0)
-            y_max = max(y_max, max(totals) if totals else 0)
+                if phase in r.phase_timings:
+                    # For each process, compute average across rounds
+                    process_avgs = []
+                    for process, round_values in r.phase_timings[phase].items():
+                        if round_values:
+                            avg_val = sum(round_values) / len(round_values)
+                            process_avgs.append(avg_val)
+                    # Take max across processes
+                    if process_avgs:
+                        data[r.ngpus][phase] = max(process_avgs)
 
-        # Plot each (implementation, grid) in its own subplot
-        for i, key in enumerate(keys_present):
-            impl, grid = key
-            ax = axes[i]
-            phase_data = data[key]
+        # Create the plot
+        n_gpu_counts = len(gpu_counts)
 
-            # Build stack data: list of arrays, one per phase
-            stack_data = []
-            colors = []
-            labels = []
-            for phase in all_phases:
-                values = [phase_data.get(phase, {}).get(proc, 0.0) for proc in all_processes]
-                stack_data.append(values)
-                colors.append(PHASE_COLORS.get(phase, '#888888'))
-                labels.append(PHASE_DISPLAY_NAMES.get(phase, phase))
+        fig, ax = plt.subplots(figsize=(max(10, n_gpu_counts * 2), 6))
 
-            if stack_data:
-                ax.stackplot(x, stack_data, colors=colors, edgecolor='black', linewidth=0.5)
+        bar_width = 0.6
+        x = np.arange(n_gpu_counts)
+        bottom = np.zeros(n_gpu_counts)
 
-            ax.set_ylabel('Runtime (ms)')
-            ax.set_title(f'HnS {impl} ({grid})')
-            ax.set_ylim(0, y_max * 1.1)
-            ax.grid(axis='y', linestyle='--', alpha=0.7)
+        # Plot stacked bars
+        for phase in all_phases:
+            values = []
+            for ngpus in gpu_counts:
+                val = data.get(ngpus, {}).get(phase, 0.0)
+                values.append(val)
+            values = np.array(values)
 
-        # Set x-axis label only on bottom subplot
-        axes[-1].set_xlabel('Process Rank')
+            display_name = PHASE_DISPLAY_NAMES.get(phase, phase)
+            color = PHASE_COLORS.get(phase, '#888888')
+            ax.bar(x, values, bar_width, bottom=bottom,
+                   label=display_name, color=color,
+                   edgecolor='black', linewidth=0.5)
+            bottom += values
 
-        # Create a single legend for phases (on the first subplot)
+        ax.set_xlabel('Number of GPUs')
+        ax.set_ylabel('Runtime (ms)')
+        ax.set_title(f'Overall Runtime Breakdown: {matrix} - {impl}')
+        ax.set_xticks(x)
+        ax.set_xticklabels(gpu_counts)
+
+        # Create legend for phases
         phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
                                label=PHASE_DISPLAY_NAMES.get(phase, phase))
                         for phase in all_phases]
-        axes[0].legend(handles=phase_handles, title='Phase', loc='upper right')
+        ax.legend(handles=phase_handles, title='Phase', loc='upper right')
 
-        title = f'Per-Process Runtime Breakdown: {matrix} ({ngpus} GPUs)'
-        if title_suffix:
-            title += f' {title_suffix}'
-        fig.suptitle(title, fontsize=12)
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-        plot_subdir = os.path.join(output_dir, 'runtime-per-process-stack', matrix)
+        # Save to implementation-specific subdirectory
+        impl_dir_name = impl.lower().replace(' ', '_')
+        plot_subdir = os.path.join(output_dir, 'runtime-breakdown-overall', impl_dir_name, matrix)
         os.makedirs(plot_subdir, exist_ok=True)
-        filename = f'{ngpus}gpus{filename_suffix}.png'
-        output_path = os.path.join(plot_subdir, filename)
+        output_path = os.path.join(plot_subdir, 'runtime_breakdown_overall.png')
         fig.tight_layout()
         fig.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -913,24 +733,89 @@ def _plot_runtime_per_process_stack_impl(
 def plot_runtime_per_process_stack(
     hns_results: list[HnsResult],
     trilinos_results: list[TrilinosResult],
+    combblas_results: list[CombblasResult],
     output_dir: str,
 ) -> None:
-    """Vertically stacked subplots showing per-phase runtime breakdown per process for each HnS implementation.
+    """Stackplot showing per-phase runtime breakdown per process for each HnS implementation.
 
-    Generates separate plots for regular HnS and accumthread implementations.
+    Generates separate plots for each implementation (Trident, Sparse SUMMA).
     """
-    # Regular HnS results
-    regular_results = [r for r in hns_results if not r.is_accumthread]
-    impl_order = [IMPL_NONE, IMPL_PERMUTE, IMPL_WORKSTEALING]
-    _plot_runtime_per_process_stack_impl(regular_results, output_dir, impl_order)
+    import numpy as np
+    from matplotlib.patches import Patch
 
-    # Accumthread results
-    accumthread_results = [r for r in hns_results if r.is_accumthread]
-    accumthread_impl_order = [IMPL_ACCUMTHREAD_NONE, IMPL_ACCUMTHREAD_PERMUTE]
-    _plot_runtime_per_process_stack_impl(
-        accumthread_results, output_dir, accumthread_impl_order,
-        filename_suffix='_accumthread', title_suffix='(Accumthread)'
-    )
+    # Group results by (matrix, ngpus, implementation)
+    groups: dict[tuple[str, int, str], HnsResult] = {}
+    for r in hns_results:
+        key = (r.matrix, r.ngpus, r.implementation)
+        groups[key] = r
+
+    for (matrix, ngpus, impl), result in sorted(groups.items()):
+        # Collect all process ranks
+        all_processes = set()
+        for phase_data in result.phase_timings.values():
+            all_processes.update(phase_data.keys())
+        all_processes = sorted(all_processes)
+
+        if not all_processes:
+            continue
+
+        # Collect all phases (only those in PHASE_DISPLAY_NAMES, exclude queue phases)
+        # Also exclude Trident-specific excluded phases
+        excluded = QUEUE_PHASES | (TRIDENT_EXCLUDED_PHASES if impl == IMPL_TRIDENT else set())
+        all_phases = sorted([p for p in result.phase_timings.keys()
+                            if p in PHASE_DISPLAY_NAMES and p not in excluded])
+
+        if not all_phases:
+            continue
+
+        # Build data: {phase: {process: avg_value}}
+        data: dict[str, dict[int, float]] = defaultdict(dict)
+
+        for phase, process_data in result.phase_timings.items():
+            if phase not in all_phases:
+                continue
+            for process, round_values in process_data.items():
+                if round_values:
+                    avg_val = sum(round_values) / len(round_values)
+                    data[phase][process] = avg_val
+
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        x = np.array(all_processes)
+
+        # Build stack data: list of arrays, one per phase
+        stack_data = []
+        colors = []
+        for phase in all_phases:
+            values = [data.get(phase, {}).get(proc, 0.0) for proc in all_processes]
+            stack_data.append(values)
+            colors.append(PHASE_COLORS.get(phase, '#888888'))
+
+        if stack_data:
+            ax.stackplot(x, stack_data, colors=colors, edgecolor='black', linewidth=0.5)
+
+        ax.set_xlabel('Process Rank')
+        ax.set_ylabel('Runtime (ms)')
+        ax.set_title(f'Per-Process Runtime Breakdown: {matrix} ({ngpus} GPUs) - {impl}')
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
+
+        # Create legend for phases
+        phase_handles = [Patch(facecolor=PHASE_COLORS.get(phase, '#888888'), edgecolor='black',
+                               label=PHASE_DISPLAY_NAMES.get(phase, phase))
+                        for phase in all_phases]
+        ax.legend(handles=phase_handles, title='Phase', loc='upper right')
+
+        # Save to implementation-specific subdirectory
+        impl_dir_name = impl.lower().replace(' ', '_')
+        plot_subdir = os.path.join(output_dir, 'runtime-per-process-stack', impl_dir_name, matrix)
+        os.makedirs(plot_subdir, exist_ok=True)
+        filename = f'{ngpus}gpus.png'
+        output_path = os.path.join(plot_subdir, filename)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"    Saved {output_path}")
 
 
 def get_available_plots():
@@ -988,8 +873,8 @@ def main():
 
     # Load all results once
     print(f"Loading results from {args.results_dir}...")
-    hns_results, trilinos_results = load_all_results(args.results_dir)
-    print(f"  Loaded {len(hns_results)} HnS results and {len(trilinos_results)} Trilinos results.")
+    hns_results, trilinos_results, combblas_results = load_all_results(args.results_dir)
+    print(f"  Loaded {len(hns_results)} HnS, {len(trilinos_results)} Trilinos, and {len(combblas_results)} CombBLAS results.")
 
     # Determine which plots to generate
     if 'all' in args.plots:
@@ -1001,7 +886,7 @@ def main():
     for plot_name in plots_to_make:
         print(f"Generating {plot_name}...")
         plot_func = available_plots[plot_name]
-        plot_func(hns_results, trilinos_results, args.output_dir)
+        plot_func(hns_results, trilinos_results, combblas_results, args.output_dir)
         print(f"  Done.")
 
 

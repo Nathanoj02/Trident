@@ -18,4 +18,4 @@ export NVCC_WRAPPER="${Kokkos_PREFIX}/bin/nvcc_wrapper"
 
 #export CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/global/homes/l/lpichett/HnS-SpGEMM/kokkos/build:/global/homes/l/lpichett/HnS-SpGEMM/kokkos-kernels/build
 
-#export COMBBLAS_DIR="${HOME}/Hns-SpGEMM/CombBLAS/CombBLAS/install"
+export COMBBLAS_DIR="${HOME}/CombBLAS-GPU/CombBLAS/install"
