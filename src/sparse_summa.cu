@@ -121,6 +121,8 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
 
     delete C_accum;
 
+    C_local->to_mat();
+
     return new DistCusparseCSX<IT, VT>(C_local, A->partitioning);
 }
 

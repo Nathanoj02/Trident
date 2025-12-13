@@ -9,7 +9,7 @@ struct MLCArgs {
     float pruning_tol;
     bool add_diag;
     int node_size;
-    Implementation impl;
+    const char * impl;
 };
 
 char* mcl_extract_matrix_name(const char* filepath) {
@@ -59,9 +59,11 @@ void parse_args(int argc, char **argv, MLCArgs *args) {
             args->pruning_tol = atof(argv[i+1]);
         } else if (!strcmp(argname, "--max-iter")) {
             args->max_iter = atoi(argv[i+1]);
-        } else if (!strcmp(argname, "--add-self-loops")) {
-            args->add_diag = true;
-            inc = 1;
+        } else if (!strcmp(argname, "--node-size")) {
+            args->node_size = atoi(argv[i+1]);
+        } else if (!strcmp(argname, "--impl"))
+        {
+            args->impl = argv[i+1];
         }
     }
 

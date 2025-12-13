@@ -759,10 +759,12 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     for (int iter = 0; iter < n_iters; iter++)
     {
 
+#ifdef DETAILED_TIMERS
         if (grid->global_rank == 0)
         {
             std::cout<<"Iteration "<<iter<<std::endl;
         }
+#endif
 
 #if DEBUG_MAIN
         int A_owner_global = colAtoGet*node_size + *col_rank * (node_size * grid->row_size) + grid->node_rank;
@@ -1053,6 +1055,8 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
 
     A_comm_thread.get();
     B_comm_thread.get();
+
+    C_local->to_mat();
 
     //return nullptr;
     return new DistCusparseCSX<IT, VT>(C_local, dist_A->partitioning);

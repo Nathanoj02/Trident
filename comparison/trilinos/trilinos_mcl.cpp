@@ -19,6 +19,8 @@
 
 #include "../include/mcl/args.hpp"
 
+#define MASK_SIZE 1
+
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *                          MCL TRILINOS
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -33,6 +35,7 @@ using SC = scalar_t;
 using Teuchos::RCP;
 using Teuchos::rcp;
 using Teuchos::Comm;
+using map_t = Tpetra::Map<LO, GO, node_t>;
 using mmio_csr_t = mmio::CSR<LO, scalar_t>;
 using mmio_coo_t = mmio::COO<LO, scalar_t>;
 using mmio_dcoo_t = dmmio::DCOO<LO, scalar_t>;
@@ -113,28 +116,107 @@ RCP<matrix_t> prune_small(RCP<matrix_t>&& A, const float tol) {
     return Anew;
 }
 
+// Verify that a local CSR matrix is correctly formed
+// Returns true if valid, false otherwise. Prints detailed error info.
+bool verify_local_csr(const size_t* row_ptrs, const LO* col_idx, const scalar_t* vals,
+                      LO local_nrows, GO global_ncols, GO local_nnz, int rank)
+{
+    bool valid = true;
 
-Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const Teuchos::Comm<int>>& comm, LO ** perm_vec, bool permute=false)
+    // Check 1: row_ptrs[0] should be 0
+    if (row_ptrs[0] != 0) {
+        std::cerr << "[Rank " << rank << "] ERROR: row_ptrs[0] = " << row_ptrs[0] << ", expected 0" << std::endl;
+        valid = false;
+    }
+
+    // Check 2: row_ptrs[local_nrows] should equal local_nnz
+    if (row_ptrs[local_nrows] != static_cast<size_t>(local_nnz)) {
+        std::cerr << "[Rank " << rank << "] ERROR: row_ptrs[" << local_nrows << "] = " << row_ptrs[local_nrows]
+                  << ", expected local_nnz = " << local_nnz << std::endl;
+        valid = false;
+    }
+
+    // Check 3: row_ptrs should be monotonically non-decreasing
+    for (LO i = 0; i < local_nrows; i++) {
+        if (row_ptrs[i] > row_ptrs[i + 1]) {
+            std::cerr << "[Rank " << rank << "] ERROR: row_ptrs not monotonic at row " << i
+                      << ": row_ptrs[" << i << "] = " << row_ptrs[i]
+                      << " > row_ptrs[" << (i+1) << "] = " << row_ptrs[i + 1] << std::endl;
+            valid = false;
+            break; // Don't spam with all errors
+        }
+    }
+
+    // Check 4: All column indices should be in valid range [0, global_ncols)
+    size_t invalid_col_count = 0;
+    LO first_invalid_row = -1;
+    LO first_invalid_col = -1;
+    for (LO row = 0; row < local_nrows; row++) {
+        for (size_t j = row_ptrs[row]; j < row_ptrs[row + 1]; j++) {
+            if (col_idx[j] < 0 || col_idx[j] >= global_ncols) {
+                if (invalid_col_count == 0) {
+                    first_invalid_row = row;
+                    first_invalid_col = col_idx[j];
+                }
+                invalid_col_count++;
+            }
+        }
+    }
+    if (invalid_col_count > 0) {
+        std::cerr << "[Rank " << rank << "] ERROR: " << invalid_col_count << " column indices out of range [0, "
+                  << global_ncols << "). First invalid: row " << first_invalid_row
+                  << ", col_idx = " << first_invalid_col << std::endl;
+        valid = false;
+    }
+
+    // Check 5: Check for NaN or Inf values
+    size_t nan_count = 0;
+    size_t inf_count = 0;
+    for (GO j = 0; j < local_nnz; j++) {
+        if (std::isnan(vals[j])) nan_count++;
+        if (std::isinf(vals[j])) inf_count++;
+    }
+    if (nan_count > 0) {
+        std::cerr << "[Rank " << rank << "] WARNING: " << nan_count << " NaN values in matrix" << std::endl;
+    }
+    if (inf_count > 0) {
+        std::cerr << "[Rank " << rank << "] WARNING: " << inf_count << " Inf values in matrix" << std::endl;
+    }
+
+    // Print summary
+    std::cout << "[Rank " << rank << "] CSR verification: local_nrows=" << local_nrows
+              << ", local_nnz=" << local_nnz << ", global_ncols=" << global_ncols;
+    if (local_nrows > 0) {
+        // Compute average nnz per row
+        double avg_nnz = static_cast<double>(local_nnz) / local_nrows;
+        std::cout << ", avg_nnz_per_row=" << avg_nnz;
+
+        // Find min/max row lengths
+        size_t min_row_len = row_ptrs[1] - row_ptrs[0];
+        size_t max_row_len = min_row_len;
+        for (LO i = 0; i < local_nrows; i++) {
+            size_t row_len = row_ptrs[i + 1] - row_ptrs[i];
+            min_row_len = std::min(min_row_len, row_len);
+            max_row_len = std::max(max_row_len, row_len);
+        }
+        std::cout << ", min_row_len=" << min_row_len << ", max_row_len=" << max_row_len;
+    }
+    std::cout << ", valid=" << (valid ? "YES" : "NO") << std::endl;
+
+    return valid;
+}
+
+Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const Teuchos::Comm<int>>& comm)
 {
 
     int np, rank;
     rank = comm->getRank();
     np = comm->getSize();
-
-    std::cout << "permute: " << permute << std::endl;
     fflush(stdout);
 
     mmio::Matrix_Metadata meta;
     mmio_dcoo_t * dcoo;
-    if (perm_vec==nullptr)
-    {
-        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute);
-    }
-    else
-    {
-        dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, permute, *perm_vec);
-    }
-
+    dcoo = dmmio::DCOO_read<LO, scalar_t>(filename, np, rank, 1, 1, np, dmmio::PartitioningType::Naive, dmmio::Operation::None, true, &meta, MASK_SIZE, false, nullptr);
 
     while ((dcoo->coo->nrows * MASK_SIZE) % np != 0)
     {
@@ -150,11 +232,6 @@ Teuchos::RCP<matrix_t> read_fast(const char * filename, const Teuchos::RCP<const
 
     GO glob_nrows = dcoo->coo->nrows;
 
-    if (*perm_vec == nullptr && permute)
-    {
-        *perm_vec = new LO[glob_nrows];
-        memcpy(*perm_vec, dcoo->permutation, sizeof(LO) * glob_nrows);
-    }
 
     map_inds(dcoo, np);
 
@@ -488,16 +565,18 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
         RCP<const Comm<int>> comm = Tpetra::getDefaultComm();
         RCP<matrix_t> A1,A2;
         if(myid==0) fprintf(stdout, "Reading matrix\n");
-        A1 = read_fast(args->mtx_path, comm, nullptr);
+        int32_t * perm_vec = nullptr;
+        A1 = read_fast(args->mtx_path, comm);
         A2 = rcp(new matrix_t(*A1));
         if(myid==0) fprintf(stdout, "Matrix read, OK\n");
+        fflush(stdout);
 
         // OPTIONAL: set diagonal elements to 1 if requested (CLI flag)
-        if (args->add_diag) {
-            if(myid==0) fprintf(stdout, "Adding self-loops (diag = 1)\n");
-            set_self_loops(A1);
-            A2 = rcp(new matrix_t(*A1));
-        }
+        //if (args->add_diag) {
+        //    if(myid==0) fprintf(stdout, "Adding self-loops (diag = 1)\n");
+        //    set_self_loops(A1);
+        //    A2 = rcp(new matrix_t(*A1));
+        //}
         
         #ifdef DEBUG
             fflush(stdout);
@@ -508,6 +587,7 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
 
         // Normalize initially to create a stochastic matrix (columns sum to 1)
         if(myid==0) fprintf(stdout, "Normalizing initial matrix (columns sum to 1)\n");
+        fflush(stdout);
         normalize_columns(A1);
         A2 = rcp(new matrix_t(*A1)); // keep A2 consistent
 
@@ -544,10 +624,16 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
                 print_matrix(A_next, myid);
             #endif
 
+            if(myid==0)fprintf(stdout, "\n===================== Expansion done %d ======================\n", iter);
+            fflush(stdout);
+
             nnz[iter] = A_next->getGlobalNumEntries();
 
             // Inflation: raise entries to power (2) and normalize by column
             inflation(A_next, myid, 2.0f);
+
+            if(myid==0)fprintf(stdout, "\n===================== Inflation done %d ======================\n", iter);
+            fflush(stdout);
 
             #ifdef DEBUG
                 fflush(stdout);
@@ -559,12 +645,17 @@ void mcl_trilinos(int argc, char *argv[], const int myid, const MLCArgs *args) {
             // Prune small values
             auto A_next_pruned = prune_small(std::move(A_next), args->pruning_tol);
             nnz_pruned[iter] = A_next_pruned->getGlobalNumEntries();
+            if (myid==0) printf("nnz post prune: %lu\n", (uint64_t)nnz_pruned[iter]);
+            fflush(stdout);
             #ifdef DEBUG
                 fflush(stdout);
                 MPI_Barrier(MPI_COMM_WORLD);
                 if(myid==0) printf("--- A_next pruned ---\n");
                 print_matrix(A_next_pruned, myid);
             #endif
+
+            if(myid==0)fprintf(stdout, "\n===================== Pruning done %d ======================\n", iter);
+            fflush(stdout);
 
             // Prepare for next iteration
             A1 = A_next_pruned;

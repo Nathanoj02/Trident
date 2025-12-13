@@ -247,6 +247,37 @@ struct CusparseCSX
     }
 
 
+    void to_mat()
+    {
+        VT * h_vals = d2h_copy(this->buffers->d_node_vals, this->nnz());
+        IT * h_colinds = d2h_copy(this->buffers->d_node_colinds, this->nnz());
+        IT * h_rowptrs = d2h_copy(this->buffers->d_node_rowptrs, this->nrows()+1);
+        mat = CSX_create_contig_device(this->nrows(), this->ncols(), this->nnz(),
+                                        mmio::MajorDim::ROWS,
+                                        h_colinds, h_rowptrs, h_vals);
+        free(h_vals);
+        free(h_colinds);
+        free(h_rowptrs);
+
+        CUSPARSE_CHECK(cusparseDestroySpMat(descr));
+        CUSPARSE_CHECK(cusparseCreateCsr(&descr,
+                                         mat->nrows,
+                                         mat->ncols,
+                                         mat->nnz,
+                                         mat->ptr_vec,
+                                         mat->idx_vec,
+                                         mat->val,
+                                         CUSPARSE_INDEX_32I,
+                                         CUSPARSE_INDEX_32I,
+                                         CUSPARSE_INDEX_BASE_ZERO,
+                                         CUDA_R_32F));
+
+        state = State::Mat;
+        this->buffers->explicitFree();
+                                        
+    }
+
+
 
     inline bool is_mat()
     {
@@ -466,6 +497,7 @@ struct DistCusparseCSX
     {}
 
 
+
     DistCusparseCSX(dmmio::DCOO<IT, VT> * dcoo, MajorDim T):
         partitioning(dcoo->partitioning)
     {
@@ -552,6 +584,19 @@ struct DistCusparseCSX
         return csx->nnz();
     }
 
+
+    inline IT getGlobalNnz()
+    {
+        IT sum = 0;
+        IT loc_nnz = csx->nnz();
+        MPI_Allreduce(&sum, &loc_nnz, 1, MPI_INT32_T, MPI_SUM, partitioning->grid->world_comm);
+        return sum;
+    }
+
+    ~DistCusparseCSX()
+    {
+        delete csx;
+    }
 
 };
 
