@@ -6,6 +6,7 @@ GPUS_PER_NODE = 4
 
 DATASETS=( "mouse_gene", "isolates_subgraph4", "kmer_A2a", "archaea", "eukarya", "ldoor")
 GROUPS = ( "Belcastro", "mcl", "GenBank", "mcl", "mcl", "GHS_psdef")
+MCL_DATASETS = ( "isolates_subgraph4", "archaea", "eukarya" )
 #DATASETS=( "HV15R", "nlpkkt160", "uk-2002")
 #GROUPS = ( "Fluorem", "Schenk", "LAW")
 #DATASETS=( "uk-2002", "nlpkkt240")
@@ -15,12 +16,12 @@ SIZES = [10, 10, 10, 10, 10, 10, 10]
 
 MAT_DIR = "/global/cfs/cdirs/m4646/hns_spgemm_matrices_pico/known_squaring_nnz/"
 
-GRIDS=("1x1", "2x2", "4x4", "8x8")
-TWODGRIDS=("2x2", "4x4", "8x8", "16x16")
-GRIDPROCS=("4", "16", "64", "256")
+GRIDS=("1x1", "2x2", "4x4", "8x8", "10x10")
+TWODGRIDS=("2x2", "4x4", "8x8", "16x16", "20x20")
+GRIDPROCS=("4", "16", "64", "256", "400")
 
-CONFIGURATIONS=[ "--impl async --permute", "--impl summa --permute"]
-CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_permute", "kokkos_nospcomm_summa_permute"]
+CONFIGURATIONS=[ "--impl async ", "--impl summa "]
+CONFIGURATIONS_STR=[ "kokkos_nospcomm_async_nopermute", "kokkos_nospcomm_summa_nopermute"]
 
 RESULTS_DIR = "./results_final/"
 
@@ -166,6 +167,82 @@ def make_script_trilinos(nodes, dummy):
         for mat in DATASETS:
             file.write(f"sh ./scripts/sbatch_scripts/trilinos_strong_{mat}_{nodes}.sh\n")
 
+
+def make_script_mcl(nodes, accum_thread=False):
+    header = f"""#!/usr/bin/bash
+#SBATCH -N {nodes}
+#SBATCH --tasks-per-node {GPUS_PER_NODE}
+#SBATCH --gpus-per-node {GPUS_PER_NODE}
+#SBATCH -C {GPU_KIND}
+#SBATCH -G {GPUS_PER_NODE*nodes}
+#SBATCH -q premium
+#SBATCH -t 0:30:00
+#SBATCH -A m4646_g
+    """
+
+    maxiters = 10
+    tols = [0.002, 0.00002]
+
+    def write_mcl_cmd_hns(file, matpath, impl, gridproc, node_size):
+        fname = f"{RESULTS_DIR}/hns_mcl_{gridproc}_{mat}_{impl}"
+        outfile = fname + ".out"
+        errfile = fname + ".err"
+
+        file.write(f"echo 'HnS-MCL {mat}, {gridproc}, {impl}'\n")
+        for tol in tols:
+            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/mcl --mtx {matpath}  --impl {impl} --pruning-tol {tol} --max-iter {maxiters} --node-size {node_size}"
+        file.write(f"{cmd}\n")
+
+
+    def write_mcl_cmd_trilinos(file, matpath, gridproc):
+        fname = f"{RESULTS_DIR}/trilinos_mcl_{gridproc}_{mat}"
+        outfile = fname + ".out"
+        errfile = fname + ".err"
+
+        file.write(f"echo 'Trilinos-MCL {mat}, {gridproc}'\n")
+        for tol in tols:
+            cmd = f"srun --gpus-per-node {GPUS_PER_NODE} -N {nodes} --tasks-per-node {GPUS_PER_NODE} -e {errfile} -o {outfile} ./build/comparison/trilinos_mcl --mtx {matpath} --pruning-tol {tol} --max-iter {maxiters}"
+        file.write(f"{cmd}\n")
+
+
+    os.makedirs("./scripts/sbatch_scripts/mcl", exist_ok=True)
+
+    for k, mat in enumerate(MCL_DATASETS):
+
+        with open(f"./scripts/sbatch_scripts/mcl/hns_mcl_{mat}_{nodes}.sh", "w") as file:
+            file.write(header + "\n")
+            matpath = f"{MAT_DIR}/mcl/{mat}/{mat}.bmtx"
+            write_mcl_cmd_hns(file, matpath, "async", nodes*GPUS_PER_NODE, 4)
+            write_mcl_cmd_hns(file, matpath, "summa", nodes*GPUS_PER_NODE, 1)
+
+        with open(f"./scripts/sbatch_scripts/mcl/trilinos_mcl_{mat}_{nodes}.sh", "w") as file:
+            file.write(header + "\n")
+            matpath = f"{MAT_DIR}/mcl/{mat}/{mat}.bmtx"
+            write_mcl_cmd_trilinos(file, matpath, nodes*GPUS_PER_NODE)
+
+
+    with open(f"./scripts/sbatch_scripts/mcl/hns_mcl_all_{nodes}.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
+        for mat in MCL_DATASETS:
+            file.write(f"sbatch ./scripts/sbatch_scripts/mcl/hns_mcl_{mat}_{nodes}.sh\n")
+
+
+    with open(f"./scripts/sbatch_scripts/mcl/hns_mcl_all_{nodes}_run.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
+        for mat in MCL_DATASETS:
+            file.write(f"sh ./scripts/sbatch_scripts/mcl/hns_mcl_{mat}_{nodes}.sh\n")
+
+
+    with open(f"./scripts/sbatch_scripts/mcl/trilinos_mcl_all_{nodes}.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
+        for mat in MCL_DATASETS:
+            file.write(f"sbatch ./scripts/sbatch_scripts/mcl/trilinos_mcl_{mat}_{nodes}.sh\n")
+
+
+    with open(f"./scripts/sbatch_scripts/mcl/trilinos_mcl_all_{nodes}_run.sh", "w") as file:
+        file.write("#!/usr/bin/bash\n")
+        for mat in DATASETS:
+            file.write(f"sh ./scripts/sbatch_scripts/mcl/trilinos_mcl_{mat}_{nodes}.sh\n")
                  
 
 def make_scripts(args):
@@ -180,6 +257,9 @@ def make_scripts(args):
         t = True
     elif args.impl == "combblas":
         f = make_script_combblas
+        t = False
+    elif args.impl == "mcl":
+        f = make_script_mcl
         t = False
     for nodes in args.nodes:
         f(nodes, t)

@@ -590,7 +590,7 @@ struct DistCusparseCSX
     {
         IT sum = 0;
         IT loc_nnz = csx->nnz();
-        MPI_Allreduce(&sum, &loc_nnz, 1, MPI_INT32_T, MPI_SUM, partitioning->grid->world_comm);
+        MPI_Allreduce(&loc_nnz, &sum, 1, MPI_INT32_T, MPI_SUM, partitioning->grid->world_comm);
         return sum;
     }
 

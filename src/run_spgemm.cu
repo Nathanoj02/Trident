@@ -170,31 +170,12 @@ int main(int argc, char ** argv)
 
 
         CPU_TIMER_DEF(spgemm);
-        CPU_TIMER_DEF(spacomm);
 
 #ifdef NVTX_PROFILING
         cudaProfilerStart();
         NVTX_PUSH_RANGE("spcomm",1);
 #endif
 
-        CPU_TIMER_START(spacomm);
-
-        SpaComm::SpaCommHandler<int32_t, float> *spcomm_data = nullptr;
-        if (config->spcomm) 
-        {
-            spcomm_data = new SpaComm::SpaCommHandler<int32_t, float>(dist_A->csx->mat, dist_B->csx->mat, dist_A->partitioning->grid);
-        } 
-        else 
-        {
-            spcomm_data = nullptr;
-        }
-
-        CPU_TIMER_STOP(spacomm);
-
-        if (world_rank==0)
-        {
-            TIMER_PRINT(spacomm);
-        }
 
 #ifdef NVTX_PROFILING
         NVTX_POP_RANGE;
@@ -227,7 +208,7 @@ int main(int argc, char ** argv)
             }
             else
             {
-                dist_C = hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, spcomm_data, config->c_remote_size, config->skip_spgemm, config->skip_ws);
+                dist_C = hns_spgemm_main<int32_t, float>(dist_A, dist_B, config->impl, pool, nullptr, config->c_remote_size, config->skip_spgemm, config->skip_ws);
             }
             MPI_Barrier(MPI_COMM_WORLD);
 
@@ -243,7 +224,6 @@ int main(int argc, char ** argv)
 #ifdef NVTX_PROFILING
         cudaProfilerStop();
 #endif
-        if (spcomm_data != nullptr) delete spcomm_data;
         delete dist_A;
         delete dist_B;
     }

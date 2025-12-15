@@ -12,7 +12,7 @@ def diagnose_hns(args):
 
     files = os.listdir(args.dir)
 
-    files = list(filter(lambda s: "hns" in s and ".out" in s, files))
+    files = list(filter(lambda s: "hns" in s and ".out" in s and "mcl" not in s, files))
 
     bad = []
     for filename in files:
@@ -83,10 +83,33 @@ def diagnose_combblas(args):
         print("\t" + FAIL + b + " incomplete" + ENDC)
 
 
+def diagnose_mcl(args):
+    print("==========MCL Diagnosis==========")
+    print("---------")
+
+    files = os.listdir(args.dir)
+
+    files = list(filter(lambda s: "mcl" in s and ".out" in s, files))
+
+    bad = []
+    for filename in files:
+        param_str = filename.split(".out")[0]
+        with open(args.dir + "/" + filename, "r") as file:
+            content = file.read()
+            if content.count("Done MCL") == 1:
+                print("\t" + OKGREEN + param_str + " complete" + ENDC)
+            else:
+                bad.append(param_str)
+
+    print("---------")
+    for b in bad:
+        print("\t" + FAIL + b + " incomplete" + ENDC)
+
 def diagnose(args):
     diagnose_hns(args)
     diagnose_trilinos(args)
     diagnose_combblas(args)
+    diagnose_mcl(args)
 
 if __name__ == "__main__":
 

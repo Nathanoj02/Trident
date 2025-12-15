@@ -100,7 +100,7 @@ void normalize(DistCusparseCSX<IT, VT> * dist_csx)
     CusparseCSX<IT, VT> * local_csx = dist_csx->csx;
     auto cpu_csx = to_cpu_csx(local_csx);
 
-    std::vector<IT> row_sums(cpu_csx->nrows, 0);
+    std::vector<VT> row_sums(cpu_csx->nrows, 0);
 
     for (IT i = 0; i < cpu_csx->nrows; i++)
     {
@@ -111,14 +111,14 @@ void normalize(DistCusparseCSX<IT, VT> * dist_csx)
     }
 
     MPI_Allreduce(MPI_IN_PLACE, row_sums.data(), row_sums.size(),
-                  MPI_INT32_T, MPI_SUM, MPI_COMM_WORLD);
+                  MPI_FLOAT, MPI_SUM, dist_csx->partitioning->grid->row_comm);
 
     for (IT i = 0; i < cpu_csx->nrows; i++)
     {
-        IT s = row_sums[i];
+        VT s = row_sums[i];
         for (int j=cpu_csx->ptr_vec[i]; j<cpu_csx->ptr_vec[i+1]; j++)
         {
-            cpu_csx->val[j] = (s > 1e-20) ? 1.0 / s : 0.0;
+            cpu_csx->val[j] = (s > 1e-20) ? cpu_csx->val[j] / s : 0.0;
         }
     }
 
@@ -141,6 +141,8 @@ void inflation(DistCusparseCSX<IT, VT> * dist_csx, const float power = 2.0f)
         }
     }
 
+    // Upload powered values back to GPU
+    h2d_copy(local_csx->mat->val, local_csx->mat->nnz, cpu_csx->val);
     mmio::CSX_destroy<IT, VT>(&cpu_csx);
 
     normalize(dist_csx);
@@ -185,41 +187,49 @@ int main(int argc, char ** argv)
     Apart = dmmio::PartitioningType::Naive;
     Bop   = dmmio::Operation::None;
 
-    // Reading the distributed matrices
-    std::string A_mtx_path = (std::string) args->mtx_path;
-    mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
-    dmmio::DCOO<int32_t, float> *dcoo_A1 = dmmio::DCOO_read<int32_t, float>(
-        A_mtx_path.c_str(),
-        world_size, world_rank,
-        nprocrows, nproccols, args->node_size,
-        Apart, Aop,
-        true, meta_A,
-        MASK_SIZE, false, nullptr, true
-    );
-
-    dmmio::DCOO<int32_t, float> *dcoo_A2 = dmmio::DCOO_read<int32_t, float>(
-        A_mtx_path.c_str(),
-        world_size, world_rank,
-        nprocrows, nproccols, args->node_size,
-        Apart, Aop,
-        true, meta_A,
-        MASK_SIZE, false, nullptr, true
-    );
-    
-    if (world_rank == 0)
+    int ntrials = 1;
+    for (int t=0; t<ntrials; t++)
     {
-        printf("Done IO\n");
+        if(world_rank==0) 
+        {
+            printf("\n===================== MCL Trial %d ======================\n", t);
+        }
         fflush(stdout);
-    }
+        MPI_Barrier(MPI_COMM_WORLD);
+        // Reading the distributed matrices
+        std::string A_mtx_path = (std::string) args->mtx_path;
+        mmio::Matrix_Metadata *meta_A = new mmio::Matrix_Metadata();
+        dmmio::DCOO<int32_t, float> *dcoo_A1 = dmmio::DCOO_read<int32_t, float>(
+            A_mtx_path.c_str(),
+            world_size, world_rank,
+            nprocrows, nproccols, args->node_size,
+            Apart, Aop,
+            true, meta_A,
+            MASK_SIZE, false, nullptr, true
+        );
 
-    int gpn;
-    CUDA_CHECK(cudaGetDeviceCount(&gpn));
-    CUDA_CHECK(cudaSetDevice(world_rank % gpn));
+        dmmio::DCOO<int32_t, float> *dcoo_A2 = dmmio::DCOO_read<int32_t, float>(
+            A_mtx_path.c_str(),
+            world_size, world_rank,
+            nprocrows, nproccols, args->node_size,
+            Apart, Aop,
+            true, meta_A,
+            MASK_SIZE, false, nullptr, true
+        );
+        
+        if (world_rank == 0)
+        {
+            printf("Done IO\n");
+            fflush(stdout);
+        }
 
-    dmmio::utils::ProcessGrid_graph(dcoo_A1->partitioning->grid, stdout, true);
-    MPI_Barrier(MPI_COMM_WORLD);
+        int gpn;
+        CUDA_CHECK(cudaGetDeviceCount(&gpn));
+        CUDA_CHECK(cudaSetDevice(world_rank % gpn));
 
-    {
+        dmmio::utils::ProcessGrid_graph(dcoo_A1->partitioning->grid, stdout, true);
+        MPI_Barrier(MPI_COMM_WORLD);
+
 
         DistCusparseCSX<int32_t, float> * dist_A1 = new DistCusparseCSX<int32_t, float>(dcoo_A1, mmio::MajorDim::ROWS);
         DistCusparseCSX<int32_t, float> * dist_A2 = new DistCusparseCSX<int32_t, float>(dcoo_A2, mmio::MajorDim::ROWS);
@@ -232,8 +242,26 @@ int main(int argc, char ** argv)
         std::vector<IT> nnz_pruned(args->max_iter, 0);
         int iter = 0;
 
+        if(world_rank==0) 
+        {
+            printf("\n===================== Warmup SpGEMM ======================\n");
+        }
+        fflush(stdout);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        if (!strcmp(args->impl, "summa"))
+        {
+            dist_An = sparse_summa(dist_A1, dist_A2);
+        }
+        else
+        {
+            dist_An = hns_spgemm_main<int32_t, float>(dist_A1, dist_A2, Implementation::ASYNC, pool, nullptr, 0);
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        delete dist_An;
+
         // Normalize
-        print_rk0("First normalization\n");
         normalize(dist_A1);
 
         while (iter < args->max_iter) 
@@ -244,7 +272,6 @@ int main(int argc, char ** argv)
 
 
             // Expansion 
-            print_rk0("Expansion\n");
             if (!strcmp(args->impl, "summa"))
             {
                 dist_An = sparse_summa(dist_A1, dist_A2);
@@ -254,17 +281,14 @@ int main(int argc, char ** argv)
                 dist_An = hns_spgemm_main<int32_t, float>(dist_A1, dist_A2, Implementation::ASYNC, pool, nullptr, 0);
             }
             MPI_Barrier(MPI_COMM_WORLD);
-            print_rk0("Done expansion\n");
 
             nnz[iter] = dist_An->getGlobalNnz();
 
             // Inflation
-            print_rk0("Inflation\n");
             inflation(dist_An);
 
 
             // Prune
-            print_rk0("Pruning\n");
             prune(dist_An, args->pruning_tol);
 
             nnz_pruned[iter] = dist_An->getGlobalNnz();
@@ -296,11 +320,13 @@ int main(int argc, char ** argv)
             for (size_t i = 0; i < iter; ++i) printf("%8lu ", nnz_pruned[i]);
             printf("\n");
         }
+        
+        delete dist_An;
 
+
+        dmmio::DCOO_destroy(&dcoo_A1);
+        dmmio::DCOO_destroy(&dcoo_A2);
     }
-
-    dmmio::DCOO_destroy(&dcoo_A1);
-    dmmio::DCOO_destroy(&dcoo_A2);
 
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();

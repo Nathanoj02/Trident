@@ -86,7 +86,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     CUDA_CHECK(cudaSetDevice(dev_id)); // To be sure each thread on the same process is assigned to the same GPU
     CUDA_CHECK(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority));
 
-    SpaComm::SpaCommBuffers<IT,VT> *compression_buffers = new SpaComm::SpaCommBuffers<IT,VT>(csx);
 
 
     float internode_comm;
@@ -134,8 +133,6 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         if (target == -2)
         {
             free_sync_point.arrive_and_wait();
-            compression_buffers->explicitFree();
-            delete compression_buffers;
             return;
         }
 
@@ -148,7 +145,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         {
             CUDA_TIMER_START(compression_time, stream)
             // NOTE: here communicator is provided just for debug prints
-            compressed = spacomm->Compress(csx, target, compression_buffers, stream, spacomm->grid->node_comm);
+            //compressed = spacomm->Compress(csx, target, compression_buffers, stream, spacomm->grid->node_comm);
             CUDA_TIMER_STOP(compression_time)
             CUDA_CHECK(cudaStreamSynchronize(stream));
         }
