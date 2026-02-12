@@ -1,5 +1,5 @@
 #include "sparse_summa.cuh"
-
+#include "getVramData.h"
 
 
 template <typename IT, typename VT>
@@ -53,11 +53,19 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
 
     bool did_one_spgemm = false;
 
+    char tmp_name[50];
+    sprintf(tmp_name, "Memcnt%d", grid->global_rank);
+    MyMemData mymemdata(tmp_name);
+
     CPU_TIMER_DEF(spgemm);
     CPU_TIMER_DEF(bcast);
     CPU_TIMER_START(spgemm);
     for (int p=0; p<niters; p++)
     {
+        char tmp_name[50];
+        sprintf(tmp_name, "Iteration%d", p);
+        mymemdata.append_measure(tmp_name);
+
         // Bcast tile of A
         CPU_TIMER_START(bcast);
         IT A_tile_nnz = A_holder.tile_bcast(A_loc, p);
@@ -94,6 +102,11 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
         CUDA_SYNC(stream);
 
     }
+
+    // mymemdata.print();
+    std::string memstr = mymemdata.short_print();
+    MPI_ALL_PRINT(fprintf(fp, "%s\n", memstr.c_str()));
+    // fprintf(stdout, "%s\n", memstr.c_str());
 
 
     MPI_Barrier(MPI_COMM_WORLD);

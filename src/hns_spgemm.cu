@@ -1,4 +1,5 @@
 #include "hns_spgemm.cuh"
+#include "getVramData.h"
 
 MPIDataTypeCache mpidtc; //fix linker error
 
@@ -750,11 +751,18 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     // For deciding whether or not to accumulate
     bool did_one_spgemm = false;
 
+    char tmp_name[50];
+    sprintf(tmp_name, "Memcnt%d", grid->global_rank);
+    MyMemData mymemdata(tmp_name);
+
     // Main loop
     alloc_sync_point.arrive_and_wait();
     CPU_TIMER_START(spgemm);
     for (int iter = 0; iter < n_iters; iter++)
     {
+        char tmp_name[50];
+        sprintf(tmp_name, "Iteration%d", iter);
+        mymemdata.append_measure(tmp_name);
 
 #ifdef DETAILED_TIMERS
         if (grid->global_rank == 0)
@@ -987,6 +995,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
         MPI_Barrier(MPI_COMM_WORLD);
 #endif
     }
+
+    // mymemdata.print();
+    std::string memstr = mymemdata.short_print();
+    MPI_ALL_PRINT(fprintf(fp, "%s\n", memstr.c_str()));
 
 #ifdef ACCUM_THREAD
     accum_thread.join();
