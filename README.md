@@ -1,4 +1,4 @@
-# Hierarchical and Sparsity-Aware Sparse Matrix-Matrix Multiplication
+# Communication-Avoiding SpGEMM via Trident Partitioning on Hierarchical GPU Interconnects
 
 ## Modules
 
