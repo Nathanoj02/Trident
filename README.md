@@ -1,11 +1,12 @@
 # Communication-Avoiding SpGEMM via Trident Partitioning on Hierarchical GPU Interconnects
+Our [ICS 2026](https://dipsa-qub.github.io/ICS2026-webpage/) paper (PDF coming soon) introduces Trident partitioning, a hierarchy-aware hybrid 2D–1D decomposition for distributed SpGEMM that cuts inter-node communication, achieving up to 2.4× speedup and 2× lower communication volume on NERSC’s Perlmutter system.
 
 ## Modules
 
 - **Perlmutter**: `cmake/3.30.2 cudatoolkit/12.9 craype-accel-nvidia80 craype-hugepages2G cray-pmi/6.1.15`
 - **Leonardo**: `cmake/3.27.9 gcc/12.2.0 cuda/12.2 openmpi/4.1.6--gcc--12.2.0-cuda-12.2 openblas/0.3.26--gcc--12.2.0`
 
-# HnS-SpGEMM
+# Trident
 
 First, install Kokkos:
 ```bash
