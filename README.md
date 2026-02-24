@@ -27,3 +27,25 @@ Notes:
 - Currently the script builds for GPU architecture `AMPERE80`
 
 MCL PUT + CSC
+
+## Citation
+
+If you find this repo helpful to your work, please cite our article:
+
+```
+@inproceedings{trident,
+  keywords={paper},
+  author    = {Bellavita, Julian and Pichetti, Lorenzo and Pasquali, Thomas and Vella, Flavio and Guidi, Giulia},
+  title     = {{C}ommunication-{A}voiding {SpGEMM} via {T}rident {P}artitioning on {H}ierarchical {GPU} {I}nterconnects},
+  booktitle = {Proceedings of the 40th ACM International Conference on Supercomputing},
+  series    = {ICS '26},
+  year      = {2026},
+  month     = {July},
+  address   = {Belfast, Northern Ireland, United Kingdom},
+  publisher = {ACM},
+}
+```
+
+## Acknowledgment
+
+This work was a collaboration between the [HiCrest Laboratory at the University of Trento](https://hicrest.unitn.it/) (Italy) and the [Cornell HPC Group at Cornell University](https://giuliaguidi.github.io/) (USA). The [first author](https://jb2695.wixsite.com/jbellavita) was supported by DOE CSGF. This work was partially developed during the second author's research visit at Cornell University. The authors want to thank Benjamin Brock for his help in running and benchmarking the BCL 2D asynchronous SpGEMM. The authors acknowledge financial support from ICSC – Centro Nazionale di Ricerca in High-Performance Computing, Big Data and Quantum Computing, funded by European Union – NextGenerationEU. This work has received funding from the European High-Performance Computing Joint Undertaking (JU) under grant agreement No 101175702 and the NationalInstitute of Higher Mathematics Francesco Severi. This research used resources of the National Energy Research Scientific Computing Center, a DOE Office of Science User Facility supported by the Office of Science of the U.S. Department of Energy under Contract No. DE-AC02-05CH11231 using NERSC award ASCR-ERCAP0030076. This project received support from the Center for Research on Programmable Plant Systems under National Science Foundation Grant No. DBI-2019674.
