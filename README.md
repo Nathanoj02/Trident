@@ -34,7 +34,6 @@ If you find this repo helpful to your work, please cite our article:
 
 ```
 @inproceedings{trident,
-  keywords={paper},
   author    = {Bellavita, Julian and Pichetti, Lorenzo and Pasquali, Thomas and Vella, Flavio and Guidi, Giulia},
   title     = {{C}ommunication-{A}voiding {SpGEMM} via {T}rident {P}artitioning on {H}ierarchical {GPU} {I}nterconnects},
   booktitle = {Proceedings of the 40th ACM International Conference on Supercomputing},
