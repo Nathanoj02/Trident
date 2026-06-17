@@ -5,10 +5,14 @@ export KokkosKernels_DIR="${Kokkos_PREFIX}/lib64/cmake/KokkosKernels"
 export Trilinos_PREFIX="${HOME}/.local/lib/trilinos"
 export Trilinos_DIR="${Trilinos_PREFIX}/lib64/cmake/Trilinos"
 
-export CMAKE_C_COMPILER=cc
-export CMAKE_CXX_COMPILER=CC
-export MPI_CXX_COMPILER=CC
-export CUDA_COMPILER=CC
+
+export CMAKE_C_COMPILER=gcc
+export CMAKE_CXX_COMPILER=g++
+export MPI_CXX_COMPILER=mpicxx
+export CUDA_COMPILER=nvcc
+
+export Kokkos_VERSION=4.7.01
+export Kokkos_DOWNLOAD_URL="https://github.com/kokkos/kokkos/releases/download/${Kokkos_VERSION}"
 
 export CC=$CMAKE_C_COMPILER
 export CXX=$CMAKE_CXX_COMPILER

@@ -26,3 +26,5 @@ CMakeFiles/
 
 plots_wave4/
 results_wave4/
+
+sync_to_cluster.sh

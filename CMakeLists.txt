@@ -1,6 +1,6 @@
 # CMAKE SETUP
 cmake_minimum_required(VERSION 3.10)
-set(CMAKE_CUDA_ARCHITECTURES "80")
+set(CMAKE_CUDA_ARCHITECTURES "90")
 set(CMAKE_CXX_STANDARD 20)
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
 set(CMAKE_CUDA_FLAGS 
@@ -24,7 +24,14 @@ find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(Kokkos REQUIRED)
 find_package(KokkosKernels REQUIRED)
 
-set(NCCL_ROOT "/global/common/software/nersc9/nccl/2.24.3")
+# NCCL: set via env NCCL_ROOT or -DNCCL_ROOT=...
+if(NOT NCCL_ROOT)
+    if(DEFINED ENV{NCCL_ROOT})
+        set(NCCL_ROOT "$ENV{NCCL_ROOT}")
+    else()
+        message(FATAL_ERROR "NCCL_ROOT not set. Pass -DNCCL_ROOT=<path> or export NCCL_ROOT (dir with include/nccl.h + lib/libnccl.so).")
+    endif()
+endif()
 
 set(NCCL_INCLUDE_DIR "${NCCL_ROOT}/include")
 set(NCCL_LIBRARY "${NCCL_ROOT}/lib/libnccl.so")
@@ -140,10 +147,12 @@ find_library(NVTX_LIBRARY
     PATHS ${CUDAToolkit_LIBRARY_DIR} ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}
           /usr/local/cuda/lib64 /opt/nvidia/hpc_sdk/Linux_x86_64/*/cuda/lib64
 )
-if(NOT NVTX_LIBRARY)
-    message(FATAL_ERROR "NVTX library not found. Please check your CUDA module or set NVTX_LIBRARY manually.")
-else()
+if(NVTX_LIBRARY)
     message(STATUS "Found NVTX: ${NVTX_LIBRARY}")
+else()
+    # CUDA 12 NVTX is header-only (NVTX3); no compiled lib. Optional - profiling is OFF by default
+    message(STATUS "NVTX compiled lib not found (CUDA 12 NVTX3 header-only) — building without it")
+    set(NVTX_LIBRARY "")
 endif()
 
 
@@ -155,5 +164,9 @@ if(ENABLE_NVTX_PROFILING)
 endif()
 
 
-add_subdirectory(comparison)
+# Trilinos/CombBLAS baselines - off by default (need extra deps; not required for run_spgemm)
+option(BUILD_COMPARISON "Build comparison baselines (Trilinos, CombBLAS)" OFF)
+if(BUILD_COMPARISON)
+    add_subdirectory(comparison)
+endif()
 

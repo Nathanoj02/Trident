@@ -19,7 +19,7 @@ cmake -S . -B build \
   -DCMAKE_INSTALL_PREFIX="$Kokkos_PREFIX" \
   -DKokkos_ENABLE_CUDA=ON \
   -DKokkos_ENABLE_CUDA_LAMBDA=ON \
-  -DKokkos_ARCH_AMPERE80=ON \
+  -DKokkos_ARCH_HOPPER90=ON \
   -DKokkos_ENABLE_SERIAL=ON \
   -DKokkos_ENABLE_OPENMP=OFF \
   -DKokkos_ENABLE_DEPRECATED_CODE_4=OFF \
