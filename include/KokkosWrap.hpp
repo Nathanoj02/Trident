@@ -352,12 +352,14 @@ namespace KokkosWrap {
             CUDA_TIMER_STOP(spadd_time);
 
         }
+#ifdef DETAILED_TIMERS
         int rank;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", rank);
         TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
         TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
+#endif
 
     }
 
@@ -377,11 +379,13 @@ namespace KokkosWrap {
         result.initialized = true;
 
 
+#ifdef DETAILED_TIMERS
         int rank;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", rank);
         TIMER_PRINT_WPREFIX_STR(spm_time, tmpstr)
+#endif
 
         return result;
     }
@@ -425,11 +429,13 @@ namespace KokkosWrap {
         }
 
         CUDA_TIMER_STOP(spadd_time);
+#ifdef DETAILED_TIMERS
         int rank;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", rank);
         TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
+#endif
     }
 
     // Convert Kokkos CSC matrix to CRS matrix

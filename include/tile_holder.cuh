@@ -3,6 +3,10 @@
 #include "utils.cuh"
 #include "cusparse_helpers.cuh"
 #include "KokkosWrap.hpp"
+#include <thread>   // std::this_thread::yield -> release UCX worker lock in send poll
+#include <vector>
+#include <deque>
+#include <array>
 
 #define DEBUG_HOLDER 0
 
@@ -120,7 +124,13 @@ struct TileHolder
         if (nnz > 0)
         {
             MPI_Isend(d_sendbuf, sendbuf_size, MPI_CHAR, target, 1, comm, &main_req);
-            MPI_Wait(&main_req, MPI_STATUS_IGNORE);
+            // Poll+yield instead of a blocking MPI_Wait
+            int flag = 0;
+            while (!flag)
+            {
+                MPI_Test(&main_req, &flag, MPI_STATUS_IGNORE);
+                if (!flag) std::this_thread::yield();
+            }
         }
 
         CPU_TIMER_STOP(tmp_timer)
@@ -132,7 +142,30 @@ struct TileHolder
     }
 
 
-    IT recv_tile_contig(int src, MPI_Request * recv_req) 
+    // Non-blocking servicing send for the async comm thread
+    void post_send_tile_contig(char * d_sendbuf, const IT sendbuf_size, const IT nnz,
+                               const int target,
+                               std::vector<MPI_Request>& reqs,
+                               std::deque<std::array<IT,2>>& payloads)
+    {
+        // Keep the size array alive until the send completes (deque -> stable addrs)
+        payloads.push_back({nnz, sendbuf_size});
+        std::array<IT,2>& payload = payloads.back();
+
+        MPI_Request size_req;
+        MPI_Isend(payload.data(), 2, MPIType<IT>(), target, 0, comm, &size_req);
+        reqs.push_back(size_req);
+
+        if (nnz > 0)
+        {
+            MPI_Request main_req;
+            MPI_Isend(d_sendbuf, sendbuf_size, MPI_CHAR, target, 1, comm, &main_req);
+            reqs.push_back(main_req);
+        }
+    }
+
+
+    IT recv_tile_contig(int src, MPI_Request * recv_req)
     {
         IT sizes[2];
         MPI_Request size_req;

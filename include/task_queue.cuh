@@ -153,11 +153,13 @@ struct LocalSpGEMMTask
         }
         CUDA_SYNC(stream);
 
+#ifdef DETAILED_TIMERS
         char tmpstr[100];
         sprintf(tmpstr, "[process %d]", grid->global_rank);
         TIMER_PRINT_WPREFIX_STR(wait_for_input, tmpstr)
         TIMER_PRINT_WPREFIX_STR(intranode_comm, tmpstr)
         fflush(stdout);
+#endif
 
         // Return result
         return C_p;

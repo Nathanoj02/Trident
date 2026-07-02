@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
 #include <atomic>
+#include <thread>
 
 
 template <typename Message>
@@ -8,6 +9,9 @@ struct MessageQueue
 {
 
     static constexpr std::size_t msg_size = sizeof(Message);
+
+    // Tag for the two-sided request handshake
+    static constexpr int REQ_TAG = 0x5245;
 
 
     struct Packet
@@ -39,26 +43,24 @@ struct MessageQueue
     }
 
 
+    // Two-sided request handshake
     Message wait()
     {
-        while (serviced < size)
+        if (serviced >= size)
         {
-            MPI_Win_flush_all(msg_win);
-            MPI_Win_sync(msg_win);
-            for (int i=0; i<size; i++)
-            {
-                if (messages[i] != -1)
-                {
-                    Message result = messages[i];
-                    messages[i] = -1;
-                    MPI_Win_sync(msg_win);
-                    serviced++;
-                    return result;
-                }
-
-            }
+            return -2;
         }
-        return -2;
+        Message result;
+        MPI_Request req;
+        MPI_Irecv(&result, 1, MPI_MESSAGE, MPI_ANY_SOURCE, REQ_TAG, comm, &req);
+        int flag = 0;
+        while (!flag)
+        {
+            MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
+            if (!flag) std::this_thread::yield();
+        }
+        serviced++;
+        return result;
     }
 
 
@@ -80,11 +82,12 @@ struct MessageQueue
     }
 
 
+    // Two-sided request: send my rank (*msg) to the tile owner.
+    // `offset` is the old RMA window slot
     void notify(Message * msg, const int target, const size_t offset)
     {
-        MPI_Put(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, msg_win);
-        //MPI_Accumulate(msg, 1, MPI_MESSAGE, target, offset, 1, MPI_MESSAGE, MPI_REPLACE, msg_win);
-        //MPI_Win_flush(target, msg_win);
+        (void)offset;
+        MPI_Send(msg, 1, MPI_MESSAGE, target, REQ_TAG, comm);
     }
 
 

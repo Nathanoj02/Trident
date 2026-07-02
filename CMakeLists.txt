@@ -1,6 +1,6 @@
 # CMAKE SETUP
 cmake_minimum_required(VERSION 3.10)
-set(CMAKE_CUDA_ARCHITECTURES "90")
+set(CMAKE_CUDA_ARCHITECTURES "80;90")
 set(CMAKE_CXX_STANDARD 20)
 project(HnS_SpGEMM LANGUAGES CXX CUDA)
 set(CMAKE_CUDA_FLAGS 
@@ -118,6 +118,19 @@ target_link_libraries(hns_spgemm PUBLIC
                       NCCL::NCCL)
 
 
+find_library(NVTX_LIBRARY
+    NAMES nvToolsExt
+    PATHS ${CUDAToolkit_LIBRARY_DIR} ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}
+          /usr/local/cuda/lib64 /opt/nvidia/hpc_sdk/Linux_x86_64/*/cuda/lib64
+)
+if(NVTX_LIBRARY)
+    message(STATUS "Found NVTX: ${NVTX_LIBRARY}")
+else()
+    message(STATUS "NVTX compiled lib not found (CUDA 12 NVTX3 header-only) — building without it")
+    set(NVTX_LIBRARY "" CACHE STRING "" FORCE)
+endif()
+
+
 # MACRO FOR ADDING OTHER EXECUTABLES
 macro(add_src src_name exec_name hns_libname)
     add_executable(${exec_name} src/${src_name}.cu)
@@ -138,24 +151,9 @@ endmacro()
 
 # EXECUTABLES
 add_src(run_spgemm run_spgemm hns_spgemm)
+add_src(run_spgemm_incremental run_spgemm_incremental hns_spgemm)
 add_src(mcl mcl hns_spgemm)
 add_src(run_spgemm run_spgemm_accumthread hns_spgemm_accumthread)
-
-# --- FIND NVTX (profiling library from CUDA Toolkit) ---
-find_library(NVTX_LIBRARY
-    NAMES nvToolsExt
-    PATHS ${CUDAToolkit_LIBRARY_DIR} ${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}
-          /usr/local/cuda/lib64 /opt/nvidia/hpc_sdk/Linux_x86_64/*/cuda/lib64
-)
-if(NVTX_LIBRARY)
-    message(STATUS "Found NVTX: ${NVTX_LIBRARY}")
-else()
-    # CUDA 12 NVTX is header-only (NVTX3); no compiled lib. Optional - profiling is OFF by default
-    message(STATUS "NVTX compiled lib not found (CUDA 12 NVTX3 header-only) — building without it")
-    set(NVTX_LIBRARY "")
-endif()
-
-
 
 option(ENABLE_NVTX_PROFILING "Enable NVTX profiling" OFF)
 

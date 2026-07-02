@@ -114,6 +114,10 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
     int sendround = 0;
     int compression_flag = (spacomm != nullptr && tilebuffersize >= COMP_THRESHOLD);
 
+    std::vector<MPI_Request> pending_sends;
+    std::deque<std::array<IT,2>> pending_payloads;
+    pending_sends.reserve(2 * queue.size);
+
     while (true)
     {
 
@@ -133,8 +137,7 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         // Only way this should be able to happen is if I've satisfied all requests, so I can return at this point
         if (target == -2)
         {
-            free_sync_point.arrive_and_wait();
-            return;
+            break;
         }
 
 #ifdef NVTX_PROFILING
@@ -155,23 +158,12 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
         NVTX_POP_RANGE;
 #endif
 
-        // Put tile on remote process
-        //   NOTE: timer and NVTX ranges inside the function
+        // Post the tile Isends without waiting
         const mmio::CSX<IT, VT> *tosend = (compression_flag) ? compressed : csx ;
         assert(tosend->contig && "Tosend must be contiguous");
-        internode_comm = holder.send_tile_contig(tosend->buf, tosend->buf_size, tosend->nnz, target, stream, tag);
+        holder.post_send_tile_contig(tosend->buf, tosend->buf_size, tosend->nnz,
+                                     target, pending_sends, pending_payloads);
 
-
-#ifdef DETAILED_TIMERS
-        char tmpstr[30];
-        char desc = (tag == 0) ? 'A' : 'B' ; // I suppose I use tag 0 for A (left operand) and tag 1 for B (right operand)
-        sprintf(tmpstr, "[p %d, t %d, m %c, r %d]", rank, target, desc, sendround);
-        printf("<%s>[%s] %lf ms, %lf ms, %lu B, %lu B, %lu B\n", tmpstr, "internode_comm(comp+comm+size)",
-               (compression_flag) ? (__timer_vals_compression_time.back()) : 0.0, internode_comm,
-               tilebuffersize, compute_message_size<IT,VT>(tosend->nnz, ptrsize+1),
-               compute_ptrv_size<IT>(ptrsize+1)
-        );
-#endif
         sendround++;
 
 #if DEBUG_MAIN
@@ -180,6 +172,20 @@ void comm_thread_loop_csx(MessageQueue<int>& queue, TileHolder<IT, VT>& holder, 
 #endif
 
     }
+
+    // All requests received
+    if (!pending_sends.empty())
+    {
+        int flag = 0;
+        while (!flag)
+        {
+            MPI_Testall((int)pending_sends.size(), pending_sends.data(), &flag, MPI_STATUSES_IGNORE);
+            if (!flag) std::this_thread::yield();
+        }
+    }
+
+    free_sync_point.arrive_and_wait();
+    return;
 }
 
 
@@ -519,17 +525,21 @@ DistCusparseCSX<IT,VT> * hns_spgemm_workstealing(DistCusparseCSX<IT, VT> * dist_
     MPI_Barrier(MPI_COMM_WORLD);
     int64_t nnz_global = (int64_t)C_p.storage.nnz();
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+#ifdef DETAILED_TIMERS
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_global<<std::endl;
     }
+#endif
     MPI_Barrier(MPI_COMM_WORLD);
 
 
+#ifdef DETAILED_TIMERS
     if (grid->global_rank==0)
     {
         TIMER_PRINT_LAST(spgemm);
     }
+#endif
 
 
     free_sync_point.arrive_and_wait();
@@ -997,8 +1007,10 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     }
 
     // mymemdata.print();
+#ifdef DETAILED_TIMERS
     std::string memstr = mymemdata.short_print();
     MPI_ALL_PRINT(fprintf(fp, "%s\n", memstr.c_str()));
+#endif
 
 #ifdef ACCUM_THREAD
     accum_thread.join();
@@ -1037,17 +1049,21 @@ DistCusparseCSX<IT,VT> * hns_spgemm_async(DistCusparseCSX<IT, VT> * dist_A, Dist
     MPI_Barrier(MPI_COMM_WORLD);
     int64_t nnz_global = (int64_t)C_local->nnz();
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+#ifdef DETAILED_TIMERS
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_global<<std::endl;
     }
+#endif
     MPI_Barrier(MPI_COMM_WORLD);
 
 
+#ifdef DETAILED_TIMERS
     if (grid->global_rank==0)
     {
         TIMER_PRINT_LAST(spgemm);
     }
+#endif
 
 
     free_sync_point.arrive_and_wait();

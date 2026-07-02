@@ -104,9 +104,11 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
     }
 
     // mymemdata.print();
+#ifdef DETAILED_TIMERS
     std::string memstr = mymemdata.short_print();
     MPI_ALL_PRINT(fprintf(fp, "%s\n", memstr.c_str()));
     // fprintf(stdout, "%s\n", memstr.c_str());
+#endif
 
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -114,13 +116,16 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
 
     int64_t nnz_global = (int64_t)C_local->nnz();
     MPI_Allreduce(MPI_IN_PLACE, &nnz_global, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+#ifdef DETAILED_TIMERS
     if (grid->global_rank==0)
     {
         std::cout<<"NNZ C: "<<nnz_global<<std::endl;
     }
+#endif
     MPI_Barrier(MPI_COMM_WORLD);
     fflush(stdout);
 
+#ifdef DETAILED_TIMERS
     char tmpstr[100];
     sprintf(tmpstr, "[process %d]", grid->global_rank);
     TIMER_PRINT_WPREFIX_STR(bcast, tmpstr)
@@ -131,6 +136,7 @@ DistCusparseCSX<IT, VT> * sparse_summa(DistCusparseCSX<IT, VT> * A, DistCusparse
         TIMER_PRINT_LAST(spgemm);
     }
     fflush(stdout);
+#endif
 
     delete C_accum;
 

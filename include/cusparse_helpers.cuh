@@ -895,11 +895,13 @@ void cusparse_spgeam(cusparseHandle_t * handle,
     //par_print("Post accumulation: C_prod_nnz: %lu, C_accum_nnz: %lu, C_local_nnz: %lu\n",
     //            C_prod_buffs->nnz, C_accum_buffs->nnz, C_local_buffs->nnz);
     CUDA_TIMER_STOP(spadd_time);
+#ifdef DETAILED_TIMERS
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     char tmpstr[100];
     sprintf(tmpstr, "[process %d]", rank);
     TIMER_PRINT_WPREFIX_STR(spadd_time, tmpstr)
+#endif
 }
 
 

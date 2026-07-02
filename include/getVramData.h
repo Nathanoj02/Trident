@@ -30,7 +30,9 @@ struct MyMemData {
     {
         CUDA_CHECK(cudaMemGetInfo(&current_free_mem, &current_total_mem));
         trial_total_mem = current_total_mem;
+#ifdef DETAILED_TIMERS
         fprintf(stdout, "Memory counter %s -- total memory %zu\n", counter_name, trial_total_mem);
+#endif
     }
 
     // Destructor (frees allocated trial name copies)
@@ -63,7 +65,9 @@ struct MyMemData {
         trial_free_mem.push_back(current_free_mem);
         internal_counter++;
 
+#ifdef DETAILED_TIMERS
         fprintf(stdout, "Memory counter %s -- appended trial %s with %zu free memory\n", counter_name, input_trial_name, current_free_mem);
+#endif
     }
 
     // Printing function
